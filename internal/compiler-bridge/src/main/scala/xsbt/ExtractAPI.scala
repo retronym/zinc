@@ -159,6 +159,9 @@ class ExtractAPI[GlobalType <: Global](
     pending.add(lazyImpl)
     lazyImpl
   }
+  private def strict[S <: AnyRef](s: S): xsbti.api.Lazy[S] = {
+    xsbti.api.SafeLazy.strict(s)
+  }
 
   /**
    * Force all lazy structures.  This is necessary so that we see the symbols/types at this phase and
@@ -421,8 +424,8 @@ class ExtractAPI[GlobalType <: Global](
                           bases: List[Type],
                           declared: List[Symbol],
                           inherited: List[Symbol]): xsbti.api.Structure = {
-    xsbti.api.Structure.of(lzy(types(s, bases)),
-                           lzy(processDefinitions(s, declared)),
+    xsbti.api.Structure.of(strict(types(s, bases)),
+                           strict(processDefinitions(s, declared)),
                            lzy(processDefinitions(s, inherited)))
   }
   private def processDefinitions(in: Symbol, defs: List[Symbol]): Array[xsbti.api.ClassDefinition] =

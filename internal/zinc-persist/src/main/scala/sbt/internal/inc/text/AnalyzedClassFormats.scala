@@ -28,7 +28,7 @@ object AnalyzedClassFormats {
                 hasMacro: Boolean) =>
             AnalyzedClass.of(compilationTimestamp,
                              name,
-                             SafeLazyProxy(emptyCompanions),
+                             SafeLazyProxy.strict(emptyCompanions),
                              apiHash,
                              nameHashes,
                              hasMacro)

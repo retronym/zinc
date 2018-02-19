@@ -54,7 +54,7 @@ object APIs {
   val emptyCompanions = xsbti.api.Companions.of(emptyAPI, emptyAPI)
   val emptyAnalyzedClass = xsbti.api.AnalyzedClass.of(noCompilationStamp,
                                                       emptyName,
-                                                      SafeLazyProxy(emptyCompanions),
+                                                      SafeLazyProxy.strict(emptyCompanions),
                                                       emptyAPIHash,
                                                       Array.empty[NameHash],
                                                       false)

@@ -118,7 +118,7 @@ trait AnalysisGenerators {
     } yield
       AnalyzedClass.of(startTime,
                        name,
-                       SafeLazyProxy(makeCompanions(name)),
+                       SafeLazyProxy.strict(makeCompanions(name)),
                        apiHash,
                        nameHashes,
                        hasMacro)

@@ -321,7 +321,7 @@ private final class AnalysisCallback(
     val hasMacro: Boolean = macroClasses.contains(name)
     val (companions, apiHash) = companionsWithHash(name)
     val nameHashes = nameHashesForCompanions(name)
-    val safeCompanions = SafeLazyProxy(companions)
+    val safeCompanions = SafeLazyProxy.strict(companions)
     val ac = AnalyzedClass.of(compilation.getStartTime(),
                               name,
                               safeCompanions,
