@@ -15,7 +15,7 @@ import java.util
 import java.util.Optional
 
 import xsbti.{ VirtualFileRef, VirtualFile }
-import xsbti.compile.{ Changes, CompileAnalysis, ExternalHooks, FileHash, MiniSetup }
+import xsbti.compile.{ Changes, CompileAnalysis, ExternalHooks, FileHash }
 
 /**
  * A trait that encapsulates looking up elements on a classpath and looking up
@@ -120,5 +120,4 @@ trait NoopExternalLookup extends ExternalLookup {
   ): Boolean = true
   override def hashClasspath(classpath: Array[VirtualFile]): Optional[Array[FileHash]] =
     Optional.empty()
-  override def storeEarlyAnalysis(earlyAnalysis: CompileAnalysis, setup: MiniSetup): Unit = ()
 }
