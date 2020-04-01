@@ -307,7 +307,7 @@ case class ProjectStructure(
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
   val (incOptions, scalacOptions) = {
-    val properties = loadIncProperties(baseDirectory / "incOptions.properties")
+    val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
     val storeApis = Option(properties.getProperty("incOptions.storeApis"))
       .map(_.toBoolean)
@@ -717,10 +717,14 @@ case class ProjectStructure(
     ()
   }
 
-  def loadIncProperties(src: Path): Properties = {
-    if (Files.exists(src)) {
+  def loadIncProperties(base: Path): Properties = {
+    val prop0 = base / "incoptions.properties"
+    val prop1 =
+      if (Files.exists(prop0)) prop0
+      else base / "incOptions.properties"
+    if (Files.exists(prop1)) {
       val properties = new Properties()
-      val stream = Files.newInputStream(src)
+      val stream = Files.newInputStream(prop1)
       try {
         properties.load(stream)
       } finally {
@@ -741,8 +745,11 @@ case class ProjectStructure(
       else opts.withRecompileAllFraction(1.0)
     }
     val scalacOptions: List[String] =
-      Option(map.get("scalac.options")).toList
-        .flatMap(_.toString.split(" +").toList)
+      (Option(map.get("scalac.options")) match {
+        case Some(x)                    => List(x)
+        case _ if incOptions.pipelining => List("-Ypickle-java")
+        case _                          => Nil
+      }).flatMap(_.toString.split(" +").toList)
     (incOptions, scalacOptions.toArray)
   }
 
