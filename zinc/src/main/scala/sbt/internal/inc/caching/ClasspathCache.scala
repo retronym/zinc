@@ -11,13 +11,14 @@
 
 package sbt.internal.inc.caching
 
-import java.nio.file.{ Files, Path }
+import java.io.FileNotFoundException
+import java.nio.file.{Files, Path}
 import java.util.concurrent.ConcurrentHashMap
-import java.nio.file.attribute.{ BasicFileAttributes, FileTime }
+import java.nio.file.attribute.{BasicFileAttributes, FileTime}
 
 import xsbti.compile.FileHash
-import sbt.internal.inc.{ EmptyStamp, Stamper }
-import sbt.io.IO
+import sbt.internal.inc.{EmptyStamp, Stamper}
+import sbt.internal.io.Milli
 
 object ClasspathCache {
   // For more safety, store both the time and size
@@ -30,7 +31,6 @@ object ClasspathCache {
     cacheMetadataJar.put(file, (metadata, newHash))
     newHash
   }
-
   def hashClasspath(classpath: Seq[Path]): Array[FileHash] = {
     // #433: Cache jars with their metadata to avoid recomputing hashes transitively in other projects
     def fromCacheOrHash(file: Path): FileHash = {
@@ -40,16 +40,32 @@ object ClasspathCache {
         val attrs = Files.readAttributes(file, classOf[BasicFileAttributes])
         if (attrs.isDirectory) emptyFileHash(file)
         else {
-          val currentMetadata =
-            (FileTime.fromMillis(IO.getModifiedTimeOrZero(file.toFile)), attrs.size())
-          Option(cacheMetadataJar.get(file)) match {
-            case Some((metadata, hashHit)) if metadata == currentMetadata => hashHit
-            case _                                                        => genFileHash(file, currentMetadata)
+          val currentLastModified: FileTime = getModifiedTimeOrZeroEfficient(file, attrs)
+          val currentSize = attrs.size()
+          cacheMetadataJar.get(file) match {
+            case (metadata, hashHit)
+                if metadata._2 == currentSize && metadata._1 == currentLastModified =>
+              hashHit
+            case null => genFileHash(file, (currentLastModified, currentSize))
           }
         }
       }
     }
-
     classpath.toParArray.map(fromCacheOrHash).toArray
+  }
+
+  private def getModifiedTimeOrZeroEfficient(file: Path, attrs: BasicFileAttributes): FileTime = {
+    Milli.milli match {
+      case sbt.io.JavaMillis =>
+        // Avoid another call to readAttributes in JavaMillis.
+        attrs.lastModifiedTime()
+      case m =>
+        try {
+          FileTime.fromMillis(m.getModifiedTime(file.toString)) // Note java.nio.Path internally caches .toString
+        } catch {
+          case _: FileNotFoundException =>
+            FileTime.fromMillis(0L)
+        }
+    }
   }
 }
