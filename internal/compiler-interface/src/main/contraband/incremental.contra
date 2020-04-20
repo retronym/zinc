@@ -92,6 +92,11 @@ type IncOptions {
   allowMachinePath: Boolean! = raw"xsbti.compile.IncOptions.defaultAllowMachinePath()"
   @since("1.4.0")
 
+  ## When set to true, this makes the straight-to-JAR compilation mode automatically,
+  ## add -YdisableFlatCpCachingYdisableFlatCpCaching to scalac options.
+  automaticClassPathCacheManagement: Boolean! = raw"xsbti.compile.IncOptions.defaultAutomaticClassPathCacheManagement()"
+  @since("1.4.0")
+
   #x public static int defaultTransitiveStep() {
   #x     return 3;
   #x }
@@ -155,6 +160,9 @@ type IncOptions {
   #x }
   #x public static boolean defaultAllowMachinePath() {
   #x     return true;
+  #x }
+  #x public static boolean defaultAutomaticClassPathCacheManagement() {
+  #x     return true;  
   #x }
 }
 

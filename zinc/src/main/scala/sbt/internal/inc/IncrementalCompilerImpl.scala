@@ -357,7 +357,7 @@ class IncrementalCompilerImpl extends IncrementalCompiler {
       val extraScalacOptions = {
         val scalaVersion = scalaCompiler.scalaInstance.version
         def isAtLeast212 = !scalaVersion.startsWith("2.10.") && !scalaVersion.startsWith("2.11.")
-        if (compileStraightToJar && isAtLeast212) {
+        if (compileStraightToJar && isAtLeast212 && incOptions.automaticClassPathCacheManagement) {
           JarUtils.scalacOptions
         } else Seq.empty
       }
