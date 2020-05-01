@@ -345,6 +345,7 @@ lazy val zincCore = (projectMatrix in internalPath / "zinc-core")
     mimaBinaryIssueFilters ++= Seq(
       exclude[IncompatibleMethTypeProblem]("xsbti.*"),
       exclude[ReversedMissingMethodProblem]("xsbti.*"),
+      exclude[MissingClassProblem]("xsbti.*"),
     ),
   )
   .jvmPlatform(scalaVersions = List(scala212, scala213))
@@ -446,6 +447,7 @@ lazy val compilerInterface = (projectMatrix in internalPath / "compiler-interfac
         exclude[Problem]("xsbti.compile.analysis.ReadStamps.*"),
         // This is a breaking change
         exclude[Problem]("xsbti.compile.CompileOptions.*"),
+        exclude[Problem]("xsbti.compile.CompileProgress.*"),
         // new API points
         exclude[DirectMissingMethodProblem]("xsbti.compile.IncrementalCompiler.compile"),
         exclude[ReversedMissingMethodProblem]("xsbti.compile.IncrementalCompiler.compile"),
@@ -717,7 +719,7 @@ addCommandAlias(
 
 lazy val otherRootSettings = Seq(
   mimaPreviousArtifacts := Set.empty,
-  scriptedBufferLog := true,
+  scriptedBufferLog := false,
   scripted := scriptedTask.evaluated,
   Scripted.scriptedPrescripted := { (_: File) =>
     ()
