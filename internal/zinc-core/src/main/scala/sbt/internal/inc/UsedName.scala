@@ -39,3 +39,7 @@ object UsedName {
       name
   }
 }
+
+trait UsedNameSet {
+  def contains(useScope: UseScope): Boolean
+}

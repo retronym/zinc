@@ -11,24 +11,24 @@
 
 package sbt.internal.inc.binary.converters
 
-import java.nio.file.{Path, Paths}
+import java.nio.file.{ Path, Paths }
 import java.util
-import java.util.{List => JList, Map => JMap}
+import java.util.{ List => JList, Map => JMap }
 import sbt.internal.inc.Relations.ClassDependencies
 import sbt.internal.inc._
 import sbt.internal.inc.binary.converters.ProtobufDefaults.EmptyLazyCompanions
 import sbt.util.InterfaceUtil
-import xsbti.{Position, Problem, Severity, T2, UseScope, VirtualFileRef}
-import xsbti.compile.{CompileOrder, FileHash, MiniOptions, MiniSetup, Output, OutputGroup}
-import xsbti.compile.analysis.{Compilation, ReadMapper, SourceInfo, Stamp}
+import xsbti.{ Position, Problem, Severity, T2, UseScope, VirtualFileRef }
+import xsbti.compile.{ CompileOrder, FileHash, MiniOptions, MiniSetup, Output, OutputGroup }
+import xsbti.compile.analysis.{ Compilation, ReadMapper, SourceInfo, Stamp }
 import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.StringToException
-import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.{Readers => ReadersFeedback}
-import sbt.internal.inc.binary.converters.ProtobufDefaults.{Classes, ReadersConstants}
+import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.{ Readers => ReadersFeedback }
+import sbt.internal.inc.binary.converters.ProtobufDefaults.{ Classes, ReadersConstants }
 import sbt.internal.util.Relation
 
 import scala.collection.JavaConverters._
 import xsbti.api._
-import ProtobufDefaults.{MissingInt, MissingString}
+import ProtobufDefaults.{ MissingInt, MissingString }
 
 final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) {
   def fromPathString(path: String): Path = Paths.get(path)
@@ -708,7 +708,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     def fromUsedNamesMap(
         map: java.util.Map[String, Schema.UsedNames]
     ): Relation[String, UsedName] = {
-      val builder = new RelationBuilder[String, UsedName]
+      val builder = new RelationBuilder[String, UsedName](ignoreReverse = true)
       for ((k, used) <- map.asScala) {
         val usedNames = used.getUsedNamesList.asScala
         if (!usedNames.isEmpty) {
