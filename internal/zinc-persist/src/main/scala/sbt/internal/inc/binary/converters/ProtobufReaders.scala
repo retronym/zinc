@@ -25,6 +25,7 @@ import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.StringToExce
 import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.{ Readers => ReadersFeedback }
 import sbt.internal.inc.binary.converters.ProtobufDefaults.{ Classes, ReadersConstants }
 import sbt.internal.util.Relation
+
 import scala.collection.JavaConverters._
 import xsbti.api._
 import ProtobufDefaults.{ MissingInt, MissingString }
@@ -271,8 +272,9 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
   }
 
   implicit class EfficientTraverse[T](seq: JList[T]) {
-    def toZincArray[R: scala.reflect.ClassTag](f: T => R): Array[R] =
-      seq.asScala.iterator.map(f).toArray
+    def toZincArray[R <: AnyRef: scala.reflect.ClassTag](f: T => R): Array[R] = {
+      seq.stream().map[R](x => f(x)).toArray[R](new Array[R](_))
+    }
   }
 
   implicit class OptionReader[T](option: Option[T]) {
@@ -695,16 +697,18 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
       val name = usedName.getName.intern()
       val useScopes = util.EnumSet.noneOf(classOf[UseScope])
       val len = usedName.getScopesCount
-      val scopes = for {
+      for {
         i <- 0 to len - 1
-      } yield useScopes.add(fromUseScope(usedName.getScopes(i), usedName.getScopesValue(i)))
+      } {
+        useScopes.add(fromUseScope(usedName.getScopes(i), usedName.getScopesValue(i)))
+      }
       UsedName.make(name, useScopes)
     }
 
     def fromUsedNamesMap(
         map: java.util.Map[String, Schema.UsedNames]
     ): Relation[String, UsedName] = {
-      val builder = new RelationBuilder[String, UsedName]
+      val builder = new RelationBuilder[String, UsedName](ignoreReverse = true)
       for ((k, used) <- map.asScala) {
         val usedNames = used.getUsedNamesList.asScala
         if (!usedNames.isEmpty) {
