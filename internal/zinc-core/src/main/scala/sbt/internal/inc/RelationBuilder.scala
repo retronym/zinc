@@ -15,19 +15,26 @@ import sbt.internal.util.Relation
 
 import scala.collection.{ immutable, mutable }
 
-final class RelationBuilder[A, B]() {
+final class RelationBuilder[A, B](val ignoreReverse: Boolean = false) {
   private[this] val forward =
     new java.util.HashMap[A, (A, mutable.Builder[B, immutable.HashSet[B]])]()
   private[this] val reverse =
-    new java.util.HashMap[B, (B, mutable.Builder[A, immutable.HashSet[A]])]()
+    if (ignoreReverse) null
+    else new java.util.HashMap[B, (B, mutable.Builder[A, immutable.HashSet[A]])]()
 
   def update(a: A, b: B): Unit = {
-    val (internedB, asBuilder) =
-      reverse.computeIfAbsent(b, (b => (b, immutable.HashSet.newBuilder[A])))
-    val (internedA, bsBuilder) =
-      forward.computeIfAbsent(a, (a => (a, immutable.HashSet.newBuilder[B])))
-    asBuilder += internedA
-    bsBuilder += internedB
+    if (reverse == null) {
+      val (internedA, bsBuilder) =
+        forward.computeIfAbsent(a, (a => (a, immutable.HashSet.newBuilder[B])))
+      bsBuilder += b
+    } else {
+      val (internedB, asBuilder) =
+        reverse.computeIfAbsent(b, (b => (b, immutable.HashSet.newBuilder[A])))
+      val (internedA, bsBuilder) =
+        forward.computeIfAbsent(a, (a => (a, immutable.HashSet.newBuilder[B])))
+      asBuilder += internedA
+      bsBuilder += internedB
+    }
   }
 
   def +=(other: Relation[A, B]): Unit = {
@@ -46,6 +53,7 @@ final class RelationBuilder[A, B]() {
       map.entrySet().forEach(e => builder.+=((e.getKey, e.getValue._2.result())))
       builder.result()
     }
-    Relation.make[A, B](toImmutable(forward), toImmutable(reverse))
+    Relation
+      .make[A, B](toImmutable(forward), if (reverse == null) Map.empty else toImmutable(reverse))
   }
 }
