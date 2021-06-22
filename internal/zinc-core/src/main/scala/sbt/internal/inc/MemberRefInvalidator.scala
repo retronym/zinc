@@ -57,10 +57,10 @@ import xsbti.UseScope
 private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolean) {
   private final val NoInvalidation = (_: String) => Set.empty[String]
   def get(
-      memberRef: Relation[String, String],
-      usedNames: Relation[String, UsedName],
-      apiChange: APIChange,
-      isScalaClass: String => Boolean
+           memberRef: Relation[String, String],
+           usedNames: Relations.UsedNamesMap,
+           apiChange: APIChange,
+           isScalaClass: String => Boolean
   ): String => Set[String] = apiChange match {
     case _: TraitPrivateMembersModified => NoInvalidation
     case _: APIChangeDueToMacroDefinition =>
@@ -121,7 +121,7 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
   }
 
   private class NameHashFilteredInvalidator(
-      usedNames: Relation[String, UsedName],
+      usedNames: Relations.UsedNamesMap,
       memberRef: Relation[String, String],
       modifiedNames: ModifiedNames,
       isScalaClass: String => Boolean
@@ -134,16 +134,16 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
     private def filteredDependencies(dependent: Set[String]): Set[String] = {
       dependent.filter {
         case from if isScalaClass(from) =>
-          val affectedNames = usedNames.forward(from).filter(modifiedNames.isModified)
-          if (affectedNames.isEmpty) {
+          val hasModified = Relations.hasModifiedName(usedNames, from, modifiedNames)
+          if (!hasModified) {
             log.debug(
               s"None of the modified names appears in source file of $from. This dependency is not being considered for invalidation."
             )
-            false
-          } else {
-            log.debug(s"The following modified names cause invalidation of $from: $affectedNames")
-            true
+          } else log.debug {
+            val affectedNames = Relations.modifiedNames(usedNames, from, modifiedNames)
+            s"The following modified names cause invalidation of $from: $affectedNames"
           }
+          hasModified
         case from =>
           log.debug(s"Name hashing optimization doesn't apply to non-Scala dependency: $from")
           true
