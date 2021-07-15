@@ -80,6 +80,8 @@ trait Relations {
   /** Internal source dependencies that depend on external source file `dep`.  This includes both direct and inherited dependencies.  */
   def usesExternal(className: String): Set[String]
 
+  private[inc] def usedNames(className: String): Set[UsedName]
+
   /**
    * Records that the file `src` generates products `products`, has internal dependencies `internalDeps`,
    * has external dependencies `externalDeps` and library dependencies `libraryDeps`.
@@ -138,7 +140,7 @@ trait Relations {
       deps: Iterable[(VirtualFileRef, String, XStamp)]
   ): Relations
 
-  private[inc] def addUsedNames(data: Relations.UsedNames): Relations
+  private[inc] def addUsedNames(data: Relation[String, UsedName]): Relations
 
   /** Concatenates the two relations. Acts naively, i.e., doesn't internalize external deps on added files. */
   def ++(o: Relations): Relations
@@ -265,7 +267,7 @@ trait Relations {
   /**
    * Relation between source files and _unqualified_ term and type names used in given source file.
    */
-  private[inc] def names: Relations.UsedNames
+  private[inc] def names: Relation[String, UsedName]
 
   private[inc] def copy(
       srcProd: Relation[VirtualFileRef, VirtualFileRef] = srcProd,
@@ -274,13 +276,12 @@ trait Relations {
       internalDependencies: InternalDependencies = internalDependencies,
       externalDependencies: ExternalDependencies = externalDependencies,
       classes: Relation[VirtualFileRef, String] = classes,
-      names: Relations.UsedNames = names,
+      names: Relation[String, UsedName] = names,
       productClassName: Relation[String, String] = productClassName,
   ): Relations
 }
 
 object Relations {
-  type UsedNames = scala.collection.Map[String, scala.collection.Set[UsedName]]
 
   /** Tracks internal and external source dependencies for a specific dependency type, such as direct or inherited.*/
   private[inc] final class ClassDependencies(
@@ -317,7 +318,7 @@ object Relations {
     internalDependencies = InternalDependencies.empty,
     externalDependencies = ExternalDependencies.empty,
     classes = Relation.empty,
-    names = Map.empty,
+    names = Relation.empty,
     productClassName = Relation.empty
   )
 
@@ -328,7 +329,7 @@ object Relations {
       internalDependencies: InternalDependencies,
       externalDependencies: ExternalDependencies,
       classes: Relation[VirtualFileRef, String],
-      names: Relations.UsedNames,
+      names: Relation[String, UsedName],
       productClassName: Relation[String, String]
   ): Relations =
     new MRelationsNameHashing(
@@ -347,7 +348,6 @@ object Relations {
       external: Relation[String, String]
   ): ClassDependencies =
     new ClassDependencies(internal, external)
-
 }
 
 private[inc] object DependencyCollection {
@@ -368,7 +368,7 @@ private[inc] object DependencyCollection {
 private[inc] object InternalDependencies {
 
   /**
-   * Constructs an empty `InternalDependencies`
+   * Constructs an empty `InteralDependencies`
    */
   def empty = InternalDependencies(Map.empty)
 }
@@ -470,7 +470,7 @@ private class MRelationsNameHashing(
     val internalDependencies: InternalDependencies,
     val externalDependencies: ExternalDependencies,
     val classes: Relation[VirtualFileRef, String],
-    val names: Relations.UsedNames,
+    val names: Relation[String, UsedName],
     val productClassName: Relation[String, String]
 ) extends Relations {
   def allSources: collection.Set[VirtualFileRef] = srcProd._1s
@@ -500,6 +500,8 @@ private class MRelationsNameHashing(
 
   def externalDeps(className: String): Set[String] = externalClassDep.forward(className)
   def usesExternal(className: String): Set[String] = externalClassDep.reverse(className)
+
+  private[inc] def usedNames(className: String): Set[UsedName] = names.forward(className)
 
   def addProducts(src: VirtualFileRef, products: Iterable[VirtualFileRef]): Relations =
     new MRelationsNameHashing(
@@ -561,7 +563,7 @@ private class MRelationsNameHashing(
       productClassName,
     )
 
-  private[inc] def addUsedNames(data: Relations.UsedNames): Relations = {
+  private[inc] def addUsedNames(data: Relation[String, UsedName]): Relations = {
     new MRelationsNameHashing(
       srcProd,
       libraryDep,
@@ -569,7 +571,7 @@ private class MRelationsNameHashing(
       internalDependencies,
       externalDependencies,
       classes,
-      names = if (names.isEmpty) data else names ++ data,
+      names = if (names.forwardMap.isEmpty) data else names ++ data,
       productClassName,
     )
   }
@@ -624,7 +626,7 @@ private class MRelationsNameHashing(
       internalDependencies: InternalDependencies = internalDependencies,
       externalDependencies: ExternalDependencies = externalDependencies,
       classes: Relation[VirtualFileRef, String] = classes,
-      names: Relations.UsedNames = names,
+      names: Relation[String, UsedName] = names,
       productClassName: Relation[String, String] = productClassName,
   ): Relations = new MRelationsNameHashing(
     srcProd,
@@ -655,13 +657,6 @@ private class MRelationsNameHashing(
     if (r.forwardMap.isEmpty) "Relation [ ]"
     else r.all.toSeq.map(kv => line_s(kv._1, kv._2)).sorted.mkString("Relation [\n", "", "]")
   }
-  def usedNames_s(r: Relations.UsedNames) = {
-    if (r.isEmpty) "UsedNames [ ]"
-    else {
-      val all = r.iterator.flatMap { case (a, bs) => bs.iterator.map(b => (a, b)) }
-      all.map(kv => line_s(kv._1, kv._2)).toSeq.sorted.mkString("UsedNames [\n", "", "]")
-    }
-  }
 
   override def toString: String = {
     def deps_s(m: Map[_, Relation[_, _]]) =
@@ -676,7 +671,7 @@ private class MRelationsNameHashing(
     |  internalDependencies: ${deps_s(internalDependencies.dependencies)}
     |  externalDependencies: ${deps_s(externalDependencies.dependencies)}
     |  class names: ${relation_s(classes)}
-    |  used names: ${usedNames_s(names)}
+    |  used names: ${relation_s(names)}
     |  product class names: ${relation_s(productClassName)}
     """.trim.stripMargin
   }

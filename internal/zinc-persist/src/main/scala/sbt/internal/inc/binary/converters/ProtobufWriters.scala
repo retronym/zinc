@@ -653,8 +653,10 @@ final class ProtobufWriters(mapper: WriteMapper) {
       builder.build
     }
 
-    def toUsedNamesMap(map: Relations.UsedNames): Iterator[(String, Schema.UsedNames)] = {
-      map.iterator.map {
+    def toUsedNamesMap(
+        relation: Relation[String, UsedName]
+    ): Iterator[(String, Schema.UsedNames)] = {
+      relation.forwardMap.iterator.map {
         case (k, names) =>
           val builder = Schema.UsedNames.newBuilder
           names.foreach(name => builder.addUsedNames(toUsedName(name)))
