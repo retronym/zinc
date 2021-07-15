@@ -25,6 +25,7 @@ import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.StringToExce
 import sbt.internal.inc.binary.converters.ProtobufDefaults.Feedback.{ Readers => ReadersFeedback }
 import sbt.internal.inc.binary.converters.ProtobufDefaults.{ Classes, ReadersConstants }
 import sbt.internal.util.Relation
+
 import scala.collection.JavaConverters._
 import xsbti.api._
 import ProtobufDefaults.{ MissingInt, MissingString }
@@ -716,8 +717,13 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     def fromUsedNamesMap(
         map: java.util.Map[String, Schema.UsedNames]
     ): Relations.UsedNames = {
-      for ((k, used) <- map.asScala)
-        yield k -> used.getUsedNamesList.asScala.iterator.map(fromUsedName).toSet
+
+      for ((k, used) <- map.asScala) yield {
+        // The used names for a class are not always used by sbt.internal.inc.MemberRefInvalidator.
+        // Only names from classes that have a Relations.memberRef dependency on the modified class
+        // are needed. So we can lazily convert from protobuf to `Collection[UsedNames]` here.
+        k -> used.getUsedNamesList.asScala.toStream.map(fromUsedName)
+      }
     }
 
     def expected(msg: String) = ReadersFeedback.expected(msg, Classes.Relations)

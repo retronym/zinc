@@ -26,7 +26,7 @@ trait RelationsTextFormat extends FormatCommons {
 
   private case class Descriptor[A, B](
       header: String,
-      selectCorresponding: Relations => scala.collection.Map[A, scala.collection.Set[B]],
+      selectCorresponding: Relations => scala.collection.Map[A, scala.collection.Iterable[B]],
       keyMapper: Mapper[A],
       valueMapper: Mapper[B]
   )

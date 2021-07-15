@@ -280,7 +280,7 @@ trait Relations {
 }
 
 object Relations {
-  type UsedNames = scala.collection.Map[String, scala.collection.Set[UsedName]]
+  type UsedNames = scala.collection.Map[String, scala.collection.Iterable[UsedName]]
 
   /** Tracks internal and external source dependencies for a specific dependency type, such as direct or inherited.*/
   private[inc] final class ClassDependencies(
