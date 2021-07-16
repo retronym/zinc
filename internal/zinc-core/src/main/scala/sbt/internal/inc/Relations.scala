@@ -267,7 +267,7 @@ trait Relations {
   /**
    * Relation between source files and _unqualified_ term and type names used in given source file.
    */
-  private[inc] def names: Relation[String, UsedName]
+  private[inc] def names: Relations.UsedNamesMap
 
   private[inc] def copy(
       srcProd: Relation[VirtualFileRef, VirtualFileRef] = srcProd,
@@ -282,6 +282,13 @@ trait Relations {
 }
 
 object Relations {
+  type UsedNamesMap = Relation[String, UsedName]
+  def hasModifiedName(map: UsedNamesMap, fromClass: String, modified: ModifiedNames): Boolean = {
+    map.forward(fromClass).exists(name => modified.isModified(name))
+  }
+  def modifiedNames(map: UsedNamesMap, fromClass: String, modified: ModifiedNames): Set[UsedName] = {
+    map.forward(fromClass).filter(name => modified.isModified(name))
+  }
 
   /** Tracks internal and external source dependencies for a specific dependency type, such as direct or inherited.*/
   private[inc] final class ClassDependencies(
@@ -470,7 +477,7 @@ private class MRelationsNameHashing(
     val internalDependencies: InternalDependencies,
     val externalDependencies: ExternalDependencies,
     val classes: Relation[VirtualFileRef, String],
-    val names: Relation[String, UsedName],
+    val names: Relations.UsedNamesMap,
     val productClassName: Relation[String, String]
 ) extends Relations {
   def allSources: collection.Set[VirtualFileRef] = srcProd._1s
