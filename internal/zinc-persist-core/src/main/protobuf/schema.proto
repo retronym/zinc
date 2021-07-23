@@ -465,3 +465,12 @@ message APIsFile {
     Version version = 1;
     APIs apis = 2;
 }
+
+message ScopeUsedNameHashes {
+    string scope = 1;
+    repeated sint32 hashes = 2;
+}
+
+message UsedNameHashes {
+    repeated ScopeUsedNameHashes values = 1;
+}

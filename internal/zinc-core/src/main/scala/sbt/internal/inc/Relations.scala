@@ -279,6 +279,8 @@ trait Relations {
       names: Relation[String, UsedName] = names,
       productClassName: Relation[String, String] = productClassName,
   ): Relations
+
+  def withoutUsedNames: Relations
 }
 
 object Relations {
@@ -638,6 +640,18 @@ private class MRelationsNameHashing(
     names,
     productClassName,
   )
+
+  override def withoutUsedNames =
+    new MRelationsNameHashing(
+      srcProd,
+      libraryDep,
+      libraryClassName,
+      internalDependencies,
+      externalDependencies,
+      classes,
+      Relation.empty,
+      productClassName
+    )
 
   override def equals(other: Any) = other match {
     case o: MRelationsNameHashing =>
