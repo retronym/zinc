@@ -649,7 +649,11 @@ final class ProtobufWriters(mapper: WriteMapper) {
       val builder = Schema.UsedName.newBuilder
         .setName(name)
       val it = usedName.scopes.iterator
-      while (it.hasNext) builder.addScopes(toUseScope(it.next))
+      var scopeBitMask = 0
+      while (it.hasNext) {
+        scopeBitMask |= (1 << toUseScope(it.next).getNumber)
+      }
+      builder.setScopes(scopeBitMask)
       builder.build
     }
 

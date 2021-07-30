@@ -403,7 +403,8 @@ message APIs {
 
 message UsedName {
     string name = 1;
-    repeated UseScope scopes = 2;
+    repeated UseScope scopes_deprecated = 2;
+    int32 scopes = 3;
 }
 
 /** Defines a container for the values of maps. */

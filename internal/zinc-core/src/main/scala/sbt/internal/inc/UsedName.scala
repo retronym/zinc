@@ -84,9 +84,21 @@ object UsedNames {
     private def fromUsedName(usedName: Schema.UsedName): UsedName = {
       val name = usedName.getName.intern() // ?
       val useScopes = ju.EnumSet.noneOf(classOf[UseScope])
-      val len = usedName.getScopesCount
+
+      // legacy format of scopes, support for backwards compatibility with analysis files
+      // written by previous versions of Zinc.
+      val len = usedName.getScopesDeprecatedCount
       for (i <- 0 to len - 1)
-        useScopes.add(fromUseScope(usedName.getScopes(i), usedName.getScopesValue(i)))
+        useScopes.add(
+          fromUseScope(usedName.getScopesDeprecated(i), usedName.getScopesDeprecatedValue(i))
+        )
+
+      // New, efficient storage serialization format of scopes:
+      val scopeMask = usedName.getScopes
+      for (v <- Schema.UseScope.values()) {
+        if ((scopeMask & (1 << v.ordinal())) != 0)
+          useScopes.add(fromUseScope(v, -1))
+      }
       UsedName.make(name, useScopes)
     }
 
@@ -113,14 +125,23 @@ object UsedNames {
         val usedName = usedNames.getUsedNames(i)
         val name = usedName.getName
         var i2 = 0
-        val n2 = usedName.getScopesCount
+        val n2 = usedName.getScopesDeprecatedCount
         while (i2 < n2) {
-          val scope = fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
+          val scope =
+            fromUseScope(usedName.getScopesDeprecated(i2), usedName.getScopesDeprecatedValue(i2))
           if (modifiedNames.isModifiedRaw(name, scope)) {
             return true
           }
           i2 += 1
         }
+        val scopeMask = usedName.getScopes
+        for (v <- Schema.UseScope.values()) {
+          if ((scopeMask & (1 << v.ordinal())) != 0) {
+            if (modifiedNames.isModifiedRaw(name, fromUseScope(v, -1)))
+              return true
+          }
+        }
+
         i += 1
       }
       false
@@ -136,14 +157,22 @@ object UsedNames {
         val usedName = usedNames.getUsedNames(i)
         val name = usedName.getName
         var i2 = 0
-        val n2 = usedName.getScopesCount
+        val n2 = usedName.getScopesDeprecatedCount
         while (i2 < n2) {
-          val scope = fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
+          val scope =
+            fromUseScope(usedName.getScopesDeprecated(i2), usedName.getScopesDeprecatedValue(i2))
           if (modifiedNames.isModifiedRaw(name, scope)) {
             if (first) first = false else b.append(", ")
             b.append(name)
           }
           i2 += 1
+        }
+        for (v <- Schema.UseScope.values()) {
+          val scopeMask = usedName.getScopes
+          if ((scopeMask & (1 << v.ordinal())) != 0) {
+            if (modifiedNames.isModifiedRaw(name, fromUseScope(v, -1)))
+              if (first) first = false else b.append(", ")
+          }
         }
         i += 1
       }
