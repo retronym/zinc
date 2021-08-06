@@ -403,8 +403,7 @@ message APIs {
 
 message UsedName {
     string name = 1;
-    repeated UseScope scopes_deprecated = 2;
-    int32 scopes = 3;
+    repeated UseScope scopes = 2;
 }
 
 /** Defines a container for the values of maps. */
@@ -414,6 +413,7 @@ message Values {
 
 message UsedNames {
     repeated UsedName usedNames = 1;
+    repeated string default = 2;
 }
 
 message ClassDependencies {

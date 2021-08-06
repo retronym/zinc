@@ -1,6 +1,6 @@
 package sbt.inc.binary
 
-import sbt.internal.inc.FileAnalysisStore
+import sbt.internal.inc.{ ConcreteAnalysisContents, FileAnalysisStore }
 import xsbti.compile.AnalysisContents
 
 import java.io.File
@@ -32,7 +32,11 @@ object Scratch {
   def migrate(analysis: AnalysisContents): AnalysisContents = {
     val tmp = File.createTempFile("analysis", ".bin")
     try {
-      FileAnalysisStore.binary(tmp).set(analysis)
+      FileAnalysisStore
+        .binary(tmp)
+        .set(
+          ConcreteAnalysisContents(analysis.getAnalysis, analysis.getMiniSetup.withStoreApis(false))
+        )
       FileAnalysisStore.binary(tmp).get().get
     } finally {
       tmp.delete()

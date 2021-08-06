@@ -13,7 +13,6 @@ package sbt.internal.inc.binary.converters
 
 import java.io.File
 import java.nio.file.Path
-
 import sbt.internal.inc._
 import xsbti.{ Position, Problem, Severity, T2, UseScope, VirtualFileRef }
 import xsbti.compile.analysis.{ SourceInfo, Stamp, WriteMapper }
@@ -648,12 +647,11 @@ final class ProtobufWriters(mapper: WriteMapper) {
       val name = usedName.name
       val builder = Schema.UsedName.newBuilder
         .setName(name)
+
       val it = usedName.scopes.iterator
-      var scopeBitMask = 0
       while (it.hasNext) {
-        scopeBitMask |= (1 << toUseScope(it.next).getNumber)
+        builder.addScopes(toUseScope(it.next()))
       }
-      builder.setScopes(scopeBitMask)
       builder.build
     }
 
@@ -661,7 +659,13 @@ final class ProtobufWriters(mapper: WriteMapper) {
       map.iterator.map {
         case (k, names) =>
           val builder = Schema.UsedNames.newBuilder
-          names.foreach(name => builder.addUsedNames(toUsedName(name)))
+          names.foreach { name =>
+            if (name.scopes == UsedName.DefaultUseScopeSet) {
+              builder.addDefault(name.name)
+            } else {
+              builder.addUsedNames(toUsedName(name))
+            }
+          }
           k -> builder.build
       }
     }
