@@ -413,6 +413,7 @@ message Values {
 
 message UsedNames {
     repeated UsedName usedNames = 1;
+    repeated string default = 2;
 }
 
 message ClassDependencies {

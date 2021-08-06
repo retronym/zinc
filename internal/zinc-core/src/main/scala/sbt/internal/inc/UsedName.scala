@@ -23,14 +23,15 @@ case class UsedName private (name: String, scopes: ju.EnumSet[UseScope]) extends
 
 object UsedName {
   def apply(name: String, scopes: Iterable[UseScope] = Nil): UsedName = {
-    val useScopes = java.util.EnumSet.noneOf(classOf[UseScope])
+    val useScopes = ju.EnumSet.noneOf(classOf[UseScope])
     scopes.foreach(useScopes.add)
     UsedName.make(name, useScopes)
   }
 
-  def make(name: String, useScopes: java.util.EnumSet[UseScope]): UsedName = {
+  def make(name: String, useScopes: ju.EnumSet[UseScope]): UsedName = {
     val escapedName = escapeControlChars(name)
-    new UsedName(escapedName, useScopes)
+    val useScopes1 = if (useScopes == DefaultUseScopeSet) DefaultUseScopeSet else useScopes
+    new UsedName(escapedName, useScopes1)
   }
 
   private def escapeControlChars(name: String) = {
@@ -39,6 +40,7 @@ object UsedName {
     else
       name
   }
+  val DefaultUseScopeSet: ju.EnumSet[UseScope] = ju.EnumSet.of(UseScope.Default)
 }
 
 sealed abstract class UsedNames private {
@@ -82,17 +84,29 @@ object UsedNames {
     }
 
     private def fromUsedName(usedName: Schema.UsedName): UsedName = {
-      val name = usedName.getName.intern() // ?
       val useScopes = ju.EnumSet.noneOf(classOf[UseScope])
+
+      // legacy format of scopes, support for backwards compatibility with analysis files
+      // written by previous versions of Zinc.
       val len = usedName.getScopesCount
-      for (i <- 0 to len - 1)
-        useScopes.add(fromUseScope(usedName.getScopes(i), usedName.getScopesValue(i)))
-      UsedName.make(name, useScopes)
+      for (i <- 0 until len)
+        useScopes.add(
+          fromUseScope(usedName.getScopes(i), usedName.getScopesValue(i))
+        )
+      UsedName.make(usedName.getName, useScopes)
     }
 
     private def fromUsedNamesMap(map: ju.Map[String, Schema.UsedNames]) =
       for ((k, used) <- map.asScala)
-        yield k -> used.getUsedNamesList.asScala.iterator.map(fromUsedName).toSet
+        yield k -> {
+          val set = new collection.mutable.HashSet[UsedName]
+          set ++= used.getUsedNamesList.asScala.iterator.map(fromUsedName)
+          set ++= used.getDefaultList
+            .iterator()
+            .asScala
+            .map(name => UsedName.make(name, UsedName.DefaultUseScopeSet))
+          set
+        }
 
     lazy val toMultiMap: sc.Map[String, sc.Set[UsedName]] = fromUsedNamesMap(map)
     private lazy val convert: UsedNames = fromMultiMap(toMultiMap)
@@ -107,21 +121,29 @@ object UsedNames {
 
     def hasAffectedNames(modifiedNames: ModifiedNames, from: String): Boolean = {
       val usedNames = map.get(from)
-      var i = 0
       val n = usedNames.getUsedNamesCount
+      var i = 0
       while (i < n) {
         val usedName = usedNames.getUsedNames(i)
         val name = usedName.getName
         var i2 = 0
         val n2 = usedName.getScopesCount
         while (i2 < n2) {
-          val scope = fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
+          val scope =
+            fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
           if (modifiedNames.isModifiedRaw(name, scope)) {
             return true
           }
           i2 += 1
         }
         i += 1
+      }
+      var j = 0
+      while (j < usedNames.getDefaultCount) {
+        if (modifiedNames.isModifiedRaw(usedNames.getDefault(j), UseScope.Default)) {
+          return true
+        }
+        j += 1
       }
       false
     }
@@ -138,7 +160,8 @@ object UsedNames {
         var i2 = 0
         val n2 = usedName.getScopesCount
         while (i2 < n2) {
-          val scope = fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
+          val scope =
+            fromUseScope(usedName.getScopes(i2), usedName.getScopesValue(i2))
           if (modifiedNames.isModifiedRaw(name, scope)) {
             if (first) first = false else b.append(", ")
             b.append(name)
@@ -147,7 +170,17 @@ object UsedNames {
         }
         i += 1
       }
+      var j = 0
+      while (j < usedNames.getDefaultCount) {
+        val name = usedNames.getDefault(j)
+        if (modifiedNames.isModifiedRaw(name, UseScope.Default)) {
+          if (first) first = false else b.append(", ")
+          b.append(usedNames.getDefault(i))
+        }
+        j += 1
+      }
       b.toString
+
     }
   }
 }

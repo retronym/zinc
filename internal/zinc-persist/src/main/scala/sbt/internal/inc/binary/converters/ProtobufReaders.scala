@@ -30,6 +30,8 @@ import xsbti.api._
 import ProtobufDefaults.{ MissingInt, MissingString }
 
 final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) {
+  private val stringTable = new ObjectTable
+
   def fromPathString(path: String): Path = Paths.get(path)
   def fromPathStringV(path: String): VirtualFileRef = {
     VirtualFileRef.of(path)
@@ -296,7 +298,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
       pathComponent.getComponentCase match {
         case SchemaComponent.ID =>
           val c = pathComponent.getId
-          Id.of(c.getId)
+          stringTable.lookupOrEnter(Id.of(stringTable.lookupOrEnter(c.getId)))
         case SchemaComponent.SUPER =>
           val c = pathComponent.getSuper
           val q =
@@ -314,8 +316,8 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
 
   def fromAnnotation(annotation: Schema.Annotation): Annotation = {
     def fromAnnotationArgument(argument: Schema.AnnotationArgument): AnnotationArgument = {
-      val name = argument.getName.intern()
-      val value = argument.getValue
+      val name = stringTable.lookupOrEnter(argument.getName)
+      val value = stringTable.lookupOrEnter(argument.getValue)
       AnnotationArgument.of(name, value)
     }
 
@@ -338,7 +340,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
   def fromType(`type`: Schema.Type): Type = {
     import ReadersFeedback.expectedBaseIn
     def fromParameterRef(tpe: Schema.Type.ParameterRef): ParameterRef = {
-      ParameterRef.of(tpe.getId)
+      ParameterRef.of(stringTable.lookupOrEnter(tpe.getId))
     }
 
     def fromParameterized(tpe: Schema.Type.Parameterized): Parameterized = {
@@ -361,7 +363,10 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
       val baseType =
         if (tpe.hasBaseType) fromType(tpe.getBaseType)
         else expectedBaseIn(Classes.Constant).!!
-      val value = tpe.getValue
+      val value = tpe.getValue match {
+        case s: String => stringTable.lookupOrEnter(s)
+        case x         => x
+      }
       Constant.of(baseType, value)
     }
 
@@ -382,7 +387,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     }
 
     def fromProjection(tpe: Schema.Type.Projection): Projection = {
-      val id = tpe.getId
+      val id = stringTable.lookupOrEnter(tpe.getId)
       val prefix =
         if (tpe.hasPrefix) fromType(tpe.getPrefix)
         else ReadersFeedback.ExpectedPrefixInProjection.!!
@@ -461,7 +466,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
       ExpectedUpperBoundInTypeDeclaration
     }
 
-    val name = classDefinition.getName.intern()
+    val name = stringTable.lookupOrEnter(classDefinition.getName)
     val access =
       if (classDefinition.hasAccess) fromAccess(classDefinition.getAccess)
       else MissingAccessInDef.!!
@@ -481,7 +486,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
               ReadersFeedback.UnrecognizedParamModifier.!!
           }
         }
-        val name = methodParameter.getName.intern()
+        val name = stringTable.lookupOrEnter(methodParameter.getName)
         val hasDefault = methodParameter.getHasDefault
         val `type` =
           if (methodParameter.hasType) fromType(methodParameter.getType)
@@ -582,7 +587,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
   def fromClassLike(classLike: Schema.ClassLike): ClassLike = {
     def expectedMsg(msg: String) = ReadersFeedback.expected(msg, Classes.ClassLike)
     def expected(clazz: Class[_]) = expectedMsg(clazz.getName)
-    val name = classLike.getName.intern()
+    val name = stringTable.lookupOrEnter(classLike.getName)
     val access =
       if (classLike.hasAccess) fromAccess(classLike.getAccess)
       else expected(Classes.Access).!!
@@ -629,8 +634,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
   }
 
   def fromAnalyzedClass(
-      shouldStoreApis: Boolean,
-      stringTable: StringTable
+      shouldStoreApis: Boolean
   )(analyzedClass: Schema.AnalyzedClass): AnalyzedClass = {
     def fromCompanions(companions: Schema.Companions): Companions = {
       def expected(msg: String) = ReadersFeedback.expected(msg, Classes.Companions)
@@ -653,7 +657,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     import SafeLazyProxy.{ strict => mkLazy }
     import ReadersFeedback.ExpectedCompanionsInAnalyzedClass
     val compilationTs = analyzedClass.getCompilationTimestamp
-    val name = analyzedClass.getName.intern()
+    val name = stringTable.lookupOrEnter(analyzedClass.getName)
     val api =
       if (!shouldStoreApis) EmptyLazyCompanions
       else
@@ -667,7 +671,7 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     val extraHash = if (currentVersion == Schema.Version.V1) 0 else analyzedClass.getExtraHash
     val nameHashes = analyzedClass.getNameHashesList.toZincArray(fromNameHash)
     val hasMacro = analyzedClass.getHasMacro
-    val provenance = analyzedClass.getProvenance.intern
+    val provenance = stringTable.lookupOrEnter(analyzedClass.getProvenance)
     AnalyzedClass.of(compilationTs, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance)
   }
 
@@ -720,7 +724,8 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     val classes = fromMap(relations.getClassesMap, stringToSource, stringId)
     val productClassName =
       fromMap(relations.getProductClassNameMap, stringId, stringId)
-    val names = UsedNames.fromJavaMap(relations.getNamesMap)
+    val map = relations.getNamesMap
+    val names = UsedNames.fromJavaMap(map)
     val internal = InternalDependencies(
       Map(
         DependencyContext.DependencyByMemberRef -> memberRef.internal,
@@ -748,14 +753,13 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
   }
 
   def fromApis(shouldStoreApis: Boolean)(apis: Schema.APIs): APIs = {
-    val stringTable = new StringTable
     val internal =
       apis.getInternalMap.asScala.iterator.map {
-        case (k, v) => k -> fromAnalyzedClass(shouldStoreApis, stringTable)(v)
+        case (k, v) => stringTable.lookupOrEnter(k) -> fromAnalyzedClass(shouldStoreApis)(v)
       }.toMap
     val external =
       apis.getExternalMap.asScala.iterator.map {
-        case (k, v) => k -> fromAnalyzedClass(shouldStoreApis, stringTable)(v)
+        case (k, v) => stringTable.lookupOrEnter(k) -> fromAnalyzedClass(shouldStoreApis)(v)
       }.toMap
     APIs(internal = internal, external = external)
   }
@@ -800,12 +804,12 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
       else s"The mini setup from format ${version} could not be read.".!!
     (analysis, miniSetup, version)
   }
-  private class StringTable {
-    private val strings = new JHashMap[String, String]()
-    def lookupOrEnter(string: String): String = {
-      strings.putIfAbsent(string, string) match {
-        case null => string
-        case v    => v
+  private class ObjectTable {
+    private val objects = new JHashMap[Any, Any]()
+    def lookupOrEnter[T](o: T): T = {
+      objects.putIfAbsent(o, o) match {
+        case null => o
+        case v    => v.asInstanceOf[T]
       }
     }
   }

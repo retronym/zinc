@@ -20,7 +20,7 @@ import xsbti.compile.{ CompileAnalysis, MiniSetup }
 final class BinaryAnalysisFormat(mappers: ReadWriteMappers) {
   private final val CurrentVersion = Schema.Version.V1_1
   private final val protobufWriters = new ProtobufWriters(mappers.getWriteMapper)
-  private final val protobufReaders = new ProtobufReaders(mappers.getReadMapper, CurrentVersion)
+  private final def protobufReaders() = new ProtobufReaders(mappers.getReadMapper, CurrentVersion)
 
   def write(writer: CodedOutputStream, analysis0: CompileAnalysis, miniSetup: MiniSetup): Unit = {
     val analysis = analysis0 match { case analysis: Analysis => analysis }
@@ -43,7 +43,7 @@ final class BinaryAnalysisFormat(mappers: ReadWriteMappers) {
 
   def read(reader: CodedInputStream): (CompileAnalysis, MiniSetup) = {
     val protobufFile = Schema.AnalysisFile.parseFrom(reader)
-    val (analysis, miniSetup, _) = protobufReaders.fromAnalysisFile(protobufFile)
+    val (analysis, miniSetup, _) = protobufReaders().fromAnalysisFile(protobufFile)
     analysis -> miniSetup
   }
 
@@ -54,7 +54,7 @@ final class BinaryAnalysisFormat(mappers: ReadWriteMappers) {
   ): CompileAnalysis = {
     val analysis = analysis0 match { case analysis: Analysis => analysis }
     val protobufAPIsFile = Schema.APIsFile.parseFrom(reader)
-    val (apis, _) = protobufReaders.fromApisFile(protobufAPIsFile, shouldStoreApis)
+    val (apis, _) = protobufReaders().fromApisFile(protobufAPIsFile, shouldStoreApis)
     analysis.copy(apis = apis)
   }
 }
