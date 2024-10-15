@@ -35,7 +35,6 @@ object SafeLazyProxy {
    * Return a lazy implementation of a strict value.
    */
   def strict[T](s: T): Lazy[T] = {
-    val sbtThunk = new Supplier[T] { override def get() = s }
-    SafeLazy.apply(sbtThunk)
+    SafeLazy.strict(s)
   }
 }

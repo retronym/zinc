@@ -62,7 +62,7 @@ object APIUtil {
   def minimizeDefinition(d: Definition): Array[Definition] =
     d match {
       case c: ClassLike => Array(minimizeClass(c))
-      case _            => Array()
+      case _            => emptyDefinitionArray
     }
   def minimizeClass(c: ClassLike): ClassLike = {
     val savedAnnotations = Discovery.defAnnotations(c.structure, (_: Any) => true).toArray[String]
@@ -91,8 +91,14 @@ object APIUtil {
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean
-  ): Lazy[Array[ClassDefinition]] =
-    lzy(if (isModule) ds filter Discovery.isMainMethod else Array())
+  ): Lazy[Array[ClassDefinition]] = {
+    if (isModule) {
+      (ds filter Discovery.isMainMethod) match {
+        case Array()  => emptyClassDefinitionArrayLzy
+        case retained => lzy(retained)
+      }
+    } else emptyClassDefinitionArrayLzy
+  }
 
   def isNonPrivate(d: Definition): Boolean = isNonPrivate(d.access)
 
@@ -106,21 +112,24 @@ object APIUtil {
     new Modifiers(false, false, false, false, false, false, false, false)
   private val emptyStructure = Structure.of(lzy(Array.empty), lzy(Array.empty), lzy(Array.empty))
   def emptyClassLike(name: String, definitionType: DefinitionType): ClassLike =
-    xsbti.api.ClassLike.of(
-      name,
-      Public.of(),
-      emptyModifiers,
-      Array.empty,
-      definitionType,
-      lzy(emptyType),
-      lzy(emptyStructure),
-      Array.empty,
-      Array.empty,
-      true,
-      Array.empty
-    )
+    emptyClassLikeTemplate.withName(name).withDefinitionType(definitionType)
+  private[this] def emptyClassLikeTemplate = xsbti.api.ClassLike.of(
+    null,
+    Public.of(),
+    emptyModifiers,
+    Array.empty,
+    null,
+    lzy(emptyType),
+    lzy(emptyStructure),
+    Array.empty,
+    Array.empty,
+    true,
+    Array.empty
+  )
 
   private[this] def lzy[T <: AnyRef](t: T): Lazy[T] = SafeLazyProxy.strict(t)
 
   private[this] val emptyType = EmptyType.of()
+  private[this] val emptyClassDefinitionArrayLzy = lzy(Array[ClassDefinition]())
+  private[this] val emptyDefinitionArray = Array[Definition]()
 }

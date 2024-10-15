@@ -34,12 +34,7 @@ public final class SafeLazy {
   /** Return a sbt [[xsbti.api.Lazy]] from a strict value. */
   public static <T> xsbti.api.Lazy<T> strict(T value) {
     // Convert strict parameter to sbt function returning it
-    return apply(new Supplier<T>() {
-      @Override
-      public T get() {
-        return value;
-      }
-    });
+    return new StrictImpl<T>(value);
   }
 
   private static final class Thunky<T> {
@@ -66,6 +61,17 @@ public final class SafeLazy {
         thunky = t;
       }
       return t.result;
+    }
+  }
+  private static final class StrictImpl<T> extends xsbti.api.AbstractLazy<T> {
+    private T value;
+
+    StrictImpl(T value) {
+      this.value = value;
+    }
+
+    public T get() {
+      return value;
     }
   }
 }
