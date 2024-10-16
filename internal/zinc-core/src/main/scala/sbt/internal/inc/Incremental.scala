@@ -870,8 +870,14 @@ private final class AnalysisCallback(
     // sbt/zinc#630
     if (!APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.isAnnotationDefinition(classApi))
       annotationClasses.add(className)
-    val shouldMinimize = !Incremental.apiDebug(options)
-    val savedClassApi = if (shouldMinimize) APIUtil.minimize(classApi) else classApi
+    val apiDebug = Incremental.apiDebug(options)
+    val savedClassApi = if (apiDebug) {
+      classApi
+    } else if (options.retainApi()) {
+      APIUtil.minimize(classApi)
+    } else {
+      APIUtil.emptyClassLike(classApi.name(), classApi.definitionType())
+    }
     val apiHash: HashAPI.Hash = HashAPI(classApi)
     val nameHashes = (new xsbt.api.NameHashing(options.useOptimizedSealed())).nameHashes(classApi)
     classApi.definitionType match {

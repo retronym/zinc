@@ -105,6 +105,11 @@ type IncOptions {
   pipelining: Boolean! = raw"xsbti.compile.IncOptions.defaultPipelining()"
   @since("1.4.0")
 
+  ## Should Zinc retain the minimized API representation? Build tools that
+  ## that do not use it for test discovery or other purposes can set this to false.
+  retainApi: Boolean! = raw"xsbti.compile.IncOptions.defaultRetainApi()"
+  @since("1.5.0")
+
   #x public static int defaultTransitiveStep() {
   #x     return 3;
   #x }
@@ -173,6 +178,9 @@ type IncOptions {
   #x     return true;
   #x }
   #x public static boolean defaultPipelining() {
+  #x     return false;
+  #x }
+  #x public static boolean defaultRetainApi() {
   #x     return false;
   #x }
 }
