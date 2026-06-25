@@ -70,7 +70,7 @@ jobs:
       if: ${{ matrix.jobtype == 7 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never -Dzinc.scripted.classfileJavaApi=true "Test/compile" "crossTestBridges" "scripted"
+        sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never -Dzinc.scripted.classfileJavaApi=true -Dzinc.classfileJavaApi.strict=true "Test/compile" "crossTestBridges" "scripted"
     - name: Build and test (3)
       if: ${{ matrix.jobtype == 3 }}
       shell: bash
