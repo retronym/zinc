@@ -54,6 +54,11 @@ jobs:
         cache: sbt
     - name: Setup SBT
       uses: sbt/setup-sbt@6bec67c98f542b9e17369bfca0ec822ac1363194 # v1.1.19
+    # Every sbt invocation runs with `--server` (a foreground JVM that runs the commands and exits)
+    # plus `-Dsbt.server.autostart=false` (never start or reuse a background server). Each `sbt` call
+    # is therefore a self-contained process with no shared state — important for the jobs below that
+    # invoke sbt twice (e.g. benchmarking the PR branch then the base branch), where a reused server
+    # could otherwise carry over stale classes or -D properties between invocations.
     - name: Build and test (1)
       if: ${{ matrix.jobtype == 1 }}
       shell: bash
@@ -62,7 +67,7 @@ jobs:
       if: ${{ matrix.jobtype == 2 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never "Test/compile" "crossTestBridges" "zincRoot/test" "scripted"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 -Dsbt.supershell=never "Test/compile" "crossTestBridges" "zincRoot/test" "scripted"
     # Run the scripted suite with the classfile-based Java API path forced on, so the same
     # incremental scenarios are exercised in both modes (jobtype 1/2 cover the default reflection
     # path). See CONTRIBUTING.md "Running scripted tests in the classfile Java API mode".
@@ -70,28 +75,28 @@ jobs:
       if: ${{ matrix.jobtype == 7 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never -Dzinc.scripted.classfileJavaApi=true -Dzinc.classfileJavaApi.strict=true "Test/compile" "crossTestBridges" "scripted"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 -Dsbt.supershell=never -Dzinc.scripted.classfileJavaApi=true -Dzinc.classfileJavaApi.strict=true "Test/compile" "crossTestBridges" "scripted"
     - name: Build and test (3)
       if: ${{ matrix.jobtype == 3 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 scalafmtCheckAll scalafmtSbtCheck headerCheck "Test/headerCheck" generateContrabands
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 scalafmtCheckAll scalafmtSbtCheck headerCheck "Test/headerCheck" generateContrabands
         git diff --exit-code
     - name: Benchmark (Scalac) (4)
       if: ${{ matrix.jobtype == 4 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Scalac.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Scalac.*" "runBenchmarks"
     - name: Benchmark (Shapeless) (5)
       if: ${{ matrix.jobtype == 5 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Shapeless.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Shapeless.*" "runBenchmarks"
     - name: Benchmark (AnalysisFormatBenchmark) (6)
       if: ${{ matrix.jobtype == 6 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*AnalysisFormatBenchmark.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*AnalysisFormatBenchmark.*" "runBenchmarks"
     - name: Checkout Target Branch (4-6)
       if: ${{ github.event_name == 'pull_request' && (matrix.jobtype >= 4 && matrix.jobtype <= 6) }}
       uses: actions/checkout@v6
@@ -101,14 +106,14 @@ jobs:
       if: ${{ github.event_name == 'pull_request' && matrix.jobtype == 4 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Scalac.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Scalac.*" "runBenchmarks"
     - name: Benchmark (Shapeless) against Target Branch (5)
       if: ${{ github.event_name == 'pull_request' && matrix.jobtype == 5 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Shapeless.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*Shapeless.*" "runBenchmarks"
     - name: Benchmark (AnalysisFormatBenchmark) against Target Branch (6)
       if: ${{ github.event_name == 'pull_request' && matrix.jobtype == 6 }}
       shell: bash
       run: |
-        sbt -v --server -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*AnalysisFormatBenchmark.*" "runBenchmarks"
+        sbt -v --server -Dsbt.server.autostart=false -Dfile.encoding=UTF-8 "-Dbenchmark.pattern=.*AnalysisFormatBenchmark.*" "runBenchmarks"
