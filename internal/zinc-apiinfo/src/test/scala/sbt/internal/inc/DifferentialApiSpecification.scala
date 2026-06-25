@@ -240,4 +240,159 @@ class DifferentialApiSpecification extends UnitSpec {
       assert(r == c, s"inner-class ctor param count differs — reflect=$r classfile=$c")
     }
   }
+
+  // The simple (Projection) name of a parent type reference, e.g. "Marker"/"Object". ClassToAPI and
+  // ClassfileToAPI both build parent references via ClassToAPI.reference, which yields a Projection.
+  private def parentSimpleName(t: xsbti.api.Type): Option[String] = t match {
+    case p: xsbti.api.Projection    => Some(p.id)
+    case p: xsbti.api.Parameterized => parentSimpleName(p.baseType)
+    case _                          => None
+  }
+  private def parentNames(apis: Seq[ClassLike]): Set[String] =
+    apis.flatMap(_.structure.parents.toSeq.flatMap(parentSimpleName)).toSet
+
+  // Deviation #1 (fixed): ClassfileToAPI now lists the *transitive* supertype closure in `parents`
+  // (ClassfileToAPI.collectParents), matching ClassToAPI.allSuperTypes — not just the direct
+  // supertypes. So a subtyping relationship `C` holds only through an intermediate `B` (here a
+  // member-less marker interface that `B` stops implementing) changes C's API on both paths, and the
+  // classfile path no longer under-invalidates C's dependents. This was a green known-bug witness
+  // before the fix; it now asserts agreement with reflection.
+  it should "model the transitive supertype closure in parents, matching reflection" in {
+    IO.withTemporaryDirectory { temp =>
+      // v1: C -> B -> Marker (C is transitively a Marker).  v2: B no longer implements Marker.
+      val v1 = "interface Marker {} class B implements Marker {} public class C extends B {}"
+      val v2 = "interface Marker {} class B {} public class C extends B {}"
+      val (reflect1, classfile1) = buildApis(temp, 100, "C", v1)
+      val (reflect2, classfile2) = buildApis(temp, 101, "C", v2)
+
+      // Structural: both paths list the transitive Marker among C's parents, and agree.
+      val (pR, pC) = (parentNames(reflect1), parentNames(classfile1))
+      println(s"[parents] reflect C parents=$pR  classfile C parents=$pC")
+      assert(pC.contains("Marker"), s"classfile should now list transitive Marker: $pC")
+      assert(pR == pC, s"parents should match reflection — reflect=$pR classfile=$pC")
+
+      // Consequence: both paths invalidate (hash changes when B drops `implements Marker`).
+      val (hR1, hR2) = (reflect1.map(HashAPI(_)).sum, reflect2.map(HashAPI(_)).sum)
+      val (hC1, hC2) = (classfile1.map(HashAPI(_)).sum, classfile2.map(HashAPI(_)).sum)
+      println(s"[hash] reflect $hR1 -> $hR2 (changed=${hR1 != hR2}); " +
+        s"classfile $hC1 -> $hC2 (changed=${hC1 != hC2})")
+      assert(hR1 != hR2, "reflection hash must change when B drops `implements Marker`")
+      assert(
+        hC1 != hC2,
+        s"classfile hash must now change on the transitive-supertype change — got $hC1 vs $hC2"
+      )
+    }
+  }
+
+  // Deviation #2 (fixed): ClassfileToAPI now reads RuntimeVisible/InvisibleParameterAnnotations and
+  // folds them into the method's synthetic annotation, so a parameter-annotation-only change changes
+  // its hash — matching reflection (which carries them on the parameter type via api.Annotated). Was
+  // a green known-bug witness before the fix; now asserts both paths invalidate.
+  it should "detect a parameter-annotation change, matching reflection" in {
+    IO.withTemporaryDirectory { temp =>
+      val pa =
+        "import java.lang.annotation.*;\n" +
+          "@Retention(RetentionPolicy.RUNTIME) @Target(ElementType.PARAMETER) @interface PA {}\n"
+      val v1 = pa + "public class C { public void m(@PA String x) {} }"
+      val v2 = pa + "public class C { public void m(String x) {} }"
+      val (reflect1, classfile1) = buildApis(temp, 110, "C", v1)
+      val (reflect2, classfile2) = buildApis(temp, 111, "C", v2)
+      val (hR1, hR2) = (reflect1.map(HashAPI(_)).sum, reflect2.map(HashAPI(_)).sum)
+      val (hC1, hC2) = (classfile1.map(HashAPI(_)).sum, classfile2.map(HashAPI(_)).sum)
+      println(s"[param-anno hash] reflect changed=${hR1 != hR2}; classfile changed=${hC1 != hC2}")
+      assert(hR1 != hR2, "reflection hash must change when the parameter annotation is removed")
+      assert(
+        hC1 != hC2,
+        s"classfile hash must now change on a param-annotation change — $hC1 vs $hC2"
+      )
+    }
+  }
+
+  // The names of classes `process` reports as having a `main`, from each path.
+  private def mainClasses(temp: File, idx: Int, names: Seq[(String, String)], query: String) = {
+    val dir = new File(temp, s"m$idx")
+    dir.mkdir()
+    val srcs = names.map {
+      case (n, src) =>
+        val f = new File(dir, s"$n.java"); IO.write(f, src); f
+    }
+    JavaCompilerForUnitTesting.compileJava(srcs, dir, Seq.empty)
+    val loader = new URLClassLoader(Array(dir.toURI.toURL), null)
+    val resolve: String => Option[ClassFile] = bn => {
+      val res = bn.replace('.', '/') + ".class"
+      Option(loader.getResource(res))
+        .orElse(Option(ClassLoader.getSystemResource(res)))
+        .flatMap(u =>
+          try Some(Parser(u, Logger.Null))
+          catch { case _: Throwable => None }
+        )
+    }
+    val reflectMains = ClassToAPI.process(Seq(loader.loadClass(query)))._2
+    val cf = Parser(new File(dir, s"$query.class").toPath, Logger.Null)
+    val classfileMains = ClassfileToAPI.process(Seq(query -> cf), resolve)._2
+    (reflectMains, classfileMains)
+  }
+
+  // Deviation #3 (fixed): ClassfileToAPI.hasMain now also checks the inherited (superclass-chain)
+  // public static main, mirroring ClassToAPI's use of c.getMethods, so a subclass that inherits
+  // `main` is reported as a main class. Was a green known-bug witness before the fix; now asserts
+  // agreement with reflection.
+  it should "report an inherited main, matching reflection" in {
+    IO.withTemporaryDirectory { temp =>
+      val (reflectMains, classfileMains) = mainClasses(
+        temp,
+        0,
+        Seq(
+          "A" -> "public class A { public static void main(String[] a) {} }",
+          "B" -> "public class B extends A {}"
+        ),
+        query = "B"
+      )
+      println(s"[main] reflect=$reflectMains classfile=$classfileMains")
+      assert(
+        reflectMains.contains("B"),
+        s"reflection should report inherited main on B: $reflectMains"
+      )
+      assert(
+        classfileMains.contains("B"),
+        s"classfile should now report inherited main on B: $classfileMains"
+      )
+    }
+  }
+
+  // Deviation #4 (fixed): reflection's topLevel is `getEnclosingClass == null`, false for member,
+  // local, AND anonymous classes. ClassfileToAPI now marks a class non-top-level on the mere presence
+  // of an InnerClasses self entry (no longer requiring a non-empty outer), so anonymous/local classes
+  // — whose self entry has outer index 0 — agree with reflection. Was a green known-bug witness
+  // before the fix.
+  it should "mark an anonymous class as non-top-level, matching reflection" in {
+    IO.withTemporaryDirectory { temp =>
+      val dir = new File(temp, "d4")
+      dir.mkdir()
+      val src = new File(dir, "Outer.java")
+      IO.write(src, "public class Outer { Runnable r = new Runnable() { public void run() {} }; }")
+      JavaCompilerForUnitTesting.compileJava(Seq(src), dir, Seq.empty)
+      val loader = new URLClassLoader(Array(dir.toURI.toURL), null)
+      val resolve: String => Option[ClassFile] = bn => {
+        val res = bn.replace('.', '/') + ".class"
+        Option(loader.getResource(res))
+          .orElse(Option(ClassLoader.getSystemResource(res)))
+          .flatMap(u =>
+            try Some(Parser(u, Logger.Null))
+            catch { case _: Throwable => None }
+          )
+      }
+      val binary = "Outer$1" // the anonymous Runnable
+      val reflect = ClassToAPI.process(Seq(loader.loadClass(binary)))._1.filter(_.name == binary)
+      val cf = Parser(new File(dir, binary + ".class").toPath, Logger.Null)
+      val classfile = ClassfileToAPI.process(Seq(binary -> cf), resolve)._1.filter(_.name == binary)
+      val (rTop, cTop) = (reflect.map(_.topLevel).toSet, classfile.map(_.topLevel).toSet)
+      println(s"[topLevel] reflect=$rTop classfile=$cTop")
+      assert(rTop == Set(false), s"reflection: anon class is not top-level: $rTop")
+      assert(
+        cTop == rTop,
+        s"classfile topLevel must now match reflection — reflect=$rTop classfile=$cTop"
+      )
+    }
+  }
 }

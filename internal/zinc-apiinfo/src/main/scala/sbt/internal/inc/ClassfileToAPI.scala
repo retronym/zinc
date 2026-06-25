@@ -47,6 +47,23 @@ import sbt.util.Logger
  * API byte-for-byte (e.g. type-variable names are unqualified, and wildcards keep only their bound);
  * it only needs to be deterministic and to change when the class's public shape changes. See
  * docs/design/classfile-based-java-api.md.
+ *
+ * Two differences from [[ClassToAPI]] are intentional and do not under-invalidate:
+ *   - Annotations are read from both the RuntimeVisible and RuntimeInvisible attributes, so
+ *     CLASS-retention annotations (the default when no `@Retention` is given) are captured here even
+ *     though reflection's `getAnnotations` does not see them. The relevant criterion for invalidation
+ *     is whether compiling a *dependent* against this classfile can observe the annotation, not
+ *     whether it survives to runtime: javac exposes RuntimeInvisible annotations through
+ *     `javax.lang.model` (`getAnnotationMirrors`), so an annotation processor introspecting this type
+ *     during a dependent's compilation can act on a CLASS-retained annotation and emit different
+ *     output. Reflection's omission is thus a limitation of its runtime-only lens, not a designed
+ *     semantic — capturing these here is closer to what a dependent compiler can actually see. (SOURCE
+ *     retention is absent from the classfile, so neither path sees it, correctly.) The cost is mild
+ *     over-invalidation: a CLASS-retained annotation that no processor reads still bumps the hash.
+ *   - A member class referenced in its *outer's* declared members ([[nestedClassDefs]]) carries no
+ *     type parameters or annotations, whereas reflection's reference does. The member class's own
+ *     `ClassLike` entry models them in full, so a change there still invalidates its dependents; only
+ *     the outer's view of it is abbreviated.
  */
 object ClassfileToAPI {
   import api.DefinitionType.{ ClassDef, Module, Trait }
@@ -92,39 +109,69 @@ object ClassfileToAPI {
         } catch { case NonFatal(_) => Nil }
     }
 
+  // Decodes one `annotation` structure (JVMS 4.7.16) from `in` into a `type(name=value,...)` string,
+  // capturing element values too (so `@A("a")` differs from `@A("b")`). Length-prefixes each composed
+  // value so concatenation can't collide (e.g. {"a,b","c"} vs {"a","b,c"}); we only need distinct,
+  // deterministic strings for hashing, not parseability.
+  private def decodeAnnotation(in: DataInputStream, cf: ClassFile): String = {
+    def poolStr(i: Int): String = cf.constantPool(i).value.fold("")(_.toString)
+    def lp(s: String): String = s.length.toString + ":" + s
+    def elementValue(): String =
+      in.readUnsignedByte().toChar match {
+        case 'e' => poolStr(in.readUnsignedShort()) + "." + poolStr(in.readUnsignedShort())
+        case 'c' => poolStr(in.readUnsignedShort())
+        case '@' => annotationString()
+        case '[' =>
+          val n = in.readUnsignedShort()
+          (0 until n).map(_ => lp(elementValue())).mkString("[", "", "]")
+        case _ => poolStr(in.readUnsignedShort())
+      }
+    def annotationString(): String = {
+      val tpe = poolStr(in.readUnsignedShort()).stripPrefix("L").stripSuffix(";").replace('/', '.')
+      val pairs = in.readUnsignedShort()
+      val args =
+        (0 until pairs).map(_ => lp(poolStr(in.readUnsignedShort()) + "=" + elementValue()))
+      if (args.isEmpty) tpe else args.mkString(tpe + "(", "", ")")
+    }
+    annotationString()
+  }
+
   /**
    * Declared annotations rendered as `type(name=value,...)` strings, from RuntimeVisible/Invisible
-   * attributes (JVMS 4.7.16) — capturing element values too, so `@A("a")` differs from `@A("b")`.
+   * attributes (JVMS 4.7.16).
    */
   private def annotationStrings(cf: ClassFile, attrs: Seq[AttributeInfo]): Seq[String] = {
     val out = ArrayBuffer.empty[String]
     for (a <- attrs if a.isRuntimeVisibleAnnotations || a.isRuntimeInvisibleAnnotations) {
       try {
         val in = new DataInputStream(new ByteArrayInputStream(a.value))
-        def poolStr(i: Int): String = cf.constantPool(i).value.fold("")(_.toString)
-        // Length-prefix each composed value so concatenation can't collide (e.g. {"a,b","c"} vs
-        // {"a","b,c"}); we only need distinct, deterministic strings for hashing, not parseability.
-        def lp(s: String): String = s.length.toString + ":" + s
-        def elementValue(): String =
-          in.readUnsignedByte().toChar match {
-            case 'e' => poolStr(in.readUnsignedShort()) + "." + poolStr(in.readUnsignedShort())
-            case 'c' => poolStr(in.readUnsignedShort())
-            case '@' => annotationString()
-            case '[' =>
-              val n = in.readUnsignedShort()
-              (0 until n).map(_ => lp(elementValue())).mkString("[", "", "]")
-            case _ => poolStr(in.readUnsignedShort())
-          }
-        def annotationString(): String = {
-          val tpe =
-            poolStr(in.readUnsignedShort()).stripPrefix("L").stripSuffix(";").replace('/', '.')
-          val pairs = in.readUnsignedShort()
-          val args =
-            (0 until pairs).map(_ => lp(poolStr(in.readUnsignedShort()) + "=" + elementValue()))
-          if (args.isEmpty) tpe else args.mkString(tpe + "(", "", ")")
-        }
         val num = in.readUnsignedShort()
-        (0 until num).foreach(_ => out += annotationString())
+        (0 until num).foreach(_ => out += decodeAnnotation(in, cf))
+      } catch { case NonFatal(_) => () }
+    }
+    out.toSeq
+  }
+
+  /**
+   * Parameter annotations rendered as `index:type(...)` strings, from RuntimeVisible/Invisible
+   * ParameterAnnotations attributes (JVMS 4.7.18–19). Position-prefixed so moving an annotation
+   * between parameters is a change. ClassToAPI carries these on the parameter type (api.Annotated);
+   * folding them into the method's synthetic annotation is enough to track changes for hashing.
+   */
+  private def parameterAnnotationStrings(cf: ClassFile, attrs: Seq[AttributeInfo]): Seq[String] = {
+    val out = ArrayBuffer.empty[String]
+    for (
+      a <- attrs
+      if a.isNamed("RuntimeVisibleParameterAnnotations") ||
+        a.isNamed("RuntimeInvisibleParameterAnnotations")
+    ) {
+      try {
+        val in = new DataInputStream(new ByteArrayInputStream(a.value))
+        val numParams = in.readUnsignedByte()
+        (0 until numParams).foreach { p =>
+          val n = in.readUnsignedShort()
+          (0 until n).foreach(_ => out += s"$p:" + decodeAnnotation(in, cf))
+        }
       } catch { case NonFatal(_) => () }
     }
     out.toSeq
@@ -147,7 +194,7 @@ object ClassfileToAPI {
     val mainClasses = ArrayBuffer.empty[String]
     for ((name, cf) <- named) {
       classApis ++= classLikes(name, cf, cachedResolve)
-      if (cf.methods.exists(_.isMain)) mainClasses += name
+      if (hasMain(cf, cachedResolve)) mainClasses += name
     }
     (classApis.toSeq, mainClasses.toSeq)
   }
@@ -164,9 +211,11 @@ object ClassfileToAPI {
     val acc = ClassToAPI.access(cf.accessFlags, enclPkg)
     val isInterface = Modifier.isInterface(cf.accessFlags)
     val tpe = if (isInterface) Trait else ClassDef
-    // Top-level unless the classfile's InnerClasses attribute lists itself as a member of another.
-    val topLevel =
-      !cf.innerClasses.exists(i => i.innerClassName == cf.className && i.outerClassName.nonEmpty)
+    // Top-level unless the InnerClasses attribute has a self entry — present for member, local, and
+    // anonymous classes (JVMS 4.7.6 requires it for any non-package-member). Matches reflection's
+    // `getEnclosingClass == null`. Local/anonymous self entries have an empty outer (outer index 0),
+    // so the entry's presence — not its outer — is what marks the class as nested.
+    val topLevel = !cf.innerClasses.exists(_.innerClassName == cf.className)
 
     val fields = cf.fields.toIndexedSeq.map(fieldDef(cf, _, enclPkg))
     val methods = cf.methods.toIndexedSeq.collect {
@@ -188,19 +237,13 @@ object ClassfileToAPI {
 
     val classSigStr = cf.attributes.find(_.isSignature).map(cf.stringValue)
     val classSig = classSigStr.flatMap(SignatureParser.classSignature)
-    val (typeParams, parents): (Array[api.TypeParameter], Array[api.Type]) = classSig match {
-      case Some(cs) =>
-        (
-          cs.typeParams.map(toTypeParam).toArray,
-          (cs.superclass +: cs.interfaces).map(toType).toArray
-        )
-      case None =>
-        val erased = (cf.superClassName +: cf.interfaceNames.toIndexedSeq)
-          .filter(_.nonEmpty)
-          .map(ClassToAPI.reference)
-          .toArray
-        (noTypeParameters, erased)
-    }
+    val typeParams: Array[api.TypeParameter] =
+      classSig.map(_.typeParams.map(toTypeParam).toArray).getOrElse(noTypeParameters)
+    // Parents are the *transitive* supertype closure (matching ClassToAPI.allSuperTypes), resolved
+    // through parent classfiles — not just the direct supertypes. Otherwise a subtyping relationship
+    // this class holds only through an intermediate (e.g. a member-less marker interface that a
+    // superclass stops implementing) would not change its API, under-invalidating its dependents.
+    val parents: Array[api.Type] = collectParents(cf, resolveParent)
 
     val classAnnots = syntheticAnnotations(
       "signature" -> rawSignature(classSigStr),
@@ -320,7 +363,8 @@ object ClassfileToAPI {
     val annots = syntheticAnnotations(
       "signature" -> rawSignature(sigStr),
       "throws" -> exceptionNames(cf, m.attributes),
-      "annotations" -> annotationStrings(cf, m.attributes)
+      "annotations" -> annotationStrings(cf, m.attributes),
+      "paramAnnotations" -> parameterAnnotationStrings(cf, m.attributes)
     )
     val d = api.Def.of(name, acc, mods, annots, typeParams, Array(paramList), returnType)
     (m.isStatic, d)
@@ -460,6 +504,76 @@ object ClassfileToAPI {
     }
     (instance.toArray, static.toArray)
   }
+
+  /**
+   * The transitive supertype closure as api type references, resolved through parent classfiles
+   * (byte-only, no class loading) — the classfile analogue of [[ClassToAPI.allSuperTypes]]. Direct
+   * supertypes keep their generic form from the `Signature` attribute; ancestors are followed via
+   * their erased (`$`-joined) binary names. Cycle-safe (a visited set keyed on the erased name) and
+   * fail-soft (an unresolved parent just ends that branch). `java.lang.Object` is included for a
+   * class but not for an interface, matching reflection (an interface's `getGenericSuperclass` is
+   * null). The class itself is excluded.
+   */
+  private def collectParents(
+      cf: ClassFile,
+      resolveParent: String => Option[ClassFile]
+  ): Array[api.Type] = {
+    // (erased binary name, reference) for each direct supertype of `c` — generic when a Signature is
+    // present, erased otherwise; Object dropped for interfaces (via superTypeNames' class/iface split).
+    def directSupers(c: ClassFile): Seq[(String, api.Type)] = {
+      val isIface = Modifier.isInterface(c.accessFlags)
+      c.attributes
+        .find(_.isSignature)
+        .map(c.stringValue)
+        .flatMap(SignatureParser.classSignature) match {
+        case Some(cs) =>
+          val supers = if (isIface) cs.interfaces else cs.superclass +: cs.interfaces
+          supers.collect { case s: SigClass => erasedSigClassName(s) -> toType(s) }
+        case None =>
+          superTypeNames(c).map(n => n -> ClassToAPI.reference(n))
+      }
+    }
+    val out = ArrayBuffer.empty[api.Type]
+    val visited = scala.collection.mutable.Set(cf.className) // exclude self
+    val queue = scala.collection.mutable.Queue.empty[(String, api.Type)]
+    queue ++= directSupers(cf)
+    while (queue.nonEmpty) {
+      val (name, ref) = queue.dequeue()
+      if (visited.add(name)) {
+        out += ref
+        resolveParent(name).foreach(pcf => queue ++= directSupers(pcf))
+      }
+    }
+    out.toArray
+  }
+
+  // The erased ($-joined) binary name of a class-type signature, matching cf.superClassName /
+  // interfaceNames (e.g. `pkg.Outer<String>.Inner` -> "pkg.Outer$Inner").
+  private def erasedSigClassName(s: SigClass): String =
+    (s.name +: s.inners.map(_.name)).mkString("$")
+
+  /**
+   * Whether the class has a `main` method — its own or one inherited from a superclass — mirroring
+   * ClassToAPI's use of `getMethods` (which includes inherited methods). The superclass chain is
+   * walked via parent classfiles; a static method declared on an interface is not inherited (matching
+   * getMethods and [[collectInherited]]), so it never counts. Cycle-safe and fail-soft.
+   */
+  private def hasMain(cf: ClassFile, resolveParent: String => Option[ClassFile]): Boolean =
+    cf.methods.exists(_.isMain) || {
+      val visited = scala.collection.mutable.Set(cf.className)
+      val queue = scala.collection.mutable.Queue.empty[String]
+      queue ++= superTypeNames(cf)
+      var found = false
+      while (!found && queue.nonEmpty) {
+        val n = queue.dequeue()
+        if (visited.add(n)) resolveParent(n).foreach { pcf =>
+          val isIface = Modifier.isInterface(pcf.accessFlags)
+          if (pcf.methods.exists(m => m.isMain && !isIface)) found = true
+          else queue ++= superTypeNames(pcf)
+        }
+      }
+      found
+    }
 
   private val ObjectRef = ClassToAPI.reference("java.lang.Object")
 
