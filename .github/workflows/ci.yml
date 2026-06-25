@@ -38,6 +38,10 @@ jobs:
             java: 21
             distribution: temurin
             jobtype: 6
+          - os: ubuntu-latest
+            java: 21
+            distribution: temurin
+            jobtype: 7
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout
@@ -59,6 +63,14 @@ jobs:
       shell: bash
       run: |
         sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never "Test/compile" "crossTestBridges" "zincRoot/test" "scripted"
+    # Run the scripted suite with the classfile-based Java API path forced on, so the same
+    # incremental scenarios are exercised in both modes (jobtype 1/2 cover the default reflection
+    # path). See CONTRIBUTING.md "Running scripted tests in the classfile Java API mode".
+    - name: Scripted (classfile Java API) (7)
+      if: ${{ matrix.jobtype == 7 }}
+      shell: bash
+      run: |
+        sbt -v --server -Dfile.encoding=UTF-8 -Dsbt.supershell=never -Dzinc.scripted.classfileJavaApi=true "Test/compile" "crossTestBridges" "scripted"
     - name: Build and test (3)
       if: ${{ matrix.jobtype == 3 }}
       shell: bash
