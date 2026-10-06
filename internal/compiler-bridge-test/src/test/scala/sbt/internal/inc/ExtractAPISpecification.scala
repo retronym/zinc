@@ -45,6 +45,15 @@ class ExtractAPISpecification
     }
   }
 
+  it should "include parameter annotations such as @deprecatedName" in {
+    if (scalaVersion.startsWith("2.12") || scalaVersion.startsWith("2.13")) {
+      def fooApi(src: String): ClassLike = extractApisFromSrc(src).find(_.name() == "Foo").get
+      val withAnnot = fooApi("""class Foo { def f(@deprecatedName("old") n: Int): Int = n }""")
+      val without = fooApi("class Foo { def f(n: Int): Int = n }")
+      assert(SameAPI(withAnnot, without) !== true)
+    }
+  }
+
   it should "extract correctly the definition type of a package object" in {
     val src = "package object foo".stripMargin
     val apis = extractApisFromSrc(src)
