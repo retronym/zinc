@@ -1,0 +1,13 @@
+# constructors-unrelated-2 on scala2-sbt-bridge, which does not yet name
+# `<init>$default$N` after its class (fc22a8e32). All default getters of
+# secondary constructors share one name hash, so changing B's recompiles A.
+# general/bridge-2.13.y checks that 2.13.y really is scala2-sbt-bridge.
+
+> p/compile
+$ copy-file changes/B.scala p/B.scala
+# Second compilation round, there should be no third round (we don't need to recompile A.scala)
+> p/compile
+# Check that there were only two rounds of compilation
+> p/checkIterations 2
+$ copy-file changes/C.scala p/C.scala
+-> p/compile
