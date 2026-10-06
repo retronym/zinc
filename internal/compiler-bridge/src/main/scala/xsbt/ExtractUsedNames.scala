@@ -15,6 +15,8 @@ import java.util.{ HashMap => JavaMap }
 import java.util.{ HashSet => JavaSet }
 import java.util.EnumSet
 
+import scala.reflect.internal.Chars.isOperatorPart
+
 import xsbti.UseScope
 // Left for compatibility
 import Compat._
@@ -168,8 +170,50 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
 
     override def traverse(tree: Tree): Unit = {
       handleClassicTreeNode(tree)
+      handleNamesNotInTree(tree)
       processMacroExpansion(tree)(handleMacroExpansion)
       super.traverse(tree)
+    }
+
+    /**
+     * Registers names that the typer looked up or the pattern matcher will select, but that do
+     * not appear as symbols in the typed tree.
+     */
+    private def handleNamesNotInTree(tree: Tree): Unit = tree match {
+      // `x op= y` is typed as `x = x op y` (or the setter / `update` equivalent) when the type of
+      // `x` has no member `op=`. Adding one changes the meaning, so register `op=`. The typer
+      // positions the `op` selection at the `op=` of the source (`convertToAssignment`), which
+      // tells it apart from a hand-written `x = x op y`.
+      case sel @ Select(_, op) if isDesugaredAssignmentOp(sel, op) =>
+        getNamesOfEnclosingScope.add(newTermName(op.decoded + "=").encode)
+        ()
+      // The typer tries `unapply` before `unapplySeq`, and the pattern matcher selects the members
+      // of a name-based extractor's result after this phase. This may register a few names that
+      // are not involved, which only costs recompilation when such a name changes.
+      case UnApply(fun, args) =>
+        val names = getNamesOfEnclosingScope
+        extractorNames.foreach(names.add)
+        for (i <- 1 to args.length) names.add(newTermName("_" + i))
+        if (fun.symbol != null && fun.symbol.name == nme.unapplySeq)
+          extractorSeqNames.foreach(names.add)
+      case _ =>
+    }
+
+    private val extractorNames: List[Name] =
+      List("unapply", "unapplySeq", "isEmpty", "get").map(s => newTermName(s): Name)
+    private val extractorSeqNames: List[Name] =
+      List("lengthCompare", "apply", "drop", "toSeq").map(s => newTermName(s): Name)
+
+    private def isDesugaredAssignmentOp(sel: Select, op: Name): Boolean = {
+      val pos = sel.pos
+      op.isTermName && op.decoded != op.toString && pos.isDefined && {
+        val content = pos.source.content
+        val opEq = op.decoded + "="
+        val start = pos.point
+        val end = start + opEq.length
+        end <= content.length && new String(content, start, opEq.length) == opEq &&
+        (end == content.length || !isOperatorPart(content(end)))
+      }
     }
 
     val addSymbol: (JavaSet[Name], Symbol) => Unit = { (names: JavaSet[Name], symbol: Symbol) =>
