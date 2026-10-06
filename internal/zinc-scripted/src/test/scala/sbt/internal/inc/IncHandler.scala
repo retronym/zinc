@@ -382,6 +382,12 @@ case class ProjectStructure(
   // val earlyCachedStore = AnalysisStore.cached(fileStore)
   // val profiler = new ZincInvalidationProfiler
 
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options"))
+      .toArray
+      .flatMap(_.trim.split(" +"))
+      .filter(_.nonEmpty)
+
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
   val (incOptions, scalacOptions) =
@@ -788,7 +794,7 @@ case class ProjectStructure(
       if exportPipelining then Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions = javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       compileOrder,
