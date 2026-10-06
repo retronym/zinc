@@ -1,0 +1,9 @@
+# deprecated-name-removed on scala2-sbt-bridge, which does not yet include parameter
+# annotations in the API. general/bridge-2.13.y checks that 2.13.y really is
+# scala2-sbt-bridge.
+
+> p/compile
+
+# Without @deprecatedName, the named argument old in B no longer resolves
+$ copy-file changes/A.scala p/A.scala
+-> p/compile
