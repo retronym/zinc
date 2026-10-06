@@ -127,10 +127,10 @@ object ClassToAPI {
   def toDefinitions0(c: Class[?], cmap: ClassMap): Seq[api.ClassLikeDef] = {
     import api.DefinitionType.{ ClassDef, Module, Trait }
     val enclPkg = packageName(c)
-    val mods = modifiers(c.getModifiers)
+    val children = childrenOfSealedClass(c)
+    val mods = modifiers(c.getModifiers, isSealed = !c.isEnum && children.nonEmpty)
     val acc = access(c.getModifiers, enclPkg)
     val annots = annotations(c.getAnnotations)
-    val children = childrenOfSealedClass(c)
     val topLevel = c.getEnclosingClass == null
     val name = classCanonicalName(c)
     val tpe = if (Modifier.isInterface(c.getModifiers)) Trait else ClassDef
@@ -511,9 +511,10 @@ object ClassToAPI {
       case c: Constructor[?] => c.getName
     }
 
-  def modifiers(i: Int): api.Modifiers = {
+  def modifiers(i: Int): api.Modifiers = modifiers(i, isSealed = false)
+  def modifiers(i: Int, isSealed: Boolean): api.Modifiers = {
     import Modifier.{ isAbstract, isFinal }
-    new api.Modifiers(isAbstract(i), false, isFinal(i), false, false, false, false, false)
+    new api.Modifiers(isAbstract(i), false, isFinal(i), isSealed, false, false, false, false)
   }
   def access(i: Int, pkg: Option[String]): api.Access = {
     import Modifier.{ isPublic, isPrivate, isProtected }
@@ -536,12 +537,26 @@ object ClassToAPI {
    * We need this logic to trigger recompilation due to changes to pattern exhaustivity checking results.
    */
   private def childrenOfSealedClass(c: Class[?]): Seq[api.Type] =
-    if (!c.isEnum) emptyTypeArray.toIndexedSeq
-    else {
+    if (c.isEnum) {
       // Calling getCanonicalName() on classes from enum constants yields same string as enumClazz.getCanonicalName
       // Moreover old behaviour create new instance of enum - what may fail (e.g. in static block )
       Seq(reference(c))
+    } else permittedSubclasses(c).map(reference)
+
+  /** The `permits` of a sealed class or interface (JDK 17+), looked up reflectively. */
+  private def permittedSubclasses(c: Class[?]): Seq[Class[?]] =
+    getPermittedSubclasses match {
+      case Some(m) =>
+        m.invoke(c) match {
+          case cs: Array[Class[?]] => cs.toIndexedSeq.sortBy(_.getName)
+          case _                   => Nil
+        }
+      case None => Nil
     }
+
+  private lazy val getPermittedSubclasses: Option[java.lang.reflect.Method] =
+    try Some(classOf[Class[?]].getMethod("getPermittedSubclasses"))
+    catch { case _: NoSuchMethodException => None }
 
   // full information not available from reflection
   def javaAnnotation(s: String): api.AnnotationArgument =
