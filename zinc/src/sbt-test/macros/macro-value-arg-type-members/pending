@@ -1,0 +1,5 @@
+> app/run x
+
+# The macro reads the members of the type of its value argument
+$ copy-file app/changes/A.scala app/A.scala
+> app/run x,y
