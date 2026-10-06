@@ -210,17 +210,21 @@ class ExtractUsedNamesSpecification
   }
 
   // test for https://github.com/gkossakowski/sbt/issues/4
-  // TODO: we should fix it by having special treatment of `selectDynamic` and `applyDynamic` calls
-  it should "extract names from method calls on Dynamic" in pendingUntilFixed {
+  it should "extract names from method calls on Dynamic" in {
     val srcA = """|import scala.language.dynamics
                   |class A extends Dynamic {
                   | def selectDynamic(name: String): Int = name.length
+                  | def applyDynamic(name: String)(i: Int): Int = i
+                  | def updateDynamic(name: String)(i: Int): Unit = ()
                   |}""".stripMargin
-    val srcB = "class B { def foo(a: A): Int = a.bla }"
+    val srcB = """|class B {
+                  |  def foo(a: A): Int = a.bla
+                  |  def bar(a: A): Int = a.blu(1)
+                  |  def baz(a: A): Unit = a.blo = 1
+                  |}""".stripMargin
     val usedNames = extractUsedNamesFromSrc(srcA, srcB)
-    val expectedNames = standardNames ++ Set("B", "A", "a", "Int", "selectDynamic", "bla")
-    assert(usedNames === expectedNames)
-    ()
+    assert(Set("selectDynamic", "bla", "applyDynamic", "blu", "updateDynamic", "blo", "blo_=")
+      .subsetOf(usedNames("B")))
   }
 
   it should "extract op= from an assignment operator typed as a reassignment" in {
