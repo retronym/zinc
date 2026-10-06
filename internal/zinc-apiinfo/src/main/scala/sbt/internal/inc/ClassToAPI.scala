@@ -367,7 +367,7 @@ object ClassToAPI:
     )
 
   def methodToDef(enclPkg: Option[String])(m: Method): api.Def =
-    defLike(
+    defLikeWithNames(
       m.getName,
       m.getModifiers,
       m.getDeclaredAnnotations,
@@ -377,14 +377,15 @@ object ClassToAPI:
       Option(returnType(m)),
       exceptionTypes(m),
       m.isVarArgs,
-      enclPkg
+      enclPkg,
+      parameterNames(m)
     )
 
   /** Use the unique constructor format defined in [[xsbt.ClassName.constructorName]]. */
   private def uniqueConstructorName(constructor: Constructor[?]): String =
     s"${name(constructor).replace('.', ';')};init;"
   def constructorToDef(enclPkg: Option[String])(c: Constructor[?]): api.Def =
-    defLike(
+    defLikeWithNames(
       uniqueConstructorName(c),
       c.getModifiers,
       c.getDeclaredAnnotations,
@@ -394,7 +395,8 @@ object ClassToAPI:
       None,
       exceptionTypes(c),
       c.isVarArgs,
-      enclPkg
+      enclPkg,
+      parameterNames(c)
     )
 
   def defLike[T <: GenericDeclaration](
@@ -409,10 +411,49 @@ object ClassToAPI:
       varArgs: Boolean,
       enclPkg: Option[String]
   ): api.Def =
+    defLikeWithNames(
+      name,
+      mods,
+      annots,
+      tps,
+      paramAnnots,
+      paramTypes,
+      retType,
+      exceptions,
+      varArgs,
+      enclPkg,
+      Nil
+    )
+
+  /**
+   * The parameter names that `javac -parameters` stores in the class file, or empty. Scala callers
+   * can pass named arguments to Java methods, and scalac can only do so for a Java class it reads
+   * from a class file when these names are present.
+   */
+  def parameterNames(e: Executable): Seq[String] =
+    val ps = e.getParameters
+    if ps.nonEmpty && ps.forall(_.isNamePresent) then ps.toIndexedSeq.map(_.getName) else Nil
+
+  private def defLikeWithNames[T <: GenericDeclaration](
+      name: String,
+      mods: Int,
+      annots: Array[Annotation],
+      tps: Array[TypeVariable[T]],
+      paramAnnots: Array[Array[Annotation]],
+      paramTypes: Array[Type],
+      retType: Option[Type],
+      exceptions: Array[Type],
+      varArgs: Boolean,
+      enclPkg: Option[String],
+      paramNames: Seq[String]
+  ): api.Def =
     val varArgPosition = if varArgs then paramTypes.length - 1 else -1
     val isVarArg = List.tabulate(paramTypes.length)(_ == varArgPosition)
-    val pa = paramAnnots.lazyZip(paramTypes).lazyZip(isVarArg).map {
-      case (a, p, v) => parameter(a, p, v)
+    val names =
+      if paramNames.length == paramTypes.length then paramNames
+      else Seq.fill(paramTypes.length)("")
+    val pa = paramAnnots.lazyZip(paramTypes).lazyZip(isVarArg).lazyZip(names).map {
+      case (a, p, v, n) => parameter(n, a, p, v)
     }
     val params = api.ParameterList.of(pa, false)
     val ret = retType match
@@ -427,7 +468,7 @@ object ClassToAPI:
       Array(params),
       ret
     )
-  end defLike
+  end defLikeWithNames
 
   def exceptionAnnotations(exceptions: Array[Type]): Array[api.Annotation] =
     if exceptions.length == 0 then emptyAnnotationArray
@@ -437,8 +478,16 @@ object ClassToAPI:
       )
 
   def parameter(annots: Array[Annotation], parameter: Type, varArgs: Boolean): api.MethodParameter =
+    this.parameter("", annots, parameter, varArgs)
+
+  def parameter(
+      name: String,
+      annots: Array[Annotation],
+      parameter: Type,
+      varArgs: Boolean
+  ): api.MethodParameter =
     api.MethodParameter.of(
-      "",
+      name,
       annotated(reference(parameter), annots),
       false,
       if varArgs then api.ParameterModifier.Repeated else api.ParameterModifier.Plain

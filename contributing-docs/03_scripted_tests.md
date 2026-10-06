@@ -113,6 +113,7 @@ noted.
 | `storeApis` | boolean: persist extracted APIs in the analysis | true |
 | `pipelining` | boolean: pipelined compilation | **true** (`IncOptions` uses false) |
 | `scalac.options` | **space-separated** options passed to the compiler; `[basedir]` expands to the project's absolute base directory. Handled by `IncHandler`, not `IncOptionsUtil` | none |
+| `javac.options` | **space-separated** options passed to javac. Handled by `IncHandler`, not `IncOptionsUtil` | none |
 | `incOptions.storeApis` | boolean; same as `storeApis`, applied after parsing. Handled by `IncHandler` | true |
 
 Two wrinkles in this table:
