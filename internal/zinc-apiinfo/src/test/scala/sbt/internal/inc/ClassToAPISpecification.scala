@@ -45,6 +45,22 @@ class ClassToAPISpecification extends UnitSpec:
     assert(companionsB.classApi.structure.declared.isEmpty === false)
   }
 
+  it should "extract the permitted subclasses of a sealed interface" in {
+    val shape = "public sealed interface Shape permits Circle, Square {}"
+    val circle = "public final class Circle implements Shape {}"
+    val square = "public final class Square implements Shape {}"
+    val apis =
+      extractApisFromSrcs("Shape.java" -> shape, "Circle.java" -> circle, "Square.java" -> square)
+        .map(c => c.name -> c)
+        .toMap
+    val shapeApi = apis("Shape").classApi
+    assert(shapeApi.modifiers.isSealed)
+    val children = shapeApi.childrenOfSealedClass.toList.map(_.toString)
+    assert(children.length === 2)
+    assert(children.exists(_.contains("Circle")) && children.exists(_.contains("Square")))
+    assert(!apis("Circle").classApi.modifiers.isSealed)
+  }
+
   it should "extract a private inner class" in {
     val src =
       """|class A {
@@ -208,6 +224,12 @@ class ClassToAPISpecification extends UnitSpec:
     val (Seq(tempSrcFile), analysisCallback) =
       JavaCompilerForUnitTesting.compileJavaSrcs(src)(readAPI)
     val apis = analysisCallback.apis(tempSrcFile)
+    apis.groupBy(_.name).map(companions.tupled).toSet
+
+  private def extractApisFromSrcs(srcs: (String, String)*): Set[Companions] =
+    val (tempSrcFiles, analysisCallback) =
+      JavaCompilerForUnitTesting.compileJavaSrcs(srcs*)(readAPI)
+    val apis = tempSrcFiles.flatMap(analysisCallback.apis(_)).toSet
     apis.groupBy(_.name).map(companions.tupled).toSet
 
   private def companions(className: String, classes: Set[ClassLike]): Companions =
