@@ -1,0 +1,5 @@
+> p/run fallback
+
+# The implicit scope of pkg.Foo includes the package object pkg, which Main never names
+$ copy-file changes/package.scala p/package.scala
+> p/run pkg
