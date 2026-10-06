@@ -1,0 +1,9 @@
+# assign-op-member-added on scala2-sbt-bridge, which does not yet register names that the
+# typer looked up or the pattern matcher selects without leaving them in the tree.
+# general/bridge-2.13.y checks that 2.13.y really is scala2-sbt-bridge.
+
+> p/run x
+
+# c += "x" was desugared to c = c + "x", so Main may not record the name +=
+$ copy-file changes/C.scala p/C.scala
+> p/run mutated

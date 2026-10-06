@@ -223,6 +223,40 @@ class ExtractUsedNamesSpecification
     ()
   }
 
+  it should "extract op= from an assignment operator typed as a reassignment" in {
+    val srcA =
+      "class A { def +(i: Int): A = this; def apply(i: Int): A = this; def update(i: Int, a: A): Unit = () }"
+    val srcB = """|class B {
+                  |  var a: A = new A
+                  |  def opAssign(): Unit = a += 1
+                  |  def update(): Unit = a(0) += 1
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  var a: A = new A
+                  |  def reassign(): Unit = a = a + 1
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    assert(usedNames("B").contains("+="))
+    assert(!usedNames("C").contains("+="))
+  }
+
+  it should "extract the names that extractor patterns may select" in {
+    val srcA =
+      """|class R(v: Int) { def isEmpty: Boolean = false; def get: (Int, Int) = (v, v) }
+                  |object Ex { def unapply(i: Int): R = new R(i) }
+                  |object ExSeq { def unapplySeq(i: Int): Option[Seq[Int]] = Some(Seq(i)) }""".stripMargin
+    val srcB = """|class B {
+                  |  def a(i: Int) = i match { case Ex(x, y) => x + y }
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  def a(i: Int) = i match { case ExSeq(x) => x }
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    assert(Set("unapply", "unapplySeq", "isEmpty", "get", "_1", "_2").subsetOf(usedNames("B")))
+    assert(!usedNames("B").contains("lengthCompare"))
+    assert(Set("unapply", "unapplySeq", "lengthCompare", "apply").subsetOf(usedNames("C")))
+  }
+
   // This doesn't work in 2.13.0-RC1
   it should "extract sealed classes scope" in {
     val sealedClassName = "Sealed"
