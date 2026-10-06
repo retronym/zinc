@@ -24,7 +24,7 @@ a failure is tolerated, and *passing* is what fails the build (a reminder to ren
 Groups: `source-dependencies`, `apiinfo`, `macros`, `pipelining`, `profiler`, `reporter`, `general`.
 
 Without a `build.json` the test is a single project named `root` rooted at the test directory. With
-one, each entry declares a `name` and optional `dependsOn`, `in`, and `scalaVersion`. A project's
+one, each entry declares a `name` and optional `dependsOn`, `in`, `scalaVersion`, `compileOrder`, and `compileToJar` (compile straight to `target/classes/output.jar`, overriding the global `scriptedCompileToJar`). A project's
 base directory is `in` when given, otherwise the subdirectory named after the project
 ([IncHandler.scala:124](../internal/zinc-scripted/src/test/scala/sbt/internal/inc/IncHandler.scala#L124)).
 

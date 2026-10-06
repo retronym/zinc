@@ -67,7 +67,8 @@ final case class Project(
     dependsOn: Option[Vector[String]] = None,
     in: Option[Path] = None,
     scalaVersion: Option[String] = None,
-    compileOrder: Option[String] = None
+    compileOrder: Option[String] = None,
+    compileToJar: Option[Boolean] = None
 )
 
 final case class Build(projects: Seq[Project])
@@ -137,7 +138,7 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
         lookupProject,
         bridgesByLabel(label).version,
         label,
-        compileToJar,
+        p.compileToJar.getOrElse(compileToJar),
         incrementalCompiler,
         order
       )
@@ -154,15 +155,16 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
       given pathISOString: IsoString[Path] = IsoString.iso[Path](_.toString, Paths.get(_))
       given pathFormat: JsonFormat[Path] = isoStringFormat[Path](using pathISOString)
       given projectFormat: JsonFormat[Project] =
-        caseClass5(
+        caseClass6(
           Project.apply,
-          p => Some(p.name, p.dependsOn, p.in, p.scalaVersion, p.compileOrder)
+          p => Some(p.name, p.dependsOn, p.in, p.scalaVersion, p.compileOrder, p.compileToJar)
         )(
           "name",
           "dependsOn",
           "in",
           "scalaVersion",
           "compileOrder",
+          "compileToJar",
         )
       given buildFormat: JsonFormat[Build] =
         caseClass1(Build.apply, b => Some(b.projects))("projects")
