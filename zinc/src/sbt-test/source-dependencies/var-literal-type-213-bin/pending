@@ -1,0 +1,8 @@
+# var-literal-type on scala2-sbt-bridge, which still widens the literal result types of
+# defs and vars in the API. general/bridge-2.13.y checks that 2.13.y really is
+# scala2-sbt-bridge.
+
+> p/compile
+
+$ copy-file changes/A.scala p/A.scala
+-> p/compile
