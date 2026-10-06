@@ -1,0 +1,5 @@
+> p/run 6
+
+# The pattern binds x through R.get, which the pattern matcher calls after typer
+$ copy-file changes/R.scala p/R.scala
+> p/run s51
