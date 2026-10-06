@@ -160,6 +160,9 @@ final class AnalyzingJavaCompiler private[sbt] (
       // sbt/zinc#145: dependencies on inlined `static final` constants, keyed
       // `usingClassBinaryName -> ownerBinaryNames`, populated by the Java compilation below.
       var constantDeps: Map[String, Set[String]] = Map.empty
+      // Source names of method and constructor parameters, which Scala callers may use as named
+      // arguments but which class files only carry under `javac -parameters`.
+      var parameterNames: Map[String, Map[String, Seq[String]]] = Map.empty
 
       timed(javaCompilationPhase, log) {
         val args = sbt.internal.inc.javac.JavaCompiler.commandArguments(
@@ -180,10 +183,11 @@ final class AnalyzingJavaCompiler private[sbt] (
         // from a separately-compiled class) are not tracked under forked javac.
         val success = javac match
           case ljc: LocalJavaCompiler =>
-            val (ok, deps) =
-              ljc.runWithConstantDeps(javaSources, args, output, incToolOptions, reporter, log)
-            constantDeps = deps
-            ok
+            val facts =
+              ljc.runWithSourceFacts(javaSources, args, output, incToolOptions, reporter, log)
+            constantDeps = facts.constantDeps
+            parameterNames = facts.parameterNames
+            facts.success
           case _ =>
             javac.run(javaSources, args, output, incToolOptions, reporter, log)
         if !success then
@@ -197,7 +201,8 @@ final class AnalyzingJavaCompiler private[sbt] (
 
       // Read the API information from [[Class]] to analyze dependencies.
       def readAPI(source: VirtualFileRef, classes: Seq[Class[?]]): Set[(String, String)] =
-        val (apis, mainClasses, inherits) = ClassToAPI.process(classes, log)
+        val (apis, mainClasses, inherits) =
+          ClassToAPI.process(classes, log, ClassToAPI.parameterNamesFrom(parameterNames))
         apis.foreach(callback.api(source, _))
         mainClasses.foreach(callback.mainClass(source, _))
         inherits.map {

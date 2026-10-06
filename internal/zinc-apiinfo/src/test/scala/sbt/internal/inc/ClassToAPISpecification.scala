@@ -45,6 +45,22 @@ class ClassToAPISpecification extends UnitSpec:
     assert(companionsB.classApi.structure.declared.isEmpty === false)
   }
 
+  it should "key parameter names by name and canonical erased parameter types" in {
+    val m = classOf[java.util.Map[?, ?]].getMethod("put", classOf[Object], classOf[Object])
+    assert(ClassToAPI.parameterSignature(m) === Some("put(java.lang.Object,java.lang.Object)"))
+    val e = classOf[java.util.AbstractMap.SimpleEntry[?, ?]]
+      .getConstructor(classOf[java.util.Map.Entry[?, ?]])
+    assert(ClassToAPI.parameterSignature(e) === Some("<init>(java.util.Map.Entry)"))
+    val a = classOf[String].getMethod("format", classOf[String], classOf[Array[Object]])
+    assert(ClassToAPI.parameterSignature(a) === Some("format(java.lang.String,java.lang.Object[])"))
+
+    val names = ClassToAPI.parameterNamesFrom(
+      Map("java.util.Map" -> Map("put(java.lang.Object,java.lang.Object)" -> Seq("k", "v")))
+    )
+    assert(names(m) === Seq("k", "v"))
+    assert(names(a) === ClassToAPI.reflectedParameterNames(a))
+  }
+
   it should "extract the permitted subclasses of a sealed interface" in {
     val shape = "public sealed interface Shape permits Circle, Square {}"
     val circle = "public final class Circle implements Shape {}"

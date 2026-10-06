@@ -21,7 +21,14 @@ import java.util.Locale
 import java.nio.{ ByteBuffer, CharBuffer }
 import java.nio.charset.{ Charset, CodingErrorAction }
 import java.nio.file.{ Files, FileSystems, Path, Paths }
-import javax.lang.model.element.{ Modifier, NestingKind, TypeElement, VariableElement }
+import javax.lang.model.element.{
+  ElementKind,
+  ExecutableElement,
+  Modifier,
+  NestingKind,
+  TypeElement,
+  VariableElement
+}
 import javax.lang.model.util.Elements
 import com.sun.source.tree.{
   ClassTree,
@@ -295,6 +302,22 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       reporter: Reporter,
       log0: XLogger
   ): (Boolean, Map[String, Set[String]]) =
+    val facts = runWithSourceFacts(sources, options, output, incToolOptions, reporter, log0)
+    (facts.success, facts.constantDeps)
+
+  /**
+   * Like [[runWithConstantDeps]], but also returns the source names of method and constructor
+   * parameters, which class files only carry under `javac -parameters` and which Scala callers can
+   * use as named arguments.
+   */
+  private[sbt] def runWithSourceFacts(
+      sources: Array[VirtualFile],
+      options: Array[String],
+      output: Output,
+      incToolOptions: IncToolOptions,
+      reporter: Reporter,
+      log0: XLogger
+  ): JavacSourceFacts =
     val log: Logger = log0
     val logger = new LoggerWriter(log)
     val logWriter = new PrintWriter(logger)
@@ -334,10 +357,12 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
 
     var compileSuccess = false
     var constantDeps: Map[String, Set[String]] = Map.empty
+    var parameterNames: Map[String, Map[String, Seq[String]]] = Map.empty
     try
       // sbt/zinc#145: collect Java->Java dependencies on inlined `static final` constants from
       // javac's attributed AST, which retains the reference that the emitted bytecode erases.
       val deps = new JavaConstantDeps
+      val names = new JavaParameterNames
       val task = compiler.getTask(
         logWriter,
         customizedFileManager,
@@ -348,12 +373,15 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       )
       try
         task match
-          case jt: JavacTask => jt.addTaskListener(new ConstantDepListener(jt, deps))
-          case _             => () // not the system javac; constant deps are simply not tracked
+          case jt: JavacTask =>
+            jt.addTaskListener(new ConstantDepListener(jt, deps))
+            jt.addTaskListener(new ParameterNameListener(jt, names))
+          case _ => () // not the system javac; constant deps and parameter names are not tracked
       catch
         case NonFatal(e) => log.debug("Could not install constant-dependency listener: " + e)
       val success = task.call()
       constantDeps = deps.result
+      parameterNames = names.result
 
       /* Double check success variables for the Java compiler.
        * The local compiler may report successful compilations even though
@@ -364,8 +392,8 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       customizedFileManager.close()
       logger.flushLines(if compileSuccess then Level.Warn else Level.Error)
     end try
-    (compileSuccess, constantDeps)
-  end runWithConstantDeps
+    JavacSourceFacts(compileSuccess, constantDeps, parameterNames)
+  end runWithSourceFacts
 
   /**
    * Rewrite of [[javax.tools.JavaCompiler.getStandardFileManager]] method that also sets
@@ -403,6 +431,69 @@ end LocalJavaCompiler
 final class SameFileFixFileManager(underlying: JavaFileManager)
     extends ForwardingJavaFileManager[JavaFileManager](underlying):
   override def isSameFile(a: FileObject, b: FileObject): Boolean = LocalJava.isSameFile(a, b)
+
+/**
+ * What [[LocalJavaCompiler.runWithSourceFacts]] learns from javac besides the class files.
+ *
+ * @param parameterNames source parameter names, keyed by the binary name of the declaring class and
+ *   then by [[JavaParameterNames.signature]]
+ */
+private[sbt] final case class JavacSourceFacts(
+    success: Boolean,
+    constantDeps: Map[String, Set[String]],
+    parameterNames: Map[String, Map[String, Seq[String]]]
+)
+
+/** Mutable accumulator for the source names of method and constructor parameters. */
+private[sbt] final class JavaParameterNames:
+  private val names =
+    scala.collection.mutable.Map.empty[String, scala.collection.mutable.Map[String, Seq[String]]]
+  def add(binaryClassName: String, signature: String, paramNames: Seq[String]): Unit =
+    names.getOrElseUpdate(binaryClassName, scala.collection.mutable.Map.empty)(signature) =
+      paramNames
+  def result: Map[String, Map[String, Seq[String]]] =
+    names.iterator.map { case (k, v) => k -> v.toMap }.toMap
+
+private[sbt] object JavaParameterNames:
+  /**
+   * `name(T1,T2)` where `Ti` are the canonical names of the erased parameter types, e.g.
+   * `f(int,java.lang.String[],p.Outer.Inner)`; constructors are named `<init>`.
+   * `ClassToAPI.parameterSignature` computes the same key from reflection.
+   */
+  def signature(name: String, erasedParamTypes: Seq[String]): String =
+    erasedParamTypes.mkString(name + "(", ",", ")")
+
+/**
+ * Records the parameter names of the methods and constructors of each class once it has been
+ * attributed. Failures are swallowed so that analysis never fails the compile.
+ */
+private[sbt] final class ParameterNameListener(task: JavacTask, sink: JavaParameterNames)
+    extends TaskListener:
+  private val elements = task.getElements
+  private val types = task.getTypes
+
+  override def started(e: TaskEvent): Unit = ()
+
+  override def finished(e: TaskEvent): Unit =
+    if e.getKind == TaskEvent.Kind.ANALYZE then
+      val te = e.getTypeElement
+      if te != null then
+        try record(te)
+        catch case NonFatal(_) => ()
+
+  private def record(te: TypeElement): Unit =
+    val binaryName = elements.getBinaryName(te).toString
+    te.getEnclosedElements.asScala.foreach {
+      case ee: ExecutableElement
+          if ee.getKind == ElementKind.METHOD || ee.getKind == ElementKind.CONSTRUCTOR =>
+        val params = ee.getParameters.asScala.toList
+        val erased = params.map(p => types.erasure(p.asType).toString.replace("...", "[]"))
+        val signature = JavaParameterNames.signature(ee.getSimpleName.toString, erased)
+        sink.add(binaryName, signature, params.map(_.getSimpleName.toString))
+      case nested: TypeElement => record(nested)
+      case _                   => ()
+    }
+end ParameterNameListener
 
 /**
  * Mutable accumulator for Java->Java dependencies on inlined `static final` constants (sbt/zinc#145).

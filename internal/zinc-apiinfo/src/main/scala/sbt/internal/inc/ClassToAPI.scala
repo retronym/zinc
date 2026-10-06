@@ -31,7 +31,20 @@ object ClassToAPI:
       classes: Seq[Class[?]],
       log: Logger = Logger.Null
   ): (Seq[api.ClassLike], Seq[String], Set[(Class[?], Class[?])]) =
+    process(classes, log, reflectedParameterNames)
+
+  /**
+   * Like [[process]], with `parameterNames` giving the source names of the parameters of a method
+   * or constructor (empty when unknown). Scala callers can pass named arguments to Java methods,
+   * so a renamed parameter is an API change.
+   */
+  def process(
+      classes: Seq[Class[?]],
+      log: Logger,
+      parameterNames: Executable => Seq[String]
+  ): (Seq[api.ClassLike], Seq[String], Set[(Class[?], Class[?])]) =
     val cmap = emptyClassMap(log)
+    cmap.parameterNames = parameterNames
     classes.foreach(toDefinitions(cmap)) // force recording of class definitions
     cmap.lz.toList
       .foreach(_.get()) // force thunks to ensure all inherited dependencies are recorded
@@ -67,6 +80,7 @@ object ClassToAPI:
       private[sbt] val mainClasses: mutable.Set[String],
       private[sbt] val log: Logger
   ):
+    private[sbt] var parameterNames: Executable => Seq[String] = reflectedParameterNames
     def clear(): Unit =
       memo.clear()
       inherited.clear()
@@ -188,7 +202,7 @@ object ClassToAPI:
       c,
       c.getDeclaredMethods.toIndexedSeq,
       c.getMethods.toIndexedSeq,
-      methodToDef(enclPkg)
+      methodToDef(enclPkg, cmap.parameterNames)
     )
     val fields = mergeMap(
       c,
@@ -201,7 +215,7 @@ object ClassToAPI:
         c,
         c.getDeclaredConstructors.toIndexedSeq,
         c.getConstructors.toIndexedSeq,
-        constructorToDef(enclPkg)
+        constructorToDef(enclPkg, cmap.parameterNames)
       )
     val classes = innerClassesFromClassfile(c, cf, cmap)
     val all = methods ++ fields ++ constructors ++ classes
@@ -367,7 +381,12 @@ object ClassToAPI:
     )
 
   def methodToDef(enclPkg: Option[String])(m: Method): api.Def =
-    defLike(
+    methodToDef(enclPkg, reflectedParameterNames)(m)
+
+  def methodToDef(enclPkg: Option[String], parameterNames: Executable => Seq[String])(
+      m: Method
+  ): api.Def =
+    defLike0(
       m.getName,
       m.getModifiers,
       m.getDeclaredAnnotations,
@@ -377,14 +396,20 @@ object ClassToAPI:
       Option(returnType(m)),
       exceptionTypes(m),
       m.isVarArgs,
-      enclPkg
+      enclPkg,
+      parameterNames(m)
     )
 
   /** Use the unique constructor format defined in [[xsbt.ClassName.constructorName]]. */
   private def uniqueConstructorName(constructor: Constructor[?]): String =
     s"${name(constructor).replace('.', ';')};init;"
   def constructorToDef(enclPkg: Option[String])(c: Constructor[?]): api.Def =
-    defLike(
+    constructorToDef(enclPkg, reflectedParameterNames)(c)
+
+  def constructorToDef(enclPkg: Option[String], parameterNames: Executable => Seq[String])(
+      c: Constructor[?]
+  ): api.Def =
+    defLike0(
       uniqueConstructorName(c),
       c.getModifiers,
       c.getDeclaredAnnotations,
@@ -394,7 +419,8 @@ object ClassToAPI:
       None,
       exceptionTypes(c),
       c.isVarArgs,
-      enclPkg
+      enclPkg,
+      parameterNames(c)
     )
 
   def defLike[T <: GenericDeclaration](
@@ -409,10 +435,39 @@ object ClassToAPI:
       varArgs: Boolean,
       enclPkg: Option[String]
   ): api.Def =
+    defLike0(
+      name,
+      mods,
+      annots,
+      tps,
+      paramAnnots,
+      paramTypes,
+      retType,
+      exceptions,
+      varArgs,
+      enclPkg,
+      Nil
+    )
+
+  private def defLike0[T <: GenericDeclaration](
+      name: String,
+      mods: Int,
+      annots: Array[Annotation],
+      tps: Array[TypeVariable[T]],
+      paramAnnots: Array[Array[Annotation]],
+      paramTypes: Array[Type],
+      retType: Option[Type],
+      exceptions: Array[Type],
+      varArgs: Boolean,
+      enclPkg: Option[String],
+      paramNames: Seq[String]
+  ): api.Def =
     val varArgPosition = if varArgs then paramTypes.length - 1 else -1
     val isVarArg = List.tabulate(paramTypes.length)(_ == varArgPosition)
-    val pa = paramAnnots.lazyZip(paramTypes).lazyZip(isVarArg).map {
-      case (a, p, v) => parameter(a, p, v)
+    val names =
+      if paramNames.length == paramTypes.length then paramNames else Seq.fill(paramTypes.length)("")
+    val pa = paramAnnots.lazyZip(paramTypes).lazyZip(isVarArg).lazyZip(names).map {
+      case (a, p, v, n) => parameter(n, a, p, v)
     }
     val params = api.ParameterList.of(pa, false)
     val ret = retType match
@@ -427,7 +482,7 @@ object ClassToAPI:
       Array(params),
       ret
     )
-  end defLike
+  end defLike0
 
   def exceptionAnnotations(exceptions: Array[Type]): Array[api.Annotation] =
     if exceptions.length == 0 then emptyAnnotationArray
@@ -437,8 +492,16 @@ object ClassToAPI:
       )
 
   def parameter(annots: Array[Annotation], parameter: Type, varArgs: Boolean): api.MethodParameter =
+    this.parameter("", annots, parameter, varArgs)
+
+  def parameter(
+      name: String,
+      annots: Array[Annotation],
+      parameter: Type,
+      varArgs: Boolean
+  ): api.MethodParameter =
     api.MethodParameter.of(
-      "",
+      name,
       annotated(reference(parameter), annots),
       false,
       if varArgs then api.ParameterModifier.Repeated else api.ParameterModifier.Plain
@@ -546,6 +609,40 @@ object ClassToAPI:
    *
    * We need this logic to trigger recompilation due to changes to pattern exhaustivity checking results.
    */
+  /** The parameter names stored in the class file (`javac -parameters`), or empty. */
+  def reflectedParameterNames(e: Executable): Seq[String] =
+    val ps = e.getParameters
+    if ps.nonEmpty && ps.forall(_.isNamePresent) then ps.toIndexedSeq.map(_.getName) else Nil
+
+  /**
+   * `name(T1,T2)` where `Ti` are the canonical names of the erased parameter types, the key under
+   * which `LocalJavaCompiler.runWithSourceFacts` reports source parameter names. None for
+   * parameter types that have no canonical name.
+   */
+  def parameterSignature(e: Executable): Option[String] =
+    val name = e match
+      case _: Constructor[?] => "<init>"
+      case m                 => m.getName
+    val types = e.getParameterTypes.toIndexedSeq.map(_.getCanonicalName)
+    if types.contains(null) then None else Some(types.mkString(name + "(", ",", ")"))
+
+  /**
+   * Parameter names from `sourceNames` (keyed by binary class name, then by
+   * [[parameterSignature]]), falling back to [[reflectedParameterNames]].
+   */
+  def parameterNamesFrom(
+      sourceNames: Map[String, Map[String, Seq[String]]]
+  ): Executable => Seq[String] =
+    e =>
+      val fromSource =
+        for
+          byClass <- sourceNames.get(e.getDeclaringClass.getName)
+          signature <- parameterSignature(e)
+          names <- byClass.get(signature)
+          if names.length == e.getParameterCount
+        yield names
+      fromSource.getOrElse(reflectedParameterNames(e))
+
   private def childrenOfSealedClass(c: Class[?]): Seq[api.Type] =
     if c.isEnum then
       // Calling getCanonicalName() on classes from enum constants yields same string as enumClazz.getCanonicalName

@@ -1,0 +1,6 @@
+> p/run 1x2
+
+# Only S changes, so scalac recompiles it without J.java and sees J.f's parameters
+# through the class file, which has no names without javac -parameters
+$ copy-file changes/S.scala p/S.scala
+> p/run 1x2
