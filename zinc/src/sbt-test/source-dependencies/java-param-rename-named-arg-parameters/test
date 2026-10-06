@@ -1,0 +1,7 @@
+# With javac -parameters, the class files carry the parameter names that scalac needs for
+# named arguments and that ClassToAPI records in the API.
+> p/run 1x2
+
+# Swapping the parameter names of J.f flips the meaning of the named arguments in S
+$ copy-file changes/J.java p/J.java
+> p/run 2x1
