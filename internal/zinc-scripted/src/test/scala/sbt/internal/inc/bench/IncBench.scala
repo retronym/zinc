@@ -52,6 +52,8 @@ object IncBench:
       incOptions: Map[String, String] = Map.empty,
       out: Option[Path] = None,
       label: String = "",
+      build: Option[Path] = None,
+      edits: Option[Path] = None,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
@@ -64,6 +66,8 @@ object IncBench:
     case "--trait" :: rest            => parse(rest, o.copy(rootIsTrait = true))
     case "--scala" :: v :: rest       => parse(rest, o.copy(scalaVersion = v))
     case "--reps" :: v :: rest        => parse(rest, o.copy(reps = v.toInt))
+    case "--build" :: v :: rest       => parse(rest, o.copy(build = Some(Paths.get(v))))
+    case "--edits" :: v :: rest       => parse(rest, o.copy(edits = Some(Paths.get(v))))
     case "--out" :: v :: rest         => parse(rest, o.copy(out = Some(Paths.get(v))))
     case "--label" :: v :: rest       => parse(rest, o.copy(label = v))
     case "--inc-option" :: kv :: rest =>
@@ -73,6 +77,44 @@ object IncBench:
 
   def main(args: Array[String]): Unit =
     val o = parse(args.toList)
+    o.build match
+      case Some(build) => existing(o, build.toAbsolutePath, o.edits.get.toAbsolutePath)
+      case None        => synthetic(o)
+
+  /**
+   * Runs the edits on an existing build: a `build.json` as scripted reads it, whose projects
+   * point (`in`) at real source trees with their dependency jars in `lib/`. Edits come from a
+   * tab-separated file of name, file (relative to the build), text to find and its replacement,
+   * with `\\n` for a newline. Each project's `target` is deleted first, so both checkouts start
+   * from a clean build. There is no extraction pass.
+   */
+  def existing(o: Options, build: Path, editsFile: Path): Unit =
+    val json = Files.readString(build.resolve("build.json"))
+    val projects = "\\{[^{}]*\\}".r.findAllIn(json).toVector.map { obj =>
+      def field(k: String) = s""""$k"\\s*:\\s*"([^"]+)"""".r.findFirstMatchIn(obj).map(_.group(1))
+      val name = field("name").get
+      name -> field("in").map(Paths.get(_)).getOrElse(build.resolve(name))
+    }
+    val props = (Map("apiDebug" -> "false") ++ o.incOptions)
+      .map((k, v) => s"$k = $v")
+      .mkString("", "\n", "\n")
+    for (_, base) <- projects do
+      IO.delete(base.resolve("target").toFile)
+      Files.writeString(base.resolve("incOptions.properties"), props)
+    def unescape(t: String) = t.replace("\\n", "\n")
+    val edits = Files.readAllLines(editsFile).toArray(Array.empty[String]).toVector
+      .filter(l => l.trim.nonEmpty && !l.startsWith("#"))
+      .map { line =>
+        val Array(name, file, find, replace) = line.split("\t", 4)
+        val original = Files.readString(build.resolve(file))
+        require(original.contains(unescape(find)), s"$name: text not found in $file")
+        Edit(name, file, original.replace(unescape(find), unescape(replace)))
+      }
+    val shape = s""""label":"${o.label}","build":"${build.getFileName}""""
+    run(o, build, projects.map(_._1), edits, shape)
+  end existing
+
+  def synthetic(o: Options): Unit =
     val corpus =
       SyntheticCorpus(o.modules, o.depth, o.fanOut, o.padding, o.rootIsTrait, o.scalaVersion)
     val moduleNames = (0 until o.modules).map(i => s"m$i")
@@ -94,17 +136,28 @@ object IncBench:
       finally runner.finish()
     val dir = o.dir.toAbsolutePath
     setUp(dir, Map("apiDebug" -> "false") ++ o.incOptions)
+    val extract =
+      s"""{$shape,"step":"extract","declared":${extracted.declared},""" +
+        s""""inherited":${extracted.inherited},"nameHashes":${extracted.nameHashes}}"""
+    run(o, dir, moduleNames, corpus.edits, shape, Some(extract))
+  end synthetic
+
+  private def run(
+      o: Options,
+      dir: Path,
+      moduleNames: Seq[String],
+      edits: Seq[Edit],
+      shape: String,
+      extract: Option[String] = None
+  ): Unit =
     val runner = new Runner(dir, moduleNames, o.scalaVersion)
     val lines = Vector.newBuilder[String]
     def emit(line: String): Unit =
       println(line)
       lines += line
-    emit(
-      s"""{$shape,"step":"extract","declared":${extracted.declared},""" +
-        s""""inherited":${extracted.inherited},"nameHashes":${extracted.nameHashes}}"""
-    )
+    extract.foreach(emit)
     emit(s"""{$shape,"step":"clean",${runner.compileAll().json}}""")
-    for edit <- corpus.edits; rep <- 1 to o.reps do
+    for edit <- edits; rep <- 1 to o.reps do
       val file = dir.resolve(edit.file)
       val original = Files.readString(file)
       Files.writeString(file, edit.content)
@@ -116,7 +169,7 @@ object IncBench:
       emit(s"""{$shape,"step":"clean-build","rep":$rep,${runner.compileAll().json}}""")
     o.out.foreach(p => Files.write(p, lines.result().mkString("", "\n", "\n").getBytes("UTF-8")))
     runner.finish()
-  end main
+  end run
 
   /**
    * What a module stores. `declared` and `inherited` count the definitions in the stored APIs,
