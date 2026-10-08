@@ -31,18 +31,21 @@ What implementing it taught us, which changes decisions 1–3:
 
 ## Benchmark (IncBench, synthetic)
 
-`zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and analysis size. A = `1.x` plus the harness commit (worktree `merkle-baseline`), B = this branch. The tree: 4 modules, depth 6, fan-out 2, 127 classes (m0 3, m1 12, m2 48, m3 64), a client of every class and of every leaf; medians of 3.
+`zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and stored size; `bin/incbench-report.py` renders an HTML comparison (published: https://claude.ai/artifact/7i7oZAGogR2efBfJWMH3ko). A = `1.x` plus the harness commits (worktree `merkle-baseline`), B = this branch. Timed with `apiDebug` off; extraction counted in a separate untimed pass. The tree: 4 modules, depth 8, fan-out 2, 511 classes with 30 methods each, a client of every class and of every leaf (1,279 compiled in all); medians of 3.
 
-| edit | A recompiled | B recompiled | rounds A→B |
-|---|---|---|---|
-| root: add member | 127 | 1 | 5→1 |
-| root: add overload of used member | 318 | 192 (just the clients) | 5→5 |
-| mid-level: add member | 15 | 1 | 3→1 |
-| root: body only | 1 | 1 | 1→1 |
+| edit | A recompiled | B recompiled | rounds A→B | wall A→B |
+|---|---|---|---|---|
+| root: add member | 511 | 1 | 5→1 | 22.1 s→0.60 s |
+| root: add overload of used member | 1,278 | 768 (just the clients) | 5→5 | 23.5 s→2.1 s |
+| mid-level: add member | 31 | 1 | 3→1 | 2.2 s→0.47 s |
+| root: body only | 1 | 1 | 1→1 | 0.49 s→0.46 s |
+| warm clean build (reference) | 1,279 | 1,279 | 4→4 | 18.0 s→17.1 s |
 
-Wall times from these first runs are void: scripted's `apiDebug` diffed and logged every changed API, which cost more than the compile and grew with API size (the baseline's 17 s for 127 classes was 0.6 s without it). IncBench now times with `apiDebug` off and counts extraction in a separate untimed pass.
+On `1.x`, adding a member nobody uses to the root takes longer than a clean build. With a trait root, B recompiles 7 classes in 2 rounds (0.80 s), A the same 511 in 5.
 
-With a trait root, adding a member recompiles 3 instead of 127: the root and the two classes that mix it in directly, which hold the forwarders. Analysis size barely moved (246→234 KB) while members inherited from *upstream* modules were still materialised; with that stopped (5622e0248), extracted inherited definitions fall from 19,153 to 6,061 and the minimized analysis from 194 KB to 125 KB.
+Stored after a clean build: inherited definitions extracted 132,901→24,301 (−82%; the rest are `Any`/`AnyRef` members), name hashes 148,233→39,633 (−73%), analysis on disk 1.22 MB→0.73 MB (−40%, including the new decl stubs).
+
+The first runs' wall times (with `apiDebug` on) are void: it diffed and logged every changed API, which cost more than the compile and grew with API size.
 
 Surveys (source-level, approximate, in the scratchpad's survey.py): Pekko's cross-module inheritance is mostly traits (346 cross-module descendant edges vs 83 from classes). Spark has deep class hierarchies (`TreeNode` 261 descendants, `Expression` 257), mostly inside `sql/catalyst`; its cross-module reach is dominated by traits (`Logging`, 694 descendants across 23 modules).
 
