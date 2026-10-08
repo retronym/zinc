@@ -52,6 +52,7 @@ private[inc] object MerkleHashes:
       case p: Parameterized => name(p.baseType)
       case t                => Discovery.simpleName(t)
     val classParents = c.api().classApi().structure.parents
-    val parents = if classParents.nonEmpty then classParents else c.api().objectApi().structure.parents
+    val parents =
+      if classParents.nonEmpty then classParents else c.api().objectApi().structure.parents
     parents.iterator.flatMap(name).distinct.toVector
 end MerkleHashes

@@ -53,7 +53,7 @@ private[inc] object AncestorChange:
  */
 private[inc] final class HierarchyView(
     relations: Relations,
-    api: String => Option[AnalyzedClass]
+    val api: String => Option[AnalyzedClass]
 ):
   private val parents = relations.inheritance.internal
 
@@ -84,7 +84,8 @@ private[inc] final class HierarchyView(
         case _                       => false
     } || isObject(className)
 
-  def isObject(className: String): Boolean = api(className).exists(c => !isEmpty(c.api().objectApi()))
+  def isObject(className: String): Boolean =
+    api(className).exists(c => !isEmpty(c.api().objectApi()))
 
   def isTopLevel(className: String): Boolean = classLikes(className).exists(_.topLevel)
 
@@ -139,7 +140,11 @@ private[inc] object DescendantRules:
     onNames(hit(internal ++ external, change), "also inherits")
   }
 
-  /** A concrete descendant must implement every abstract member it inherits. */
+  /**
+   * A concrete descendant must implement every abstract member it inherits. The member may be
+   * deferred in any ancestor, not only the changed one: removing an implementation from `B`
+   * exposes `A.m` to `C extends B`.
+   */
   val `abstract`: DescendantRule = rule("abstract") { (view, d, change) =>
     def deferred(c: AnalyzedClass) =
       List(c.api().classApi(), c.api().objectApi()).iterator
@@ -147,7 +152,10 @@ private[inc] object DescendantRules:
         .collect { case m if m.modifiers.isAbstract => m.name }
         .toSet
     if !view.isConcrete(d) then None
-    else onNames(hit(deferred(change.before) ++ deferred(change.after), change), "must implement")
+    else
+      val inAncestors = view.ancestors(d).iterator.flatMap(view.api).flatMap(deferred).toSet
+      val candidates = deferred(change.before) ++ deferred(change.after) ++ inAncestors
+      onNames(hit(candidates, change), "must implement")
   }
 
   /** The descendant's own type check reads the changed class's header. */
@@ -175,14 +183,15 @@ private[inc] object DescendantRules:
 
   /**
    * A descendant is also a `memberRef` client of its parent (constructor call, inherited member
-   * references), so name-hash invalidation already covers what it reads through used names, and
-   * a header change invalidates those clients unconditionally. These rules cover what its own
-   * compilation reads without naming it: override checks, inherited conflicts, abstract members
-   * and forwarders.
+   * selections), so name-hash invalidation already covers what it reads through used names. These
+   * rules cover what its own compilation reads without naming it: override checks, inherited
+   * conflicts, abstract members and forwarders. `header` keeps every transitive descendant's
+   * stored linearization fresh, which [[MerkleHashes]] reads for other subprojects.
    */
-  val default: List[DescendantRule] = List(overrides, conflicts, `abstract`, `trait`, mirror)
+  val default: List[DescendantRule] =
+    List(overrides, conflicts, `abstract`, header, `trait`, mirror)
 
-  /** `default` plus rules that the ablation tests show are subsumed by `memberRef` edges. */
+  /** `default` plus rules that are subsumed by `memberRef` edges. */
   val all: List[DescendantRule] =
     List(uses, overrides, conflicts, `abstract`, header, `trait`, mirror, fallbacks)
 

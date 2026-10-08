@@ -20,7 +20,8 @@ What implementing it taught us, which changes decisions 1–3:
 
 - **Inside a subproject, no composed hashes are needed.** Zinc records a `memberRef` dependency on the *owner* of every selected member, so clients already carry `(owner, name)` keys, which is the decls+walk design. And `invalidateClassesInternally` already invalidates the `memberRef` clients of every descendant using the ancestor's changed names. That walk *is* decision 2's closure diff. Decision 1 as written was not built.
 - **Across subprojects, composition is needed**, and the downstream analysis lookup has no relations. So `MerkleHashes` composes from the stored linearization (`structure.parents`): decision 1, flattened, at lookup time. `macros/macro-type-change-3` is the case that needs it: a macro reflecting over `baseClasses` names no owner. Ancestors contribute their class-side `extraHash`, not `apiHash`, so companion-object members (not inherited) don't leak; this is the sbt/zinc#1796 conflation again. An object's ancestors count only when it has no class side.
-- **The rule table shrank to five.** Ablation shows `uses`, `header` and `fallbacks` are subsumed: a descendant is a `memberRef` client of its parent (constructor call, inherited member selections), and a header change already invalidates every `memberRef` client of every descendant. `default` = `overrides, conflicts, abstract, trait, mirror`; `strict` = all eight. Each default rule has a test that fails without it (`merkle-override`, `-conflict`, `-abstract`, `-trait-override`, `-mirror`), and `none` fails all five. Framing: the rules cover what a descendant's compilation reads *outside* `U(D)`, i.e. its refchecks and forwarder generation.
+- **The rule table shrank to six.** Ablation shows `uses` and `fallbacks` are subsumed, because a descendant is a `memberRef` client of its parent (constructor call, inherited member selections). `default` = `overrides, conflicts, abstract, header, trait, mirror`; `strict` adds `uses` and `fallbacks`. Framing: the rules cover what a descendant's compilation reads *outside* `U(D)`, i.e. its refchecks and forwarder generation.
+- **Lean (Flat.lean, FlatRules.lean, Exhaustive.lean in retronym/talks) corrected two things.** `abstract` must count names deferred in *any* ancestor of the descendant, not just the changed class (`merkle-abstract-ancestor`; 672 undercompiles in the exhaustive check otherwise). Flattened composition over a stored linearization is sound (`flat_sound`) only if every transitive descendant of a header-changed class recompiles, so `header` is back in `default`, although no scripted test yet fails without it (`merkle-subproject-class-header`, `merkle-subproject-trait-header` are candidates that pass either way).
 - **`merkle-trait` doesn't discriminate.** A missing mixin forwarder is invisible at runtime when the JVM resolves the trait's default method. It only shows when the trait overrides a class member, since class methods win resolution (`merkle-trait-override`). In general, behaviour-level checks are a weak oracle for bytecode differences, which argues again for 4b.
 
 TODO:
@@ -28,7 +29,7 @@ TODO:
 - 4b differential test (incremental vs clean bytes).
 - Performance deliverable.
 - Lean: see the chip; feed it the findings above.
-- Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`; descendants not recompiled keep possibly stale header stubs (overcompile only); header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change.
+- Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`;  header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change.
 
 ## Key decisions
 
