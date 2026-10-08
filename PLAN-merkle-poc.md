@@ -33,21 +33,22 @@ What implementing it taught us, which changes decisions 1–3:
 
 `zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and analysis size. A = `1.x` plus the harness commit (worktree `merkle-baseline`), B = this branch. The tree: 4 modules, depth 6, fan-out 2, 127 classes (m0 3, m1 12, m2 48, m3 64), a client of every class and of every leaf; medians of 3.
 
-| edit | A recompiled | B recompiled | rounds A→B | wall A→B |
-|---|---|---|---|---|
-| root: add member | 127 | 1 | 5→1 | 16.9 s→2.7 s |
-| root: add overload of used member | 318 | 192 (just the clients) | 5→5 | 17.3 s→3.1 s |
-| mid-level: add member | 15 | 1 | 3→1 | 2.2 s→0.4 s |
-| root: body only | 1 | 1 | 1→1 | 0.1 s |
+| edit | A recompiled | B recompiled | rounds A→B |
+|---|---|---|---|
+| root: add member | 127 | 1 | 5→1 |
+| root: add overload of used member | 318 | 192 (just the clients) | 5→5 |
+| mid-level: add member | 15 | 1 | 3→1 |
+| root: body only | 1 | 1 | 1→1 |
 
-With a trait root, adding a member recompiles 3 instead of 127: the root and the two classes that mix it in directly, which hold the forwarders. Analysis size barely moves (246→234 KB), because members inherited from *upstream* modules are still materialised.
+Wall times from these first runs are void: scripted's `apiDebug` diffed and logged every changed API, which cost more than the compile and grew with API size (the baseline's 17 s for 127 classes was 0.6 s without it). IncBench now times with `apiDebug` off and counts extraction in a separate untimed pass.
+
+With a trait root, adding a member recompiles 3 instead of 127: the root and the two classes that mix it in directly, which hold the forwarders. Analysis size barely moved (246→234 KB) while members inherited from *upstream* modules were still materialised; with that stopped (5622e0248), extracted inherited definitions fall from 19,153 to 6,061 and the minimized analysis from 194 KB to 125 KB.
 
 Surveys (source-level, approximate, in the scratchpad's survey.py): Pekko's cross-module inheritance is mostly traits (346 cross-module descendant edges vs 83 from classes). Spark has deep class hierarchies (`TreeNode` 261 descendants, `Expression` 257), mostly inside `sql/catalyst`; its cross-module reach is dominated by traits (`Logging`, 694 descendants across 23 modules).
 
 TODO:
 
 - Real corpus: drive IncBench from sbt-bloop exports, starting with Spark catalyst/sql.
-- Stop materialising members from upstream *analysed* modules (only from plain library jars), for the analysis-size win.
 - Narrow `trait` to descendants that mix the trait in directly (forwarders live only there).
 - 4b differential test (incremental vs clean bytes); IncBench can compare against a clean build per edit.
 - Lean: see the chip; feed it the findings above.
