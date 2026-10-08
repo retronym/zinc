@@ -1,0 +1,6 @@
+> app/run true
+
+# A loses a private member, which is not part of its API. The macro in W reads it, so W must
+# recompile, but no API change is detected.
+$ copy-file app/changes/A.scala app/A.scala
+> app/run false
