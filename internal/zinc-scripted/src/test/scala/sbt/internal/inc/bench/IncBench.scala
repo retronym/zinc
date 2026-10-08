@@ -58,18 +58,21 @@ object IncBench:
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
-    case Nil                          => o
-    case "--dir" :: v :: rest         => parse(rest, o.copy(dir = Paths.get(v)))
-    case "--modules" :: v :: rest     => parse(rest, o.copy(modules = v.toInt))
-    case "--depth" :: v :: rest       => parse(rest, o.copy(depth = v.toInt))
-    case "--fan-out" :: v :: rest     => parse(rest, o.copy(fanOut = v.toInt))
-    case "--padding" :: v :: rest     => parse(rest, o.copy(padding = v.toInt))
-    case "--trait" :: rest            => parse(rest, o.copy(rootIsTrait = true))
-    case "--scala" :: v :: rest       => parse(rest, o.copy(scalaVersion = v))
-    case "--reps" :: v :: rest        => parse(rest, o.copy(reps = v.toInt))
-    case "--build" :: v :: rest       => parse(rest, o.copy(build = Some(Paths.get(v))))
-    case "--edits" :: v :: rest       => parse(rest, o.copy(edits = Some(Paths.get(v))))
-    case "--debug" :: rest            => parse(rest, o.copy(logLevel = Level.Debug))
+    case Nil                            => o
+    case "--dir" :: v :: rest           => parse(rest, o.copy(dir = Paths.get(v)))
+    case "--modules" :: v :: rest       => parse(rest, o.copy(modules = v.toInt))
+    case "--depth" :: v :: rest         => parse(rest, o.copy(depth = v.toInt))
+    case "--fan-out" :: v :: rest       => parse(rest, o.copy(fanOut = v.toInt))
+    case "--padding" :: v :: rest       => parse(rest, o.copy(padding = v.toInt))
+    case "--trait" :: rest              => parse(rest, o.copy(rootIsTrait = true))
+    case "--scala" :: v :: rest         => parse(rest, o.copy(scalaVersion = v))
+    case "--reps" :: v :: rest          => parse(rest, o.copy(reps = v.toInt))
+    case "--build" :: v :: rest         => parse(rest, o.copy(build = Some(Paths.get(v))))
+    case "--edits" :: v :: rest         => parse(rest, o.copy(edits = Some(Paths.get(v))))
+    case "--debug" :: rest              => parse(rest, o.copy(logLevel = Level.Debug))
+    case "--scalac-option" :: v :: rest =>
+      val all = (o.incOptions.get("scalac.options").toList :+ v).mkString(" ")
+      parse(rest, o.copy(incOptions = o.incOptions + ("scalac.options" -> all)))
     case "--out" :: v :: rest         => parse(rest, o.copy(out = Some(Paths.get(v))))
     case "--label" :: v :: rest       => parse(rest, o.copy(label = v))
     case "--inc-option" :: kv :: rest =>
