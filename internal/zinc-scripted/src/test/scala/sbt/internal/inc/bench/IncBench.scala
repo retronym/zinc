@@ -14,8 +14,12 @@ package bench
 
 import java.nio.file.{ Files, Path, Paths }
 
+import sbt.internal.inc.FileAnalysisStore
 import sbt.io.IO
 import sbt.util.Level
+import xsbt.api.APIUtil
+import xsbti.api.{ Companions, SafeLazyProxy }
+import xsbti.compile.AnalysisContents
 
 /**
  * Measures incremental compilation of edit scenarios on a multi-module build, driving Zinc
@@ -95,16 +99,47 @@ object IncBench:
     runner.finish()
   end main
 
-  final case class ModuleResult(name: String, rounds: Int, recompiled: Int, analysisBytes: Long)
+  /**
+   * What a module stores. Scripted runs with `apiDebug`, so the stored APIs are the full
+   * extraction: `declared` and `inherited` count the definitions the bridge produced, summed over
+   * every class and object. `minimizedBytes` re-serialises the analysis with the APIs minimized,
+   * as Zinc stores them outside scripted.
+   */
+  final case class Stored(
+      classes: Int,
+      declared: Int,
+      inherited: Int,
+      nameHashes: Int,
+      analysisBytes: Long,
+      minimizedBytes: Long,
+  ):
+    def +(o: Stored): Stored =
+      Stored(
+        classes + o.classes,
+        declared + o.declared,
+        inherited + o.inherited,
+        nameHashes + o.nameHashes,
+        analysisBytes + o.analysisBytes,
+        minimizedBytes + o.minimizedBytes,
+      )
+    def json: String =
+      s""""classes":$classes,"declared":$declared,"inherited":$inherited,""" +
+        s""""nameHashes":$nameHashes,"analysisBytes":$analysisBytes,""" +
+        s""""minimizedBytes":$minimizedBytes"""
+  end Stored
+
+  final case class ModuleResult(name: String, rounds: Int, recompiled: Int, stored: Stored)
 
   final case class StepResult(wallMillis: Long, modules: Seq[ModuleResult]):
     def json: String =
       val ms = modules.map(m =>
         s"""{"module":"${m.name}","rounds":${m.rounds},"recompiled":${m.recompiled},""" +
-          s""""analysisBytes":${m.analysisBytes}}"""
+          s"""${m.stored.json}}"""
       )
+      val total = modules.map(_.stored).reduce(_ + _)
       s""""wallMillis":$wallMillis,"rounds":${modules.map(_.rounds).sum},""" +
-        s""""recompiled":${modules.map(_.recompiled).sum},"modules":[${ms.mkString(",")}]"""
+        s""""recompiled":${modules.map(_.recompiled).sum},${total.json},""" +
+        s""""modules":[${ms.mkString(",")}]"""
 
   final class Runner(dir: Path, moduleNames: Seq[String], scalaVersion: String):
     private val cacheDir = Files.createTempDirectory("incbench-cache")
@@ -124,7 +159,33 @@ object IncBench:
       val rounds = analysis.compilations.allCompilations.filter(_.getStartTime >= since)
       val starts = rounds.map(_.getStartTime).toSet
       val recompiled = analysis.apis.internal.count((_, c) => starts(c.compilationTimestamp))
-      ModuleResult(module, rounds.size, recompiled, Files.size(p.cacheFile))
+      ModuleResult(module, rounds.size, recompiled, stored(p, analysis))
+
+    private def stored(p: ProjectStructure, analysis: Analysis): Stored =
+      val classes = analysis.apis.internal.values.toSeq
+      val sides = classes.flatMap(c => Seq(c.api().classApi(), c.api().objectApi()))
+      val minimizedApis = analysis.apis.internal.map { (name, c) =>
+        val companions = Companions.of(
+          APIUtil.minimize(c.api().classApi()),
+          APIUtil.minimize(c.api().objectApi())
+        )
+        name -> c.withApi(SafeLazyProxy.strict(companions))
+      }
+      val minimized = analysis.copy(apis = APIs(minimizedApis, analysis.apis.external))
+      val tmp = Files.createTempFile("incbench", ".zip")
+      try
+        val contents = AnalysisContents.create(minimized, p.prev().setup.get)
+        FileAnalysisStore.binary(tmp.toFile).set(contents)
+        Stored(
+          classes.size,
+          sides.map(_.structure.declared.length).sum,
+          sides.map(_.structure.inherited.length).sum,
+          classes.map(_.nameHashes.length).sum,
+          Files.size(p.cacheFile),
+          Files.size(tmp),
+        )
+      finally Files.deleteIfExists(tmp)
+    end stored
 
     def finish(): Unit =
       handler.finish(state)
