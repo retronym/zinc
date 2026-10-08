@@ -21,14 +21,22 @@ import xsbti.api.{ AnalyzedClass, NameHash, Parameterized, Type }
  * that subproject the invalidator walks the hierarchy instead; another subproject only sees the
  * stored API (the analysis it looks up carries no relations), so it is given hashes composed from
  * the class's and its ancestors' own hashes, taking the ancestors from the stored linearization.
+ * Ancestors in other subprojects come from their own analyses: a class does not recompile when
+ * an upstream ancestor changes, so the members it materialised from it may be stale.
  * An ancestor contributes its extraHash rather than its apiHash: that covers its class side only,
  * since members of a companion object are not inherited.
  */
 private[inc] object MerkleHashes:
-  def composed(analysis: Analysis, className: String): Option[AnalyzedClass] =
+  def composed(
+      analysis: Analysis,
+      className: String,
+      elsewhere: String => Option[AnalyzedClass] = _ => None
+  ): Option[AnalyzedClass] =
     analysis.apis.internal.get(className).map { own =>
-      val ancestors = linearization(own).filter(_ != className).flatMap(analysis.apis.internal.get)
-      if ancestors.isEmpty then own
+      val ancestors = linearization(own)
+        .filter(_ != className)
+        .flatMap(a => analysis.apis.internal.get(a).orElse(elsewhere(a)))
+      if ancestors.isEmpty then own.withApiHash((own.apiHash, header(own)).hashCode)
       else
         val all = own +: ancestors
         val nameHashes = all
@@ -37,17 +45,28 @@ private[inc] object MerkleHashes:
           .iterator
           .map { case ((name, scope), hashes) => NameHash.of(name, scope, hashes.hashCode) }
           .toArray
-        val apiHash = (own.apiHash +: ancestors.map(c => (c.name, c.extraHash))).hashCode
+        val apiHash =
+          (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash))).hashCode
         own
           .withApiHash(apiHash)
           .withNameHashes(nameHashes)
     }
 
   /**
+   * What HashAPI leaves out of a top-level class's hash: its own modifiers, access and
+   * annotations. A subclass in another subproject reads them (e.g. `final`), and with pipelining
+   * there is no bytecode hash to catch the change instead.
+   */
+  private def header(c: AnalyzedClass): Int =
+    List(c.api().classApi(), c.api().objectApi())
+      .map(cl => (cl.modifiers.raw, cl.access, cl.annotations.toSeq, cl.definitionType))
+      .hashCode
+
+  /**
    * The ancestors a class's stored API lists, as class names, in linearization order. An
    * object's ancestors only count when there is no class side: a subclass inherits from the class.
    */
-  private def linearization(c: AnalyzedClass): Vector[String] =
+  def linearization(c: AnalyzedClass): Vector[String] =
     def name(t: Type): Option[String] = t match
       case p: Parameterized => name(p.baseType)
       case t                => Discovery.simpleName(t)

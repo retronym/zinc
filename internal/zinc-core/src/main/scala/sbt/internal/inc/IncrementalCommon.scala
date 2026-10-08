@@ -566,6 +566,9 @@ private[inc] abstract class IncrementalCommon(
   end invalidateAfterInternalCompilation
 
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
+  /** The previous analysis's APIs, which external invalidation reads for unrecompiled classes. */
+  private[inc] var previousAPIs: APIs = APIs.empty
+
   def invalidateInitial(
       previous: Relations,
       changes: InitialChanges

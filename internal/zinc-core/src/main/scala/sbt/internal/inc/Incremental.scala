@@ -352,6 +352,7 @@ object Incremental:
       override val modifiedLibraries = initialChanges.libraryDeps.toArray
       override val modifiedClasses = initialChanges.external.allModified.toArray
       def isEmpty = modifiedLibraries.isEmpty && modifiedClasses.isEmpty
+    incremental.previousAPIs = previous.apis
     val (initialInvClasses, initialInvSources0) =
       incremental.invalidateInitial(previous.relations, initialChanges)
 

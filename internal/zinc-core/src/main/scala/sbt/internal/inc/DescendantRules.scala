@@ -57,10 +57,14 @@ private[inc] final class HierarchyView(
 ):
   private val parents = relations.inheritance.internal
 
+  /**
+   * Ancestors through this subproject's inheritance relation, plus those in the stored
+   * linearization, which also names ancestors in upstream subprojects.
+   */
   def ancestors(className: String): Set[String] =
     IncrementalCommon.transitiveDeps(parents.forward(className), sbt.util.Logger.Null, false)(
       parents.forward
-    )
+    ) ++ api(className).toList.flatMap(MerkleHashes.linearization) - className
 
   def usedNames(className: String): Set[String] =
     relations.names.toMultiMap.get(className).fold(Set.empty[String])(_.map(_.name).toSet)
@@ -75,6 +79,9 @@ private[inc] final class HierarchyView(
   def externallyInheritedNames(className: String): Set[String] =
     api(className).fold(Set.empty[String])(_.nameHashes.iterator.map(_.name).toSet) --
       declaredNames(className) - simpleName(className)
+
+  def allNames(className: String): Set[String] =
+    api(className).fold(Set.empty[String])(_.nameHashes.iterator.map(_.name).toSet)
 
   def isConcrete(className: String): Boolean =
     api(className).exists { c =>
@@ -131,12 +138,14 @@ private[inc] object DescendantRules:
   /**
    * Members of the same name inherited along another path must be reconciled with the changed
    * one. Ancestors of the changed class are on its own path and were checked when it compiled.
+   * A descendant's API materialises members from upstream subprojects, so every name of the
+   * changed class is excluded from those, not only the ones it inherits.
    */
   val conflicts: DescendantRule = rule("conflicts") { (view, d, change) =>
     val p = change.className
     val otherPath = view.ancestors(d) - p -- view.ancestors(p)
     val internal = otherPath.flatMap(view.declaredNames)
-    val external = view.externallyInheritedNames(d) -- view.externallyInheritedNames(p)
+    val external = view.externallyInheritedNames(d) -- view.allNames(p)
     onNames(hit(internal ++ external, change), "also inherits")
   }
 

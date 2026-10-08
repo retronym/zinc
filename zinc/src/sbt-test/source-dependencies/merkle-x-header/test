@@ -1,0 +1,4 @@
+> app/compile
+
+$ copy-file lib/changes/A.scala lib/A.scala
+-> app/compile

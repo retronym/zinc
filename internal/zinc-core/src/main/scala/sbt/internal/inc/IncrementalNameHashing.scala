@@ -139,15 +139,29 @@ private[inc] class IncrementalNameHashingCommon(
       )
     )
     invalidationLog.detail("Now invalidating by inheritance (internally).")
-    val transitiveInheritance = byExternalInheritance.flatMap(invalidateByInheritance(relations, _))
+    val descendants = byExternalInheritance.flatMap(invalidateByInheritance(relations, _))
+    val ancestorChange = ancestorChanges.get(modifiedBinaryClassName)
+    val transitiveInheritance =
+      filterExternalDescendants(
+        relations,
+        modifiedBinaryClassName,
+        ancestorChange,
+        descendants,
+        isScalaClass
+      )
 
-    val localInheritance = relations.localInheritance.external.reverse(modifiedBinaryClassName)
+    val localInheritance = relations.localInheritance.external.reverse(modifiedBinaryClassName) ++
+      descendants.flatMap(invalidateByLocalInheritance(relations, _))
 
     // Get the member reference dependencies of all classes transitively invalidated by inheritance
     invalidationLog.detail(
       "Getting direct dependencies of all classes transitively invalidated by inheritance."
     )
-    val memberRefA = transitiveInheritance.flatMap(memberRefInv(relations.memberRef.internal))
+    val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
+    val memberRefA =
+      if ancestorChange.exists(_.headerChanged) then
+        byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
+      else byName
 
     // Get the classes that depend on externals by member reference.
     // This includes non-inheritance dependencies and is not transitive.
@@ -156,7 +170,8 @@ private[inc] class IncrementalNameHashingCommon(
     )
     val memberRefB = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
 
-    val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName)
+    val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName) ++
+      descendants.flatMap(invalidateByMacroExpansion(relations, _))
 
     val invalidated =
       transitiveInheritance ++ localInheritance ++ memberRefA ++ memberRefB ++ macroExpansion
@@ -270,11 +285,13 @@ private[inc] class IncrementalNameHashingCommon(
       modifiedClass: String,
       change: Option[AncestorChange],
       descendants: Set[String],
-      isScalaClass: String => Boolean
+      isScalaClass: String => Boolean,
+      api: String => Option[AnalyzedClass] = currentAPI,
+      external: Boolean = false
   ): Set[String] =
     (descendantRules, change) match
-      case (Some(rules), Some(change)) if isScalaClass(modifiedClass) =>
-        val view = new HierarchyView(relations, currentAPI)
+      case (Some(rules), Some(change)) if external || isScalaClass(modifiedClass) =>
+        val view = new HierarchyView(relations, api)
         descendants.filter { d =>
           d == modifiedClass || !isScalaClass(d) || {
             val reasons = rules.flatMap(r => r(view, d, change).map(why => s"${r.name}: $why"))
@@ -288,6 +305,20 @@ private[inc] class IncrementalNameHashingCommon(
           }
         }
       case _ => descendants
+
+  /**
+   * [[filterDescendants]] for an upstream class: the descendants are this subproject's classes,
+   * read from the previous analysis, and their ancestors may be in upstream subprojects.
+   */
+  private def filterExternalDescendants(
+      relations: Relations,
+      modifiedClass: String,
+      change: Option[AncestorChange],
+      descendants: Set[String],
+      isScalaClass: String => Boolean
+  ): Set[String] =
+    val api = (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
+    filterDescendants(relations, modifiedClass, change, descendants, isScalaClass, api, true)
 
   /** @inheritdoc */
   override protected def findClassDependencies(
