@@ -1,0 +1,5 @@
+> compile
+
+# J becomes final: B must be rejected. Passes with pipelining, fails without it.
+$ copy-file changes/J.java J.java
+-> compile
