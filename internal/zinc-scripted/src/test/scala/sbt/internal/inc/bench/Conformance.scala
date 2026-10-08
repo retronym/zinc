@@ -17,7 +17,6 @@ import java.security.MessageDigest
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
-import scala.util.Random
 import scala.util.control.NonFatal
 
 import sbt.internal.util.ManagedLogger
@@ -38,12 +37,16 @@ import sjsonnew.support.scalajson.unsafe.Parser
  * one file. Layouts: `single` (one subproject) and `split` (`A` and `M` upstream, the rest
  * downstream).
  *
- * Per base: a fresh build; then per edit, apply it, build incrementally and compare with a clean
- * build of the edited sources (cached by content), then revert and compare with the base. A
- * divergence in the revert rebuilds the base from scratch. Results go to `--out` as JSON lines.
+ * Per case: build the base (reused while consecutive cases share it), apply the edit, build
+ * incrementally and compare with a clean build of the edited sources (cached by content), then
+ * revert and compare with the base. A divergence in the revert rebuilds the base from scratch.
+ * Results go to `--out` as JSON lines.
+ *
+ * Cases run in [[ConformanceOrder]]'s order (`--order covering|reversed|enum`), so bugs show
+ * early; `--sample N` runs the first N of a shard. `--print-order` writes the order and stops.
  *
  * {{{
- * sbt "publishBridges; zincScripted3/Test/runMain sbt.internal.inc.bench.Conformance \
+ * sbt "publishBridges; zincScripted/Test/runMain sbt.internal.inc.bench.Conformance \
  *   --cases flat.jsonl --dir /tmp/conf --sample 100 --out /tmp/conf.jsonl"
  * }}}
  */
@@ -53,6 +56,8 @@ object Conformance:
       dir: Path = Paths.get("target/conformance"),
       sample: Option[Int] = None,
       seed: Long = 0L,
+      order: String = "covering",
+      printOrder: Option[Path] = None,
       only: Set[String] = Set.empty,
       shard: (Int, Int) = (0, 1),
       edits: Set[String] = Set.empty,
@@ -66,13 +71,15 @@ object Conformance:
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
-    case Nil                     => o
-    case "--cases" :: v :: rest  => parse(rest, o.copy(cases = Paths.get(v)))
-    case "--dir" :: v :: rest    => parse(rest, o.copy(dir = Paths.get(v)))
-    case "--sample" :: v :: rest => parse(rest, o.copy(sample = Some(v.toInt)))
-    case "--seed" :: v :: rest   => parse(rest, o.copy(seed = v.toLong))
-    case "--only" :: v :: rest   => parse(rest, o.copy(only = v.split(",").toSet))
-    case "--shard" :: v :: rest  =>
+    case Nil                          => o
+    case "--cases" :: v :: rest       => parse(rest, o.copy(cases = Paths.get(v)))
+    case "--dir" :: v :: rest         => parse(rest, o.copy(dir = Paths.get(v)))
+    case "--sample" :: v :: rest      => parse(rest, o.copy(sample = Some(v.toInt)))
+    case "--seed" :: v :: rest        => parse(rest, o.copy(seed = v.toLong))
+    case "--order" :: v :: rest       => parse(rest, o.copy(order = v))
+    case "--print-order" :: v :: rest => parse(rest, o.copy(printOrder = Some(Paths.get(v))))
+    case "--only" :: v :: rest        => parse(rest, o.copy(only = v.split(",").toSet))
+    case "--shard" :: v :: rest       =>
       val Array(i, n) = v.split("/").map(_.toInt)
       parse(rest, o.copy(shard = (i, n)))
     case "--layouts" :: v :: rest => parse(rest, o.copy(layouts = v.split(",").toSeq))
@@ -100,9 +107,19 @@ object Conformance:
 
   type Prog = Seq[Cls]
 
-  final case class EditCase(cls: String, cfg: String, prog: Prog, model: String)
+  /** The cfg as named factors: the dump's `factors`, or else the fields of `cfg`. */
+  type Factors = Seq[(String, String)]
 
-  final case class Base(space: String, id: String, cfg: String, prog: Prog, edits: Seq[EditCase])
+  final case class EditCase(cls: String, cfg: String, factors: Factors, prog: Prog, model: String)
+
+  final case class Base(
+      space: String,
+      id: String,
+      cfg: String,
+      factors: Factors,
+      prog: Prog,
+      edits: Seq[EditCase]
+  )
 
   private def str(v: JValue): String = v match
     case JString(s) => s
@@ -147,14 +164,27 @@ object Conformance:
             e.get(k).map(v => s""""$k":${sjsonnew.support.scalajson.unsafe.CompactPrinter(v)}""")
           )
           .mkString(",")
+      def factors(g: Map[String, JValue]): Factors = g.get("factors") match
+        case Some(JObject(fs)) => fs.toSeq.map(x => x.field -> str(x.value))
+        case _                 =>
+          g.get("cfg").map(str).getOrElse("").split(" ").toSeq.zipWithIndex.map((v, i) =>
+            s"c$i" -> v
+          )
       Base(
         f.get("space").map(str).getOrElse(""),
         str(f("id")),
         f.get("cfg").map(str).getOrElse(""),
+        factors(f),
         prog(f("prog")),
         arr(f("edits")).map { e =>
           val g = obj(e)
-          EditCase(str(g("cls")), g.get("cfg").map(str).getOrElse(""), prog(g("prog")), rest(g))
+          EditCase(
+            str(g("cls")),
+            g.get("cfg").map(str).getOrElse(""),
+            factors(g),
+            prog(g("prog")),
+            rest(g)
+          )
         }
       )
     }
@@ -338,14 +368,22 @@ object Conformance:
   def main(args: Array[String]): Unit =
     val o = parse(args.toList)
     val all = readCases(o.cases)
-    val filtered = if o.only.isEmpty then all else all.filter(b => o.only(b.id))
-    val sampled = o.sample.fold(filtered)(n => new Random(o.seed).shuffle(filtered).take(n))
-    val bases = sampled.zipWithIndex.collect { case (b, i) if i % o.shard._2 == o.shard._1 => b }
+    val bases = all
+      .filter(b => o.only.isEmpty || o.only(b.id))
+      .map(b => b.copy(edits = b.edits.filter(e => o.edits.isEmpty || o.edits(e.cfg))))
+    val ordered = ConformanceOrder.order(bases, o.layouts, o.order, o.seed, o.shard)
+    val items = o.sample.fold(ordered)(ordered.take)
+    o.printOrder match
+      case Some(p) =>
+        val lines = items.map(it => s"${it.layout}\t${it.base.id}\t${it.edit.cfg}")
+        Files.write(p, lines.mkString("", "\n", "\n").getBytes("UTF-8"))
+      case None => run(o, items)
+  end main
+
+  private def run(o: Options, items: Seq[ConformanceOrder.Item]): Unit =
     val dir = o.dir.toAbsolutePath
-    val outLines = Vector.newBuilder[String]
     def emit(line: String): Unit =
       println(line)
-      outLines += line
       o.out.foreach(p =>
         Files.writeString(
           p,
@@ -356,68 +394,74 @@ object Conformance:
       )
     o.out.foreach(Files.deleteIfExists)
     var cases, diverged, baseFailed = 0
-    for layoutName <- o.layouts do
-      val work = new Build(dir.resolve(s"$layoutName-work"), layoutName, o)
-      val clean = new Build(dir.resolve(s"$layoutName-clean"), layoutName, o)
+    final class Layout(name: String):
+      val work = new Build(dir.resolve(s"$name-work"), name, o)
+      val clean = new Build(dir.resolve(s"$name-clean"), name, o)
       val cache = mutable.Map.empty[Map[String, String], Result]
+      var current: Option[(String, Result)] = None
       def cleanBuild(files: Map[String, String]): Result =
         cache.getOrElseUpdate(
           files,
           { clean.reset(files); clean.compile().copy(recompiled = Set.empty) }
         )
-      for (b, bi) <- bases.zipWithIndex do
-        val baseFiles = Render.files(b.prog, None)
-        work.reset(baseFiles)
-        val r0 = work.compile()
-        cache(baseFiles) = r0.copy(recompiled = Set.empty)
-        if !r0.ok then
-          baseFailed += 1
-          emit(s"""{"layout":"$layoutName","space":"${b.space}","base":"${b.id}","cfg":"${b.cfg}","verdict":"base-error","errors":${json(
-              r0.errors
-            )}}""")
-        else
-          for e <- b.edits if o.edits.isEmpty || o.edits(e.cfg) do
-            cases += 1
-            val files = Render.files(b.prog, Some(e))
-            work.write(files)
-            val inc = work.compile()
-            val cl = cleanBuild(files)
-            val verdict = compare(inc, cl)
-            if o.stop && !agrees(verdict) then
-              Console.err.println(
-                s"stopped: incremental build in ${dir.resolve(s"$layoutName-work")}"
-              )
-              throw new IllegalStateException(s"divergence: ${b.id} ${e.cfg} $verdict")
-            work.write(baseFiles)
-            val back = work.compile()
-            val revert = compare(back, r0)
-            if !agrees(verdict) || !agrees(revert) then diverged += 1
-            emit(
-              s"""{"layout":"$layoutName","space":"${b.space}","base":"${b.id}","cfg":"${b.cfg}",""" +
-                s""""edit":"${e.cls}","edited":"${e.cfg}","verdict":"$verdict","revert":"$revert",""" +
-                s""""recompiled":${json(inc.recompiled.toSeq.sorted)},""" +
-                s""""revertRecompiled":${json(back.recompiled.toSeq.sorted)},${e.model},""" +
-                s""""cleanOk":${cl.ok},"diff":${json(diff(
-                    inc,
-                    cl
-                  ))},"revertDiff":${json(diff(back, r0))},""" +
-                s""""incErrors":${json(inc.errors)},"cleanErrors":${json(cl.errors)},""" +
-                s""""revertErrors":${json(back.errors)}}"""
-            )
-            if !agrees(revert) then
-              work.reset(baseFiles)
-              work.compile()
-        end if
-        if (bi + 1) % 10 == 0 then
-          Console.err.println(
-            s"[$layoutName] ${bi + 1}/${bases.size} bases, $cases cases, $diverged diverged, $baseFailed bases failed"
-          )
-      end for
-      work.finish()
-      clean.finish()
+      def finish(): Unit =
+        work.finish(); clean.finish()
+    val layouts = mutable.LinkedHashMap.empty[String, Layout]
+    val failedBases = mutable.HashSet.empty[(String, String)]
+    for (it, n) <- items.zipWithIndex if !failedBases(it.group) do
+      val l = layouts.getOrElseUpdate(it.layout, new Layout(it.layout))
+      val b = it.base
+      val e = it.edit
+      val baseFiles = Render.files(b.prog, None)
+      val r0 = l.current match
+        case Some((id, r)) if id == b.id => r
+        case _                           =>
+          l.work.reset(baseFiles)
+          val r = l.work.compile()
+          l.cache(baseFiles) = r.copy(recompiled = Set.empty)
+          l.current = Some(b.id -> r)
+          r
+      if !r0.ok then
+        baseFailed += 1
+        failedBases += it.group
+        emit(
+          s"""{"layout":"${it.layout}","space":"${b.space}","base":"${b.id}","cfg":"${b.cfg}",""" +
+            s""""verdict":"base-error","errors":${json(r0.errors)}}"""
+        )
+      else
+        cases += 1
+        val files = Render.files(b.prog, Some(e))
+        l.work.write(files)
+        val inc = l.work.compile()
+        val cl = l.cleanBuild(files)
+        val verdict = compare(inc, cl)
+        if o.stop && !agrees(verdict) then
+          Console.err.println(s"stopped: incremental build in ${dir.resolve(s"${it.layout}-work")}")
+          throw new IllegalStateException(s"divergence: ${b.id} ${e.cfg} $verdict")
+        l.work.write(baseFiles)
+        val back = l.work.compile()
+        val revert = compare(back, r0)
+        if !agrees(verdict) || !agrees(revert) then diverged += 1
+        emit(
+          s"""{"layout":"${it.layout}","space":"${b.space}","base":"${b.id}","cfg":"${b.cfg}",""" +
+            s""""edit":"${e.cls}","edited":"${e.cfg}","verdict":"$verdict","revert":"$revert",""" +
+            s""""recompiled":${json(inc.recompiled.toSeq.sorted)},""" +
+            s""""revertRecompiled":${json(back.recompiled.toSeq.sorted)},${e.model},""" +
+            s""""cleanOk":${cl.ok},"diff":${json(diff(inc, cl))},""" +
+            s""""revertDiff":${json(diff(back, r0))},""" +
+            s""""incErrors":${json(inc.errors)},"cleanErrors":${json(cl.errors)},""" +
+            s""""revertErrors":${json(back.errors)}}"""
+        )
+        if !agrees(revert) then l.current = None
+      end if
+      if (n + 1) % 100 == 0 then
+        Console.err.println(
+          s"${n + 1}/${items.size} cases, $diverged diverged, $baseFailed bases failed"
+        )
     end for
+    layouts.values.foreach(_.finish())
     Console.err.println(s"done: $cases cases, $diverged diverged, $baseFailed bases failed")
-  end main
+  end run
 
   def agrees(verdict: String): Boolean = verdict == "same" || verdict == "same-fail"
 
