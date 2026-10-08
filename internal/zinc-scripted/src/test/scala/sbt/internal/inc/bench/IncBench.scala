@@ -27,7 +27,11 @@ import xsbti.compile.AnalysisContents
  *
  * For each edit: apply it, compile the last module (and so every module), record per module the
  * rounds, the classes recompiled and the wall time, then revert it and compile again. Finally a
- * `clean-build` step rebuilds everything from scratch in the warm JVM, as a reference. Results go
+ * `clean-build` step rebuilds everything from scratch in the warm JVM, as a reference.
+ *
+ * Timed runs turn `apiDebug` off: with it, Zinc diffs and logs every changed API, which costs
+ * more than the compile and grows with API size. The definitions the bridge extracts are counted
+ * in a separate untimed `extract` pass over a copy of the build, with `apiDebug` on. Results go
  * to stdout and `--out` as JSON lines, so two checkouts compare by diffing their output.
  *
  * {{{
@@ -71,23 +75,34 @@ object IncBench:
     val o = parse(args.toList)
     val corpus =
       SyntheticCorpus(o.modules, o.depth, o.fanOut, o.padding, o.rootIsTrait, o.scalaVersion)
-    val dir = o.dir.toAbsolutePath
-    IO.delete(dir.toFile)
-    corpus.write(dir)
     val moduleNames = (0 until o.modules).map(i => s"m$i")
-    if o.incOptions.nonEmpty then
-      val props = o.incOptions.map((k, v) => s"$k = $v").mkString("", "\n", "\n")
+    def setUp(dir: Path, incOptions: Map[String, String]): Unit =
+      IO.delete(dir.toFile)
+      corpus.write(dir)
+      val props = incOptions.map((k, v) => s"$k = $v").mkString("", "\n", "\n")
       moduleNames.foreach(m =>
         Files.writeString(dir.resolve(m).resolve("incOptions.properties"), props)
       )
     val shape =
       s""""label":"${o.label}","modules":${o.modules},"depth":${o.depth},"fanOut":${o.fanOut},""" +
         s""""padding":${o.padding},"trait":${o.rootIsTrait},"classes":${corpus.classes.size}"""
+    val extractDir = o.dir.toAbsolutePath.resolveSibling(o.dir.getFileName.toString + "-extract")
+    setUp(extractDir, o.incOptions + ("apiDebug" -> "true"))
+    val extracted =
+      val runner = new Runner(extractDir, moduleNames, o.scalaVersion)
+      try runner.compileAll().total
+      finally runner.finish()
+    val dir = o.dir.toAbsolutePath
+    setUp(dir, Map("apiDebug" -> "false") ++ o.incOptions)
     val runner = new Runner(dir, moduleNames, o.scalaVersion)
     val lines = Vector.newBuilder[String]
     def emit(line: String): Unit =
       println(line)
       lines += line
+    emit(
+      s"""{$shape,"step":"extract","declared":${extracted.declared},""" +
+        s""""inherited":${extracted.inherited},"nameHashes":${extracted.nameHashes}}"""
+    )
     emit(s"""{$shape,"step":"clean",${runner.compileAll().json}}""")
     for edit <- corpus.edits; rep <- 1 to o.reps do
       val file = dir.resolve(edit.file)
@@ -104,10 +119,10 @@ object IncBench:
   end main
 
   /**
-   * What a module stores. Scripted runs with `apiDebug`, so the stored APIs are the full
-   * extraction: `declared` and `inherited` count the definitions the bridge produced, summed over
-   * every class and object. `minimizedBytes` re-serialises the analysis with the APIs minimized,
-   * as Zinc stores them outside scripted.
+   * What a module stores. `declared` and `inherited` count the definitions in the stored APIs,
+   * summed over every class and object: the full extraction when `apiDebug` is on, as in the
+   * untimed `extract` pass, and only what minimization keeps otherwise. `minimizedBytes`
+   * re-serialises the analysis with the APIs minimized, as Zinc stores them by default.
    */
   final case class Stored(
       classes: Int,
@@ -135,18 +150,20 @@ object IncBench:
   final case class ModuleResult(name: String, rounds: Int, recompiled: Int, stored: Stored)
 
   final case class StepResult(wallMillis: Long, modules: Seq[ModuleResult]):
+    def total: Stored = modules.map(_.stored).reduce(_ + _)
     def json: String =
       val ms = modules.map(m =>
         s"""{"module":"${m.name}","rounds":${m.rounds},"recompiled":${m.recompiled},""" +
           s"""${m.stored.json}}"""
       )
-      val total = modules.map(_.stored).reduce(_ + _)
       s""""wallMillis":$wallMillis,"rounds":${modules.map(_.rounds).sum},""" +
         s""""recompiled":${modules.map(_.recompiled).sum},${total.json},""" +
         s""""modules":[${ms.mkString(",")}]"""
 
+  /** Shared by every runner: IncHandler caches the compiled bridge's path in it per JVM. */
+  private lazy val cacheDir = Files.createTempDirectory("incbench-cache")
+
   final class Runner(dir: Path, moduleNames: Seq[String], scalaVersion: String):
-    private val cacheDir = Files.createTempDirectory("incbench-cache")
     private val handler =
       new IncHandler(dir, cacheDir, UnitSpec.newLogger(Level.Warn), compileToJar = false)
     private var state: handler.State = handler.initialState
@@ -195,8 +212,6 @@ object IncBench:
       finally Files.deleteIfExists(tmp)
     end stored
 
-    def finish(): Unit =
-      handler.finish(state)
-      IO.delete(cacheDir.toFile)
+    def finish(): Unit = handler.finish(state)
   end Runner
 end IncBench

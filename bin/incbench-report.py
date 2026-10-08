@@ -15,19 +15,24 @@ METRICS = [
     ('wallMillis', 'wall time', lambda v: f'{v / 1000:.2f} s'),
 ]
 STORED = [
-    ('inherited', 'inherited definitions'),
-    ('declared', 'declared definitions'),
-    ('nameHashes', 'name hashes'),
-    ('analysisBytes', 'analysis bytes (full API)'),
-    ('minimizedBytes', 'analysis bytes (minimized)'),
+    ('nameHashes', 'name hashes stored'),
+    ('analysisBytes', 'analysis bytes on disk'),
 ]
+
+
+def extract(path):
+    for line in open(path):
+        r = json.loads(line)
+        if r['step'] == 'extract':
+            return r
+    return None
 
 
 def load(path):
     steps = collections.defaultdict(list)
     for line in open(path):
         r = json.loads(line)
-        if not r['step'].endswith('-revert'):
+        if not r['step'].endswith('-revert') and r['step'] != 'extract':
             steps[r['step']].append(r)
     return steps
 
@@ -79,6 +84,12 @@ def tree_section(a_path, b_path):
         rows.append(f'<tr{cls}><th scope="row"><code>{html.escape(step)}</code>'
                     f'<div class="per">per module: {per_a} → {per_b}</div>{frac}</th>{"".join(cells)}</tr>')
     stored = []
+    ea, eb = extract(a_path), extract(b_path)
+    if ea and eb:
+        for key, label in [('inherited', 'inherited definitions extracted'),
+                           ('declared', 'declared definitions extracted')]:
+            stored.append(f'<tr><th scope="row">{label}</th><td class="num">{ea[key]:,}</td>'
+                          f'<td class="num">{eb[key]:,}</td><td class="num">{delta(ea[key], eb[key])}</td></tr>')
     ca, cb = a['clean'][0], b['clean'][0]
     for key, label in STORED:
         if key in ca and key in cb:
