@@ -177,7 +177,11 @@ private[inc] class IncrementalNameHashingCommon(
     invalidationLog.detail(
       s"Getting classes that directly depend on (external) $modifiedBinaryClassName."
     )
-    val memberRefB = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
+    val memberRefB =
+      val byName = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
+      if ancestorChange.exists(_.headerChanged) then
+        byName ++ relations.memberRef.external.reverse(modifiedBinaryClassName)
+      else byName
 
     val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName) ++
       descendants.flatMap(invalidateByMacroExpansion(relations, _))
