@@ -473,11 +473,13 @@ object Conformance:
     final class Layout(name: String):
       val work = new Build(dir.resolve(s"$name-work"), name, o)
       val clean = new Build(dir.resolve(s"$name-clean"), name, o)
-      val cache = mutable.Map.empty[Map[String, String], Result]
+      val cache = mutable.Map.empty[(Map[String, String], Map[String, Int]), Result]
+      def key(files: Map[String, String], base: Base) =
+        (files, files.map((f, _) => f -> base.tier(f)))
       var current: Option[(String, Result)] = None
       def cleanBuild(files: Map[String, String], base: Base): Result =
         cache.getOrElseUpdate(
-          files,
+          key(files, base),
           { clean.reset(files, base); clean.compile().copy(recompiled = Set.empty) }
         )
       def finish(): Unit =
@@ -494,7 +496,7 @@ object Conformance:
         case _                           =>
           l.work.reset(baseFiles, b)
           val r = l.work.compile()
-          l.cache(baseFiles) = r.copy(recompiled = Set.empty)
+          l.cache(l.key(baseFiles, b)) = r.copy(recompiled = Set.empty)
           l.current = Some(b.id -> r)
           r
       if !r0.ok then
