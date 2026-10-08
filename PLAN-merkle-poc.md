@@ -49,6 +49,8 @@ The first runs' wall times (with `apiDebug` on) are void: it diffed and logged e
 
 Surveys (source-level, approximate, in the scratchpad's survey.py): Pekko's cross-module inheritance is mostly traits (346 cross-module descendant edges vs 83 from classes). Spark has deep class hierarchies (`TreeNode` 261 descendants, `Expression` 257), mostly inside `sql/catalyst`; its cross-module reach is dominated by traits (`Logging`, 694 descendants across 23 modules).
 
+- **Decision (2026-10-09): macros that observe more than the public API are outside Zinc's contract**, possibly to be revisited. A macro may observe any type, not only its type arguments, so the macro-expansion dependency on type arguments is a heuristic for the common derivation shape, not a cover. The conformance harness's \`macro-observes-private-member\` (a macro listing a class's private members) is kept as a pending test on \`claude/merkle-baseline-bugs\`. Options considered: a private-member hash per class, triggering macro clients only; invalidating macro clients on any bytecode change of an observed class; recording what the macro reads (sbt/zinc#1478).
+
 TODO:
 
 - Real corpus: drive IncBench from sbt-bloop exports, starting with Spark catalyst/sql.
