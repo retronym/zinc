@@ -240,9 +240,9 @@ private[inc] class IncrementalNameHashingCommon(
     val reason3 = s"The invalidated class names refer directly or transitively to $modifiedClass."
     profiler.registerEvent(MemberReferenceKind, transitiveInheritance, memberRef, reason3)
 
-    val macroExpansion = invalidateByMacroExpansion(relations, modifiedClass)
+    val macroExpansion = descendants.flatMap(invalidateByMacroExpansion(relations, _))
     val reason4 = s"The invalidated class is touched by macro expansion in ${modifiedClass}"
-    profiler.registerEvent(MacroExpansionKind, List(modifiedClass), macroExpansion, reason4)
+    profiler.registerEvent(MacroExpansionKind, descendants, macroExpansion, reason4)
 
     val all = transitiveInheritance ++ localInheritance ++ memberRef ++ macroExpansion
     invalidationLog.debug(
