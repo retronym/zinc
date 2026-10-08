@@ -2,7 +2,7 @@
 
 Context: talk §7–11 (Zinc Incrementality). Today `ExtractAPI.mkStructureWithInherited` materialises every inherited member into each class's `Structure`, so editing an ancestor changes every descendant's name hashes, and Zinc recompiles the whole hierarchy just to refresh them. The Merkle alternative stores decls only and composes a descendant's per-name hash from its ancestors', so an ancestor edit recompiles clients, not the hierarchy.
 
-Ground rules: Scala 2 with the in-repo compiler bridge (scripted's default `2.12.x` label). No compat: this worktree *is* the B side; a sibling worktree on `1.x` is the A side. The `descendantRules` incOption also gives an in-build A/B (`all` = previous behaviour). Java (`ClassToAPI`) and Scala 3 are out of scope.
+Ground rules: Scala 2 with the in-repo compiler bridge (scripted's default `2.12.x` label). No compat: this worktree *is* the B side, based on sbt/zinc `develop`; the A side is `claude/merkle-baseline` (`develop` plus the IncBench commits only, worktree `merkle-baseline`). The `descendantRules` incOption also gives an in-build A/B (`all` = previous behaviour). Java (`ClassToAPI`) and Scala 3 are out of scope.
 
 ## Status
 
@@ -31,7 +31,7 @@ What implementing it taught us, which changes decisions 1–3:
 
 ## Benchmark (IncBench, synthetic)
 
-`zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and stored size; `bin/incbench-report.py` renders an HTML comparison (published: https://claude.ai/artifact/7i7oZAGogR2efBfJWMH3ko). A = `1.x` plus the harness commits (worktree `merkle-baseline`), B = this branch. Timed with `apiDebug` off; extraction counted in a separate untimed pass. The tree: 4 modules, depth 8, fan-out 2, 511 classes with 30 methods each, a client of every class and of every leaf (1,279 compiled in all); medians of 3.
+`zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and stored size; `bin/incbench-report.py` renders an HTML comparison (published: https://claude.ai/artifact/7i7oZAGogR2efBfJWMH3ko). A = sbt/zinc `develop` plus the harness commits (`claude/merkle-baseline`), B = this branch. Timed with `apiDebug` off; extraction counted in a separate untimed pass. The tree: 4 modules, depth 8, fan-out 2, 511 classes with 30 methods each, a client of every class and of every leaf (1,279 compiled in all); medians of 3.
 
 | edit | A recompiled | B recompiled | rounds A→B | wall A→B |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ What implementing it taught us, which changes decisions 1–3:
 | root: body only | 1 | 1 | 1→1 | 0.49 s→0.46 s |
 | warm clean build (reference) | 1,279 | 1,279 | 4→4 | 18.0 s→17.1 s |
 
-On `1.x`, adding a member nobody uses to the root takes longer than a clean build. With a trait root, B recompiles 7 classes in 2 rounds (0.80 s), A the same 511 in 5.
+On `develop`, adding a member nobody uses to the root takes longer than a clean build. With a trait root, B recompiles 7 classes in 2 rounds (0.80 s), A the same 511 in 5.
 
 Stored after a clean build: inherited definitions extracted 132,901→24,301 (−82%; the rest are `Any`/`AnyRef` members), name hashes 148,233→39,633 (−73%), analysis on disk 1.22 MB→0.73 MB (−40%, including the new decl stubs).
 
@@ -51,13 +51,40 @@ Surveys (source-level, approximate, in the scratchpad's survey.py): Pekko's cros
 
 - **Decision (2026-10-09): macros that observe more than the public API are outside Zinc's contract**, possibly to be revisited. A macro may observe any type, not only its type arguments, so the macro-expansion dependency on type arguments is a heuristic for the common derivation shape, not a cover. The conformance harness's `macro-observes-private-member` (a macro listing a class's private members) is kept as a pending test on `claude/merkle-baseline-bugs`. Options considered: a private-member hash per class, triggering macro clients only; invalidating macro clients on any bytecode change of an observed class; recording what the macro reads (sbt/zinc#1478).
 
+## Benchmark (IncBench, Spark 4.0.1 `sql/catalyst`)
+
+2,527 classes in one module, dependencies from published jars (`--build`/`--edits` mode), pipelining off, one repetition. Report: https://claude.ai/artifact/5zosHgbDvNpZ2xkX7psq16.
+
+| edit | A: recompiled, rounds, wall | B: recompiled, rounds, wall |
+|---|---|---|
+| `TreeNode`: body only | 10, 1, 0.78 s | 10, 1, 0.74 s |
+| `TreeNode`: add an unused member | 1,371, 3, 14.4 s | 420, 2, 4.5 s |
+| `Expression`: add an unused member | 1,200, 3, 10.7 s | 388, 2, 3.4 s |
+| `TreeNode`: add `java.io.Serializable` to its parents | 2,304, 4, 29.0 s | 1,987, 3, 22.7 s |
+| `Expression`: add `java.io.Serializable` to its parents | 1,897, 3, 18.1 s | 1,897, 2, 10.4 s |
+| clean build, warm | 2,527, 1, 11.4 s | 2,527, 1, 11.1 s |
+
+Stored: name hashes 212,389 → 90,711 before the library stubs, 94,046 after; analysis 1.88 MB → 1.43 MB (1.45 MB after).
+
+The corpus found three overcompilations the scripted suite had not, each recompiling most of catalyst: header comparison by `equals` on types with lazy parts (now by `HashAPI`), a `mirror` rule that fired for every case class's companion (now only objects that themselves extend the changed class), and a trait's `extraHash` folding in its *class* parents' (now trait parents only; this predates the PoC). With pipelining on, every Java source's API also looked fully changed on each compile, so catalyst runs use `pipelining=false`.
+
+## Holes found by review (2026-10-09)
+
+- DONE **Test discovery.** sbt's annotated-test discovery reads inherited methods' annotations (`savedAnnotations`); a JUnit `@Test` in a base class was lost. The bridge keeps annotated inherited members; the `annotated` rule refreshes descendants (`merkle-discovery`, `merkle-discovery-added`).
+- DONE **Library ancestors seen only through materialised members.** A library class has no stored API, and an overridden library member was not in the descendant's either, so `abstract` and `conflicts` were blind to it (`merkle-lib-abstract`, `merkle-lib-abstract-other-path`, `merkle-lib-conflict`). The bridge stubs overridden library declarations and platform members (`Any`, `AnyRef`, scala-library, scala-reflect); the minimized API keeps abstract inherited stubs. This adds name hashes rather than removing them: minimization already drops inherited definitions, and the stored record of inherited names is the name hashes.
+- DONE **Tests ran on full APIs.** Scripted defaults to `apiDebug`; Zinc stores minimized APIs. The `merkle-*` tests now set `apiDebug = false`, and so does the conformance harness.
+- DONE **Header edits.** Measured above: not worse than develop, but expensive on both sides, because the class-name hash moves for every client naming the class.
+- **Library members are still materialised for third-party jars.** Only they let Java and macro clients, which record no owner, see a library ancestor's change through a descendant. The consistent fix is a per-class ABI hash for library classes, composed like an analysed ancestor's.
+- **Rule completeness against scalac** is tested empirically only: specialization, optimizer inlining across classes (`-opt:inline`), value classes over universal traits, and Scala 3 (`export` forwarders, `inline`, trait parameters) are unprobed.
+- **Invalidation cost** of the rules per descendant is unmeasured, as is bridge extraction time.
+
 TODO:
 
-- Real corpus: drive IncBench from sbt-bloop exports, starting with Spark catalyst/sql.
-- Narrow `trait` to descendants that mix the trait in directly (forwarders live only there).
-- 4b differential test (incremental vs clean bytes); IncBench can compare against a clean build per edit.
-- Lean: see the chip; feed it the findings above.
-- Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`;  header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change.
+- Measure bridge extraction time (the platform stubs' benefit) and Zinc's invalidation time.
+- Name-filter the header path by the names whose as-seen-from rendering changed.
+- Per-class ABI hashing of library classes.
+- Cross-module real corpus (catalyst + sql/core).
+- Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`; header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change; the bridge cache in `~/.ivy2/local` is shared between worktrees, so runs take turns.
 
 ## Key decisions
 
