@@ -1,0 +1,10 @@
+# Outside Zinc's contract (decided 2026-10-09, may be revisited): a macro may observe any type,
+# not only its type arguments, and anything about it beyond the public API. Zinc records a
+# macro-expansion dependency on the type arguments and invalidates on their API changes only, so
+# a private member the macro lists is not tracked. Use a clean build, or recompileOnMacroDef.
+> app/run true
+
+# A loses a private member, which is not part of its API. The macro in W reads it, so W must
+# recompile, but no API change is detected.
+$ copy-file app/changes/A.scala app/A.scala
+> app/run false
