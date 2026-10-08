@@ -103,6 +103,19 @@ private[inc] final class HierarchyView(
   def isObject(className: String): Boolean =
     api(className).exists(c => !isEmpty(c.api().objectApi()))
 
+  /**
+   * Whether the object side of `className` has `ancestor` in its linearization. A case class's
+   * companion object does not, so it gets no forwarders for the class's inherited members.
+   */
+  def objectInherits(className: String, ancestor: String): Boolean =
+    api(className).exists { c =>
+      val obj = c.api().objectApi()
+      !isEmpty(obj) &&
+      obj.structure.parents.iterator
+        .flatMap(MerkleHashes.typeName)
+        .contains(ancestor)
+    }
+
   def isTopLevel(className: String): Boolean = classLikes(className).exists(_.topLevel)
 
   def isTrait(className: String): Boolean =
@@ -189,9 +202,14 @@ private[inc] object DescendantRules:
     if view.isTrait(change.className) then Some(s"mixes in trait ${change.className}") else None
   }
 
-  /** A top-level object's mirror or companion class has static forwarders for every member. */
-  val mirror: DescendantRule = rule("mirror") { (view, d, _) =>
-    if view.isObject(d) && view.isTopLevel(d) then Some("static forwarders") else None
+  /**
+   * A top-level object's mirror or companion class has static forwarders for every member,
+   * including those it inherits from the changed class.
+   */
+  val mirror: DescendantRule = rule("mirror") { (view, d, change) =>
+    if view.isTopLevel(d) && view.objectInherits(d, change.className) then
+      Some("static forwarders")
+    else None
   }
 
   /** Name hashing's own fallbacks: a changed implicit member. */

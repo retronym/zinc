@@ -67,11 +67,13 @@ private[inc] object MerkleHashes:
    * object's ancestors only count when there is no class side: a subclass inherits from the class.
    */
   def linearization(c: AnalyzedClass): Vector[String] =
-    def name(t: Type): Option[String] = t match
-      case p: Parameterized => name(p.baseType)
-      case t                => Discovery.simpleName(t)
     val classParents = c.api().classApi().structure.parents
     val parents =
       if classParents.nonEmpty then classParents else c.api().objectApi().structure.parents
-    parents.iterator.flatMap(name).distinct.toVector
+    parents.iterator.flatMap(typeName).distinct.toVector
+
+  /** The class a parent type names, dropping type arguments. */
+  def typeName(t: Type): Option[String] = t match
+    case p: Parameterized => typeName(p.baseType)
+    case t                => Discovery.simpleName(t)
 end MerkleHashes

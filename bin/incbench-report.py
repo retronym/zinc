@@ -61,8 +61,12 @@ def tree_section(a_path, b_path):
     a, b = load(a_path), load(b_path)
     first = a['clean'][0]
     la, lb = first['label'], b['clean'][0]['label']
-    shape = (f"{first['classes']} classes over {first['modules']} modules, depth {first['depth']}, "
-             f"fan-out {first['fanOut']}, {'trait' if first['trait'] else 'abstract class'} root")
+    if 'depth' in first:
+        shape = (f"{first['classes']} classes over {first['modules']} modules, depth {first['depth']}, "
+                 f"fan-out {first['fanOut']}, {'trait' if first['trait'] else 'abstract class'} root")
+    else:
+        shape = (f"{first.get('build', 'build')}: {first['classes']} classes over "
+                 f"{len(first['modules'])} module(s)")
     rows = []
     ref_a = med(a['clean-build'], 'wallMillis') if 'clean-build' in a else None
     ref_b = med(b['clean-build'], 'wallMillis') if 'clean-build' in b else None

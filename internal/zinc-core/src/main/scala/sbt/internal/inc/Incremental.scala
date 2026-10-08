@@ -1146,12 +1146,25 @@ private final class AnalysisCallback(
             memo.put(className, hash)
             hash
 
+    /**
+     * Only trait parents carry private members into a trait's implementors. A class parent's
+     * extraHash is its whole API hash, so folding it in reported every public change to it as a
+     * private change to each trait extending it.
+     */
+    private def isTrait(className: String): Boolean =
+      apis.get(className) match
+        case Some(info) => info.classLike.definitionType == DefinitionType.Trait
+        case None       =>
+          previousApis.get(className).forall(_.api().classApi().definitionType ==
+            DefinitionType.Trait)
+
     private def compute(className: String): HashAPI.Hash =
       apis.get(className) match
         case Some(info) if info.classLike.definitionType == DefinitionType.Trait =>
           visiting += className
           try
-            val parents = internalParents.getOrElse(className, Set.empty).map(apply) ++
+            val traitParents = internalParents.getOrElse(className, Set.empty).filter(isTrait)
+            val parents = traitParents.map(apply) ++
               externalParentHashes.getOrElse(className, Set.empty)
             (parents + info.extraHash).hashCode()
           finally visiting -= className
