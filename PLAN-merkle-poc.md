@@ -25,10 +25,31 @@ What implementing it taught us, which changes decisions 1–3:
 - **Macro-expansion edges must also be followed from every descendant** (`merkle-move-ancestor-downstream-macro`; Lean: T2-stale, since a macro client's key covers the whole receiver class). All four internal edge kinds (inheritance, local inheritance, memberRef, macro expansion) now range over the descendant closure.
 - **`merkle-trait` doesn't discriminate.** A missing mixin forwarder is invisible at runtime when the JVM resolves the trait's default method. It only shows when the trait overrides a class member, since class methods win resolution (`merkle-trait-override`). In general, behaviour-level checks are a weak oracle for bytecode differences, which argues again for 4b.
 
+- **Cross-module.** The rules now also filter descendants of an *upstream* changed class (`invalidateClassesExternally`), with ancestors found through stored linearizations and `MerkleHashes` composing across subprojects' analyses. `merkle-x-*` repeat the per-rule tests with the ancestor upstream; `none` fails the six negative ones. Two more fixes fell out:
+  - a descendant's API materialises an upstream ancestor's members, so `conflicts` must subtract all of the changed class's names;
+  - with pipelining, a downstream sees no bytecode hash, so `MerkleHashes` adds the top-level header that `HashAPI` omits.
+
+## Benchmark (IncBench, synthetic)
+
+`zincScripted/Test/runMain sbt.internal.inc.bench.IncBench` generates an inheritance tree spread across modules, applies each edit, and records per module the rounds, classes recompiled, wall time and analysis size. A = `1.x` plus the harness commit (worktree `merkle-baseline`), B = this branch. The tree: 4 modules, depth 6, fan-out 2, 127 classes (m0 3, m1 12, m2 48, m3 64), a client of every class and of every leaf; medians of 3.
+
+| edit | A recompiled | B recompiled | rounds A→B | wall A→B |
+|---|---|---|---|---|
+| root: add member | 127 | 1 | 5→1 | 16.9 s→2.7 s |
+| root: add overload of used member | 318 | 192 (just the clients) | 5→5 | 17.3 s→3.1 s |
+| mid-level: add member | 15 | 1 | 3→1 | 2.2 s→0.4 s |
+| root: body only | 1 | 1 | 1→1 | 0.1 s |
+
+With a trait root, adding a member recompiles 3 instead of 127: the root and the two classes that mix it in directly, which hold the forwarders. Analysis size barely moves (246→234 KB), because members inherited from *upstream* modules are still materialised.
+
+Surveys (source-level, approximate, in the scratchpad's survey.py): Pekko's cross-module inheritance is mostly traits (346 cross-module descendant edges vs 83 from classes). Spark has deep class hierarchies (`TreeNode` 261 descendants, `Expression` 257), mostly inside `sql/catalyst`; its cross-module reach is dominated by traits (`Logging`, 694 descendants across 23 modules).
+
 TODO:
 
-- 4b differential test (incremental vs clean bytes).
-- Performance deliverable.
+- Real corpus: drive IncBench from sbt-bloop exports, starting with Spark catalyst/sql.
+- Stop materialising members from upstream *analysed* modules (only from plain library jars), for the analysis-size win.
+- Narrow `trait` to descendants that mix the trait in directly (forwarders live only there).
+- 4b differential test (incremental vs clean bytes); IncBench can compare against a clean build per edit.
 - Lean: see the chip; feed it the findings above.
 - Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`;  header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change.
 
