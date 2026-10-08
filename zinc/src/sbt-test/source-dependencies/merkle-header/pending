@@ -1,5 +1,0 @@
-> compile
-
-$ copy-file changes/A.scala A.scala
-# HashAPI does not hash a top-level class's own modifiers, so B is not recompiled
--> compile

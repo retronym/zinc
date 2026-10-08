@@ -18,6 +18,9 @@ import xsbti.compile.IncOptions
 import xsbti.api.{ AnalyzedClass, DefinitionType }
 import xsbt.api.SameAPI
 
+import scala.collection.mutable
+import scala.util.Try
+
 /**
  * Implement the name hashing heuristics to invalidate classes.
  *
@@ -37,6 +40,19 @@ private[inc] class IncrementalNameHashingCommon(
 
   private val memberRefInvalidator =
     new MemberRefInvalidator(log, invalidationLog, options.logRecompileOnMacro())
+
+  private val descendantRules = DescendantRules.fromOptions(options)
+  private var currentAPI: String => Option[AnalyzedClass] = _ => None
+  private val ancestorChanges = mutable.HashMap.empty[String, AncestorChange]
+
+  override def detectAPIChanges(
+      recompiledClasses: collection.Set[String],
+      oldAPI: String => AnalyzedClass,
+      newAPI: String => AnalyzedClass
+  ): APIChanges =
+    currentAPI = name => Try(newAPI(name)).toOption
+    ancestorChanges.clear()
+    super.detectAPIChanges(recompiledClasses, oldAPI, newAPI)
 
   /** @inheritdoc */
   protected def invalidatedPackageObjects(
@@ -73,7 +89,8 @@ private[inc] class IncrementalNameHashingCommon(
       a: AnalyzedClass,
       b: AnalyzedClass
   ): Option[APIChange] =
-    if SameAPI(a, b) then
+    val headerChanged = AncestorChange(className, a, b, ModifiedNames(Set.empty)).headerChanged
+    if SameAPI(a, b) && !headerChanged then
       if SameAPI.hasSameExtraHash(a, b) then None
       else
         val isATrait = a.api().classApi().definitionType() == DefinitionType.Trait
@@ -92,8 +109,11 @@ private[inc] class IncrementalNameHashingCommon(
       val aNameHashes = a.nameHashes
       val bNameHashes = b.nameHashes
       val modifiedNames = ModifiedNames.compareTwoNameHashes(aNameHashes, bNameHashes)
+      ancestorChanges(className) = AncestorChange(className, a, b, modifiedNames)
       val apiChange = NamesChange(className, modifiedNames)
       Some(apiChange)
+    end if
+  end findAPIChange
 
   /** @inheritdoc */
   override protected def invalidateClassesExternally(
@@ -200,16 +220,23 @@ private[inc] class IncrementalNameHashingCommon(
     val modifiedClass = change.modifiedClass
     val memberRefInv = memberRefInvalidator.get(_, relations.names, change, isScalaClass)
 
-    val transitiveInheritance = invalidateByInheritance(relations, modifiedClass)
+    val descendants = invalidateByInheritance(relations, modifiedClass)
+    val ancestorChange = ancestorChanges.get(modifiedClass)
+    val transitiveInheritance =
+      filterDescendants(relations, modifiedClass, ancestorChange, descendants, isScalaClass)
     val reason1 = s"The invalidated class names inherit directly or transitively on $modifiedClass."
     profiler.registerEvent(InheritanceKind, List(modifiedClass), transitiveInheritance, reason1)
 
-    val localInheritance = transitiveInheritance.flatMap(invalidateByLocalInheritance(relations, _))
+    val localInheritance = descendants.flatMap(invalidateByLocalInheritance(relations, _))
     val reason2 =
       s"The invalidated class names inherit (via local inheritance) directly or transitively on $modifiedClass."
-    profiler.registerEvent(LocalInheritanceKind, transitiveInheritance, localInheritance, reason2)
+    profiler.registerEvent(LocalInheritanceKind, descendants, localInheritance, reason2)
 
-    val memberRef = transitiveInheritance.flatMap(memberRefInv(relations.memberRef.internal))
+    val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
+    val memberRef =
+      if ancestorChange.exists(_.headerChanged) then
+        byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
+      else byName
     val reason3 = s"The invalidated class names refer directly or transitively to $modifiedClass."
     profiler.registerEvent(MemberReferenceKind, transitiveInheritance, memberRef, reason3)
 
@@ -232,6 +259,35 @@ private[inc] class IncrementalNameHashingCommon(
     )
     all
   end invalidateClassesInternally
+
+  /**
+   * The descendants of `modifiedClass` that must recompile. Without Merkle hashing every
+   * descendant had to, to refresh its materialised members; now only those whose own
+   * compilation reads the change do, as decided by the [[DescendantRule]]s.
+   */
+  private def filterDescendants(
+      relations: Relations,
+      modifiedClass: String,
+      change: Option[AncestorChange],
+      descendants: Set[String],
+      isScalaClass: String => Boolean
+  ): Set[String] =
+    (descendantRules, change) match
+      case (Some(rules), Some(change)) if isScalaClass(modifiedClass) =>
+        val view = new HierarchyView(relations, currentAPI)
+        descendants.filter { d =>
+          d == modifiedClass || !isScalaClass(d) || {
+            val reasons = rules.flatMap(r => r(view, d, change).map(why => s"${r.name}: $why"))
+            if reasons.isEmpty then
+              invalidationLog.debug(s"Descendant $d of $modifiedClass does not read the change.")
+            else
+              invalidationLog.debug(
+                s"Descendant $d of $modifiedClass recompiles (${reasons.mkString("; ")})."
+              )
+            reasons.nonEmpty
+          }
+        }
+      case _ => descendants
 
   /** @inheritdoc */
   override protected def findClassDependencies(

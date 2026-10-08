@@ -66,7 +66,7 @@ object APIUtil:
       c.modifiers,
       c.annotations,
       c.definitionType,
-      emptyTypeLzy,
+      lzy(c.selfType),
       lzy(struct),
       savedAnnotations,
       c.childrenOfSealedClass,
@@ -74,12 +74,22 @@ object APIUtil:
       c.typeParameters
     )
 
+  /**
+   * Keeps the parents, main methods, and a stub (name, access, modifiers) of every other
+   * declaration: descendant invalidation reads which names a class declares, overrides or leaves
+   * abstract.
+   */
   def minimizeStructure(s: Structure, isModule: Boolean): Structure =
+    val mains = if isModule then s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
+    val stubs = s.declared.filterNot(mains.contains).map(stubDefinition)
     Structure.of(
       lzy(s.parents),
-      filterDefinitions(s.declared, isModule),
+      lzy(mains ++ stubs),
       filterDefinitions(s.inherited, isModule)
     )
+
+  def stubDefinition(d: ClassDefinition): ClassDefinition =
+    Def.of(d.name, d.access, d.modifiers, Array.empty, Array.empty, Array.empty, emptyType)
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean

@@ -31,6 +31,7 @@ public class IncOptionsUtil {
     public static final String TRANSITIVE_STEP_KEY = "transitiveStep";
     public static final String RECOMPILE_ALL_FRACTION_KEY = "recompileAllFraction";
     public static final String RELATIONS_DEBUG_KEY = "relationsDebug";
+    public static final String DESCENDANT_RULES_KEY = "descendantRules";
     public static final String API_DEBUG_KEY = "apiDebug";
     public static final String API_DIFF_CONTEXT_SIZE_KEY = "apiDiffContextSize";
     public static final String API_DUMP_DIRECTORY_KEY = "apiDumpDirectory";
@@ -86,6 +87,12 @@ public class IncOptionsUtil {
         if (values.containsKey(RECOMPILE_ALL_FRACTION_KEY)) {
             logger.debug(f0("RECOMPILE_ALL_FRACTION_KEY value was read."));
             base = base.withRecompileAllFraction(Double.parseDouble(values.get(RECOMPILE_ALL_FRACTION_KEY)));
+        }
+
+        if (values.containsKey(DESCENDANT_RULES_KEY)) {
+            java.util.Map<String, String> extra = new java.util.HashMap<>(base.extra());
+            extra.put(DESCENDANT_RULES_KEY, values.get(DESCENDANT_RULES_KEY));
+            base = base.withExtra(extra);
         }
 
         if (values.containsKey(RELATIONS_DEBUG_KEY)) {
