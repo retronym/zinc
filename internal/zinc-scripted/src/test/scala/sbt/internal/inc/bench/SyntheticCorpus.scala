@@ -20,7 +20,8 @@ import java.nio.file.{ Files, Path }
  * `fanOut` subclasses at depth `d + 1`, placed in module `d * modules / (depth + 1)`, so the tree
  * crosses every module boundary on the way down. Every class has a client object in the same
  * module that selects the inherited `used`, and every leaf has one in the last module. Classes
- * carry `padding` methods of their own so that recompiling one costs something.
+ * carry `padding` methods of their own, with bodies that exercise inference and collections, so
+ * that recompiling one costs something.
  */
 final case class SyntheticCorpus(
     modules: Int,
@@ -86,9 +87,13 @@ final case class SyntheticCorpus(
     for c <- leaves do
       write(dir.resolve(s"${moduleName(modules - 1)}/Far_${c.name}.scala"), clientSource(c, "Far"))
 
-  private def pad(prefix: String): String = (0 until padding).map(i =>
-    s"  def ${prefix}_pad$i(x: Int): Int = x * $i + ${i % 7}\n"
-  ).mkString
+  private def pad(prefix: String): String = (0 until padding)
+    .map(i =>
+      s"  def ${prefix}_pad$i(x: Int): Int =\n" +
+        s"    List.tabulate(x % 8 + 1)(j => (j, j * $i)).collect { case (a, b) if a < b => a + b }" +
+        s".groupBy(_ % 3).map { case (k, v) => k -> v.sum }.values.foldLeft(${i % 7})(_ + _)\n"
+    )
+    .mkString
 
   def rootSource(other: String = "0", extra: String = ""): String =
     val kw = if rootIsTrait then "trait" else "abstract class"
