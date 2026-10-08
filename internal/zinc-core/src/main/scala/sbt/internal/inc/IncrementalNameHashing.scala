@@ -42,6 +42,12 @@ private[inc] class IncrementalNameHashingCommon(
     new MemberRefInvalidator(log, invalidationLog, options.logRecompileOnMacro())
 
   private val descendantRules = DescendantRules.fromOptions(options)
+
+  /**
+   * The APIs a [[DescendantRule]] reads: this subproject's current ones, then those of upstream
+   * classes as last recorded. Members inherited from upstream subprojects are no longer
+   * materialised, so an upstream ancestor's declarations are only visible here.
+   */
   private var currentAPI: String => Option[AnalyzedClass] = _ => None
   private val ancestorChanges = mutable.HashMap.empty[String, AncestorChange]
 
@@ -50,7 +56,10 @@ private[inc] class IncrementalNameHashingCommon(
       oldAPI: String => AnalyzedClass,
       newAPI: String => AnalyzedClass
   ): APIChanges =
-    currentAPI = name => Try(newAPI(name)).toOption
+    currentAPI = name =>
+      Try(newAPI(name)).toOption
+        .filter(_ ne APIs.emptyAnalyzedClass)
+        .orElse(previousAPIs.external.get(name))
     ancestorChanges.clear()
     super.detectAPIChanges(recompiledClasses, oldAPI, newAPI)
 
@@ -317,7 +326,10 @@ private[inc] class IncrementalNameHashingCommon(
       descendants: Set[String],
       isScalaClass: String => Boolean
   ): Set[String] =
-    val api = (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
+    val api = (name: String) =>
+      previousAPIs.internal.get(
+        name
+      ).orElse(currentAPI(name)).orElse(previousAPIs.external.get(name))
     filterDescendants(relations, modifiedClass, change, descendants, isScalaClass, api, true)
 
   /** @inheritdoc */
