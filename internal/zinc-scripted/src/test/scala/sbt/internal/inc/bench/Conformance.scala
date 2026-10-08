@@ -51,6 +51,14 @@ import sjsonnew.support.scalajson.unsafe.Parser
  * }}}
  */
 object Conformance:
+  /**
+   * Scripted's default turns `apiDebug` on, which stores each class's full API. Zinc otherwise
+   * stores minimized APIs, and invalidation reads what is stored, so a rule that reads something
+   * minimization drops passes with `apiDebug` on and fails in real builds. `--inc-option
+   * apiDebug=true` still overrides this.
+   */
+  val storedApis: Map[String, String] = Map("apiDebug" -> "false")
+
   final case class Options(
       cases: Path = Paths.get("cases.jsonl"),
       dir: Path = Paths.get("target/conformance"),
@@ -424,7 +432,9 @@ object Conformance:
       val scalac =
         if base.scalacOptions.isEmpty then Map.empty
         else Map("scalac.options" -> base.scalacOptions)
-      val props = (o.incOptions ++ scalac).map((k, v) => s"$k = $v").mkString("", "\n", "\n")
+      val props = (Conformance.storedApis ++ o.incOptions ++ scalac)
+        .map((k, v) => s"$k = $v")
+        .mkString("", "\n", "\n")
       projects.foreach { p =>
         Files.createDirectories(dir.resolve(p))
         Files.writeString(dir.resolve(p).resolve("incOptions.properties"), props)
