@@ -662,6 +662,14 @@ private final class AnalysisCallback(
     incHandlerOpt: Option[Incremental.IncrementalCallback],
     log: Logger
 ) extends xsbti.AnalysisCallback4, HasCompilerPhaseListener:
+
+  private val subprojectClasses = new scala.collection.concurrent.TrieMap[String, Boolean]
+
+  override def isSubprojectClass(binaryClassName: String): Boolean =
+    subprojectClasses.getOrElseUpdate(
+      binaryClassName,
+      lookup.lookupAnalysis(binaryClassName).isDefined
+    )
   import Incremental.CompileCycleResult
 
   // This must have a unique value per AnalysisCallback

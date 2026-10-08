@@ -57,7 +57,8 @@ class ExtractAPI[GlobalType <: Global](
     // Tracks the source file associated with the CompilationUnit currently being processed by the API phase.
     // This is used when recording inheritance dependencies.
     sourceFile: VirtualFile,
-    outputDirs: Iterable[java.nio.file.Path] = Nil
+    outputDirs: Iterable[java.nio.file.Path] = Nil,
+    isSubprojectClass: String => Boolean = _ => false
 ) extends Compat
     with ClassName
     with GlobalHelpers {
@@ -482,23 +483,31 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   /**
-   * Is `owner` defined in this subproject? Zinc composes the name hashes of members inherited
-   * from such classes from their own decls, so they are not materialised here.
+   * Is `owner` defined in this subproject, or in another one that Zinc has analysed? Zinc
+   * composes the name hashes of members inherited from such classes from their own decls, so
+   * they are not materialised here. Members of plain library classes still are.
    */
   private def isInternal(owner: Symbol): Boolean =
-    owner.sourceFile match {
-      case AbstractZincFile(_) => true
-      case _                   =>
-        val at = owner.associatedFile
-        def inOutput(f: java.io.File) =
-          f != null && outputDirs.exists(d => f.toPath.toAbsolutePath.startsWith(d.toAbsolutePath))
-        at match {
-          case null                                     => false
-          case entry: scala.reflect.io.ZipArchive#Entry =>
-            entry.underlyingSource.exists(z => inOutput(z.file))
-          case f => inOutput(f.file)
-        }
-    }
+    internalCache.getOrElseUpdate(owner, isInternal0(owner))
+
+  private[this] val internalCache = perRunCaches.newMap[Symbol, Boolean]()
+
+  private def isInternal0(owner: Symbol): Boolean =
+    isSubprojectClass(flatname(owner, '.') + owner.moduleSuffix) ||
+      (owner.sourceFile match {
+        case AbstractZincFile(_) => true
+        case _                   =>
+          val at = owner.associatedFile
+          def inOutput(f: java.io.File) =
+            f != null &&
+              outputDirs.exists(d => f.toPath.toAbsolutePath.startsWith(d.toAbsolutePath))
+          at match {
+            case null                                     => false
+            case entry: scala.reflect.io.ZipArchive#Entry =>
+              entry.underlyingSource.exists(z => inOutput(z.file))
+            case f => inOutput(f.file)
+          }
+      })
 
   // Note that the ordering of classes in `baseClasses` is important.
   // It would be easier to just say `baseTypeSeq.toList.tail`,
