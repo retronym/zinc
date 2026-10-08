@@ -74,7 +74,10 @@ final case class SyntheticCorpus(
       val deps = if i == 0 then "" else s""", "dependsOn": [$upstream]"""
       s"""    { "name": "${moduleName(i)}", "scalaVersion": "$scalaVersion"$deps }"""
     }
-    write(dir.resolve("build.json"), projects.mkString("{\n  \"projects\": [\n", ",\n", "\n  ]\n}\n"))
+    write(
+      dir.resolve("build.json"),
+      projects.mkString("{\n  \"projects\": [\n", ",\n", "\n  ]\n}\n")
+    )
     write(dir.resolve(s"${moduleName(0)}/BenchMarker.scala"), s"package $pkg\nclass BenchMarker\n")
     for c <- classes do
       val src = if c.parent.isEmpty then rootSource() else classSource(c)
@@ -83,8 +86,9 @@ final case class SyntheticCorpus(
     for c <- leaves do
       write(dir.resolve(s"${moduleName(modules - 1)}/Far_${c.name}.scala"), clientSource(c, "Far"))
 
-  private def pad(prefix: String): String =
-    (0 until padding).map(i => s"  def ${prefix}_pad$i(x: Int): Int = x * $i + ${i % 7}\n").mkString
+  private def pad(prefix: String): String = (0 until padding).map(i =>
+    s"  def ${prefix}_pad$i(x: Int): Int = x * $i + ${i % 7}\n"
+  ).mkString
 
   def rootSource(other: String = "0", extra: String = ""): String =
     val kw = if rootIsTrait then "trait" else "abstract class"
