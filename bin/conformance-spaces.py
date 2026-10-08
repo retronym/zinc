@@ -93,7 +93,12 @@ def valueclass(c):
     ap = {"none": "", "V": "  def p(v: V): Int = 1\n", "Vs": "  def p(v: V): Int = 1\n  def p(i: Int): Int = 2\n"}[c["aParam"]]
     files["A.scala"] = (1, PKG + f"abstract class A{par} {{\n{am}{ap}}}\n")
     bo = {"none": "", "m": "  override def m: V = V.mk\n", "p": "  override def p(v: V): Int = 3\n"}[c["bOver"]]
-    files["B.scala"] = (2, PKG + f"class B extends A {{\n{bo}}}\n")
+    mix = {"none": "", "N": " with N"}[c["bMix"]]
+    files["N.scala"] = (1, PKG + "trait N {\n  def n: V = V.mk\n  def q(v: V): Int = 1\n}\n")
+    files["B.scala"] = (2, PKG + f"class B extends A{mix} {{\n{bo}}}\n")
+    obj = {"none": "", "O": "object O extends B\n"}[c["oObj"]]
+    if obj:
+        files["O.scala"] = (2, PKG + obj)
     x = {
         "m": "  def f(a: A) = a.m\n",
         "pB": "  def f(b: B) = b.p(V.mk)\n",
@@ -112,6 +117,8 @@ VALUECLASS = dict(
         aParam=["none", "V", "Vs"],
         bOver=["none", "m", "p"],
         xUse=["m", "pB", "mM"],
+        bMix=["none", "N"],
+        oObj=["none", "O"],
     ),
     render=valueclass,
 )
