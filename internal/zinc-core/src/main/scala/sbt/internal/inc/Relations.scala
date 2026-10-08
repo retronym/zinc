@@ -187,9 +187,7 @@ trait Relations:
    * by member reference excluding excluding same-source references.
    *
    * NOTE: All inheritance dependencies are included in this relation because in order to
-   * inherit from a member you have to refer to it. If you check documentation of `inheritance`
-   * you'll see that there's small oddity related to traits being the first parent of a
-   * class/trait that results in additional parents being introduced due to normalization.
+   * inherit from a member you have to refer to it.
    *
    * Because `inheritance` includes same-source references, `memberRef` is not a superset of `inheritance`
    */
@@ -200,28 +198,12 @@ trait Relations:
    * The dependency by inheritance is introduced when a template (class or trait) mentions
    * a given type in a parent position.
    *
-   * NOTE: Due to an oddity in how Scala's type checker works there's one unexpected dependency
-   * on a class being introduced. An example illustrates the best the problem. Let's consider
-   * the following structure:
-   *
-   * trait A extends B
-   * trait B extends C
-   * trait C extends D
-   * class D
-   *
-   * We are interested in dependencies by inheritance of `A`. One would expect it to be just `B`
-   * but the answer is `B` and `D`. The reason is because Scala's type checker performs a certain
-   * normalization so the first parent of a type is a class. Therefore the example above is normalized
-   * to the following form:
-   *
-   * trait A extends D with B
-   * trait B extends D with C
-   * trait C extends D
-   * class D
-   *
-   * Therefore if you inherit from a trait you'll get an additional dependency on a class that is
-   * resolved transitively. You should not rely on this behavior, though.
-   *
+   * The Scala 2 compiler bridge records a dependency on every ancestor of the template, not just
+   * its parents. Invalidation follows this relation transitively within a project, but crosses
+   * into a project only through a direct edge on the external class. A change to an upstream
+   * grandparent can be invisible in the upstream parent's API, for example when only the erasure
+   * of an inherited member changes, and yet require a downstream subclass to be recompiled to
+   * emit a bridge method. Bridges that record only parents miss such changes.
    */
   private[inc] def inheritance: ClassDependencies
 

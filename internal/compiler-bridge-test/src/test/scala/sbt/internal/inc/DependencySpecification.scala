@@ -27,9 +27,9 @@ class DependencySpecification
     assert(inheritance("E") === Set.empty)
     assert(memberRef("F") === Set("A", "B", "D", "E", "G", "C")) // C is the underlying type of MyC
     assert(inheritance("F") === Set("A", "E"))
-    assert(memberRef("H") === Set("B", "E", "G"))
+    assert(memberRef("H") === Set("B", "D", "E", "G"))
     // aliases and applied type constructors are expanded so we have inheritance dependency on B
-    assert(inheritance("H") === Set("B", "E"))
+    assert(inheritance("H") === Set("B", "D", "E"))
   }
 
   it should "extract class dependencies from local members" in {
@@ -64,9 +64,19 @@ class DependencySpecification
     // the invariant that says that memberRef is superset of inheritance relation is preserved
     assert(memberRef("C") === Set("A", "B"))
     assert(inheritance("C") === Set("A", "B"))
-    // same as above but indirect (C -> B -> A), note that only A is visible here
-    assert(memberRef("D") === Set("A", "C"))
-    assert(inheritance("D") === Set("A", "C"))
+    // every ancestor is recorded, so B is included even though D only names C
+    assert(memberRef("D") === Set("A", "B", "C"))
+    assert(inheritance("D") === Set("A", "B", "C"))
+  }
+
+  it should "record an inheritance dependency on every ancestor" in {
+    val deps = extractDependenciesFromSrcs(
+      "trait M[T]",
+      "abstract class A extends M[Int]",
+      "class B extends A"
+    )
+    assert(deps.inheritance("B") === Set("A", "M"))
+    assert(deps.memberRef("B") === Set("A", "M"))
   }
 
   it should "extract class dependencies from macro arguments" in {

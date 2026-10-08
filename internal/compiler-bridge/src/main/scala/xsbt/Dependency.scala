@@ -498,7 +498,10 @@ final class Dependency(val global: CallbackGlobal) extends LocateClassFile with 
               .map(_.fullName)
         )
 
-        inheritanceSymbols.foreach { symbol =>
+        // Inheritance is invalidated transitively only within a project, so depend on every
+        // ancestor, not just the parents. A change to an upstream grandparent can be invisible
+        // in the parent's API (e.g. the erasure of an inherited member) yet require a bridge here.
+        inheritanceSymbols.flatMap(_.baseClasses).foreach { symbol =>
           addInheritanceDependency(symbol)
           addDependency(symbol)
         }
