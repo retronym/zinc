@@ -477,11 +477,17 @@ class ExtractAPI[GlobalType <: Global](
     val decls = info.decls.toList
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
     val declSet = decls.toSet
-    val inherited =
-      info.nonPrivateMembers.toList.filter(m =>
-        !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty)
-      )
-    mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
+    val (inherited, platform) =
+      info.nonPrivateMembers.toList
+        .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
+        .partition(m => !isPlatform(m.owner) || discoveryReads(m))
+    mkStructure(
+      s,
+      ancestorTypes,
+      declsNoModuleCtor,
+      inherited,
+      (platform ++ overriddenLibraryDecls(info, declSet, inherited ++ platform)).flatMap(stub)
+    )
   }
 
   /**
@@ -495,6 +501,29 @@ class ExtractAPI[GlobalType <: Global](
     internalCache.getOrElseUpdate(owner, isInternal0(owner))
 
   private[this] val internalCache = perRunCaches.newMap[Symbol, Boolean]()
+
+  /**
+   * Is `owner` part of the platform: `Any`, `AnyRef`/`Object`, or a class of scala-library or
+   * scala-reflect? Those change only with the Scala version, which recompiles everything, or
+   * (for `Object`) not at all, so their members are materialised as stubs without types (`==`,
+   * `hashCode`, `Product`'s members in each case class). Other JDK classes are not included: a
+   * JDK upgrade need not recompile, and it can add inherited members.
+   */
+  private def isPlatform(owner: Symbol): Boolean =
+    platformCache.getOrElseUpdate(owner, isPlatform0(owner))
+
+  private[this] val platformCache = perRunCaches.newMap[Symbol, Boolean]()
+
+  private def isPlatform0(owner: Symbol): Boolean =
+    owner == definitions.AnyClass || owner == definitions.AnyRefClass ||
+      owner == definitions.ObjectClass ||
+      (owner.associatedFile match {
+        case entry: scala.reflect.io.ZipArchive#Entry =>
+          entry.underlyingSource.exists { jar =>
+            jar.name.startsWith("scala-library") || jar.name.startsWith("scala-reflect")
+          }
+        case _ => false
+      })
 
   private def isInternal0(owner: Symbol): Boolean =
     isSubprojectClass(flatname(owner, '.') + owner.moduleSuffix) ||
@@ -522,14 +551,62 @@ class ExtractAPI[GlobalType <: Global](
       s: Symbol,
       bases: List[Type],
       declared: List[Symbol],
-      inherited: List[Symbol]
+      inherited: List[Symbol],
+      stubs: List[xsbti.api.ClassDefinition] = Nil
   ): xsbti.api.Structure = {
     xsbti.api.Structure.of(
       lzy(types(s, bases)),
       lzy(processDefinitions(s, declared)),
-      lzy(processDefinitions(s, inherited))
+      lzy(processDefinitions(s, inherited) ++ stubs.sortBy(_.name))
     )
   }
+
+  /**
+   * Declarations of library ancestors that another ancestor overrides, which `nonPrivateMembers`
+   * leaves out. Descendant invalidation needs them: when `class D extends P with LibT` and `P`
+   * stops implementing `LibT`'s abstract `n`, `D` must recompile, and a library class has no
+   * stored API to show that `n` is abstract there. One stub per name, abstract if any is.
+   */
+  private def overriddenLibraryDecls(
+      info: Type,
+      declSet: Set[Symbol],
+      present: List[Symbol]
+  ): List[Symbol] = {
+    val presentNames = (present ++ declSet).map(_.name).toSet
+    val candidates = for {
+      bc <- info.baseClasses.drop(1) if !isInternal(bc)
+      m <- bc.info.decls.toList
+      if !m.isPrivate && !m.isConstructor && !presentNames(m.name)
+    } yield m
+    candidates.groupBy(_.name).values.toList.map { ms =>
+      ms.find(_.isDeferred).getOrElse(ms.head)
+    }
+  }
+
+  /** Test and main-class discovery read inherited annotations and `main` signatures. */
+  private def discoveryReads(m: Symbol): Boolean = m.annotations.nonEmpty || m.name == nme.main
+
+  /**
+   * A platform member as a name with its access and modifiers, but no types: descendant
+   * invalidation still sees which names a class inherits, and which are abstract, without
+   * paying for their signatures.
+   */
+  private def stub(m: Symbol): Option[xsbti.api.ClassDefinition] =
+    if (isClass(m) || m.isNonClassType || (m.isMethod && (!m.isSourceMethod || m.isSetter))) None
+    else {
+      val name = if (m.isMethod) simpleNameForMethod(m) else simpleName(m)
+      Some(
+        xsbti.api.Def.of(
+          name,
+          getAccess(m),
+          getModifiers(m),
+          Array.empty,
+          Array.empty,
+          Array.empty,
+          Constants.emptyType
+        )
+      )
+    }
   private def processDefinitions(in: Symbol, defs: List[Symbol]): Array[xsbti.api.ClassDefinition] =
     sort(defs.toArray).flatMap((d: Symbol) => definition(in, d))
   private[this] def sort(defs: Array[Symbol]): Array[Symbol] = {

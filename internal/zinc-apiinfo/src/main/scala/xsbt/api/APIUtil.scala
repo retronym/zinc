@@ -75,17 +75,21 @@ object APIUtil:
     )
 
   /**
-   * Keeps the parents, main methods, and a stub (name, access, modifiers, annotations) of every
-   * other declaration: descendant invalidation reads which names a class declares, overrides,
-   * leaves abstract or annotates.
+   * Keeps the parents, main methods, a stub (name, access, modifiers, annotations) of every
+   * other declaration, and a stub of each abstract inherited member: descendant invalidation
+   * reads which names a class declares, overrides, leaves abstract or annotates, and which names
+   * it inherits abstract from library ancestors, which have no stored API of their own.
    */
   def minimizeStructure(s: Structure, isModule: Boolean): Structure =
     val mains = if isModule then s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
     val stubs = s.declared.filterNot(mains.contains).map(stubDefinition)
+    val inheritedMains = filterDefinitions(s.inherited, isModule).get
+    val abstractInherited =
+      s.inherited.filter(d => d.modifiers.isAbstract && !inheritedMains.contains(d))
     Structure.of(
       lzy(s.parents),
       lzy(mains ++ stubs),
-      filterDefinitions(s.inherited, isModule)
+      lzy(inheritedMains ++ abstractInherited.map(stubDefinition))
     )
 
   def stubDefinition(d: ClassDefinition): ClassDefinition =

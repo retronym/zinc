@@ -89,6 +89,25 @@ private[inc] final class HierarchyView(
     api(className).fold(Set.empty[String])(_.nameHashes.iterator.map(_.name).toSet) --
       declaredNames(className) - simpleName(className)
 
+  /**
+   * Names a class has from library ancestors: its name hashes minus its decls. Stored APIs keep
+   * no inherited definitions apart from abstract stubs, so the name hashes are the record.
+   */
+  def inheritedNames(c: AnalyzedClass): Set[String] =
+    c.nameHashes.iterator.map(_.name).toSet --
+      sides(c).iterator.flatMap(_.structure.declared.iterator.map(_.name)) -
+      simpleName(c.name)
+
+  /** Inherited names that are abstract, including stubs of overridden library declarations. */
+  def inheritedDeferred(c: AnalyzedClass): Set[String] =
+    sides(c).iterator
+      .flatMap(_.structure.inherited.iterator)
+      .collect { case m if m.modifiers.isAbstract => m.name }
+      .toSet
+
+  private def sides(c: AnalyzedClass): List[ClassLike] =
+    List(c.api().classApi(), c.api().objectApi())
+
   def allNames(className: String): Set[String] =
     api(className).fold(Set.empty[String])(_.nameHashes.iterator.map(_.name).toSet)
 
@@ -181,14 +200,15 @@ private[inc] object DescendantRules:
   /**
    * Members of the same name inherited along another path must be reconciled with the changed
    * one. Ancestors of the changed class are on its own path and were checked when it compiled.
-   * A descendant's API materialises members from upstream subprojects, so every name of the
-   * changed class is excluded from those, not only the ones it inherits.
+   * Members a descendant has from library ancestors on the changed class's own path, which the
+   * changed class's API also lists as inherited, were checked when it compiled.
    */
   val conflicts: DescendantRule = rule("conflicts") { (view, d, change) =>
     val p = change.className
     val otherPath = view.ancestors(d) - p -- view.ancestors(p)
     val internal = otherPath.flatMap(view.declaredNames)
-    val external = view.externallyInheritedNames(d) -- view.allNames(p)
+    val external = view.externallyInheritedNames(d) --
+      view.inheritedNames(change.before) -- view.inheritedNames(change.after)
     onNames(hit(internal ++ external, change), "also inherits")
   }
 
@@ -206,7 +226,10 @@ private[inc] object DescendantRules:
     if !view.isConcrete(d) then None
     else
       val inAncestors = view.ancestors(d).iterator.flatMap(view.api).flatMap(deferred).toSet
-      val candidates = deferred(change.before) ++ deferred(change.after) ++ inAncestors
+      val fromLibraries = view.api(d).toSet.flatMap(view.inheritedDeferred) ++
+        view.inheritedDeferred(change.before) ++ view.inheritedDeferred(change.after)
+      val candidates =
+        deferred(change.before) ++ deferred(change.after) ++ inAncestors ++ fromLibraries
       onNames(hit(candidates, change), "must implement")
   }
 
