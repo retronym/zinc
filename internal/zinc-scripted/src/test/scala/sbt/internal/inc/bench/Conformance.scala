@@ -110,16 +110,59 @@ object Conformance:
   /** The cfg as named factors: the dump's `factors`, or else the fields of `cfg`. */
   type Factors = Seq[(String, String)]
 
-  final case class EditCase(cls: String, cfg: String, factors: Factors, prog: Prog, model: String)
+  /**
+   * An edit: either a whole program (`prog`, from the Lean model) or the files it changes
+   * (`files`, a file's new source or `None` to delete it).
+   */
+  final case class EditCase(
+      cls: String,
+      cfg: String,
+      factors: Factors,
+      prog: Prog,
+      model: String,
+      files: Map[String, Option[String]] = Map.empty,
+  )
 
+  /**
+   * A base program, as a `prog` or as source `files`. A file's tier places it: 0 in a `macros`
+   * subproject upstream of everything, 1 upstream in the `split` layout, 2 downstream.
+   * `scalacOptions` apply to every subproject.
+   */
   final case class Base(
       space: String,
       id: String,
       cfg: String,
       factors: Factors,
       prog: Prog,
-      edits: Seq[EditCase]
-  )
+      edits: Seq[EditCase],
+      files: Map[String, String] = Map.empty,
+      tiers: Map[String, Int] = Map.empty,
+      scalacOptions: String = "",
+      groups: Map[String, String] = Map.empty,
+  ):
+    def tier(file: String): Int = tiers.getOrElse(
+      file,
+      if file == "A.scala" || file == "M.scala" then 1 else 2
+    )
+
+    /** The sources of the base, or of the program after `edit`. */
+    def sources(edit: Option[EditCase]): Map[String, String] =
+      if prog.nonEmpty then
+        val header = s"package ${Render.pkg}\n\n"
+        Render.files(prog, edit).toSeq
+          .groupBy((c, _) => groups.getOrElse(c, s"$c.scala"))
+          .map { (file, cs) =>
+            val srcs = cs.sortBy(_._1).map(_._2)
+            file -> (srcs.head +: srcs.tail.map(_.stripPrefix(header))).mkString("\n")
+          }
+      else
+        edit.fold(files)(e =>
+          e.files.foldLeft(files) {
+            case (acc, (f, Some(src))) => acc.updated(f, src)
+            case (acc, (f, None))      => acc - f
+          }
+        )
+  end Base
 
   private def str(v: JValue): String = v match
     case JString(s) => s
@@ -170,22 +213,44 @@ object Conformance:
           g.get("cfg").map(str).getOrElse("").split(" ").toSeq.zipWithIndex.map((v, i) =>
             s"c$i" -> v
           )
+      def files(g: Map[String, JValue]): Map[String, Option[String]] = g.get("files") match
+        case Some(JObject(fs)) =>
+          fs.toSeq.map(x =>
+            x.field ->
+              (x.value match
+                case JNull => None
+                case v     => Some(str(v)))
+          ).toMap
+        case _ => Map.empty
       Base(
         f.get("space").map(str).getOrElse(""),
         str(f("id")),
         f.get("cfg").map(str).getOrElse(""),
         factors(f),
-        prog(f("prog")),
+        f.get("prog").fold(Nil)(prog),
         arr(f("edits")).map { e =>
           val g = obj(e)
           EditCase(
-            str(g("cls")),
+            g.get("cls").map(str).getOrElse(""),
             g.get("cfg").map(str).getOrElse(""),
             factors(g),
-            prog(g("prog")),
-            rest(g)
+            g.get("prog").fold(Nil)(prog),
+            rest(g),
+            files(g),
           )
-        }
+        },
+        files(f).collect { case (k, Some(v)) => k -> v },
+        f.get("tiers") match
+          case Some(JObject(ts)) => ts.toSeq.map(x => x.field -> str(x.value).toInt).toMap
+          case _                 =>
+            Map.empty
+        ,
+        f.get("scalacOptions").map(str).getOrElse(""),
+        f.get("groups") match
+          case Some(JObject(gs)) => gs.toSeq.map(x => x.field -> str(x.value)).toMap
+          case _                 =>
+            Map.empty
+        ,
       )
     }
 
@@ -251,10 +316,10 @@ object Conformance:
       }.toMap
   end Render
 
-  /** Which subproject each class goes to. */
-  def layout(name: String): (Seq[String], String => String) = name match
-    case "single" => (Seq("p"), _ => "p")
-    case "split"  => (Seq("up", "down"), c => if c == "A" || c == "M" then "up" else "down")
+  /** The subprojects of a layout, and the one for each tier. */
+  def layout(name: String): (Seq[String], Int => String) = name match
+    case "single" => (Seq("macros", "p"), t => if t == 0 then "macros" else "p")
+    case "split"  => (Seq("macros", "up", "down"), Seq("macros", "up", "down")(_))
     case other    => sys.error(s"Unknown layout $other")
 
   final case class Result(
@@ -277,16 +342,24 @@ object Conformance:
     private val (projects, place) = layout(layoutName)
     private var handler: IncHandler = null
     private var state: Option[IncState] = None
+    private var tier: String => Int = _ => 2
+    private var written = Map.empty[String, Path]
 
+    /** Writes the files that changed, and deletes those no longer there. */
     def write(files: Map[String, String]): Unit =
-      for (c, src) <- files do
-        val f = dir.resolve(place(c)).resolve(s"$c.scala")
+      for (name, f) <- written if !files.contains(name) do Files.deleteIfExists(f)
+      written = files.map { (name, src) =>
+        val f = dir.resolve(place(tier(name))).resolve(name)
         if !Files.exists(f) || Files.readString(f) != src then
           Files.createDirectories(f.getParent)
           Files.writeString(f, src)
+        name -> f
+      }
 
     /** Deletes everything and writes the build afresh. */
-    def reset(files: Map[String, String]): Unit =
+    def reset(files: Map[String, String], base: Base): Unit =
+      tier = base.tier
+      written = Map.empty
       if handler != null then handler.finish(state)
       IO.delete(dir.toFile)
       Files.createDirectories(dir)
@@ -299,7 +372,10 @@ object Conformance:
         dir.resolve("build.json"),
         ps.mkString("{\n  \"projects\": [\n", ",\n", "\n  ]\n}\n")
       )
-      val props = o.incOptions.map((k, v) => s"$k = $v").mkString("", "\n", "\n")
+      val scalac =
+        if base.scalacOptions.isEmpty then Map.empty
+        else Map("scalac.options" -> base.scalacOptions)
+      val props = (o.incOptions ++ scalac).map((k, v) => s"$k = $v").mkString("", "\n", "\n")
       projects.foreach { p =>
         Files.createDirectories(dir.resolve(p))
         Files.writeString(dir.resolve(p).resolve("incOptions.properties"), props)
@@ -399,10 +475,10 @@ object Conformance:
       val clean = new Build(dir.resolve(s"$name-clean"), name, o)
       val cache = mutable.Map.empty[Map[String, String], Result]
       var current: Option[(String, Result)] = None
-      def cleanBuild(files: Map[String, String]): Result =
+      def cleanBuild(files: Map[String, String], base: Base): Result =
         cache.getOrElseUpdate(
           files,
-          { clean.reset(files); clean.compile().copy(recompiled = Set.empty) }
+          { clean.reset(files, base); clean.compile().copy(recompiled = Set.empty) }
         )
       def finish(): Unit =
         work.finish(); clean.finish()
@@ -412,11 +488,11 @@ object Conformance:
       val l = layouts.getOrElseUpdate(it.layout, new Layout(it.layout))
       val b = it.base
       val e = it.edit
-      val baseFiles = Render.files(b.prog, None)
+      val baseFiles = b.sources(None)
       val r0 = l.current match
         case Some((id, r)) if id == b.id => r
         case _                           =>
-          l.work.reset(baseFiles)
+          l.work.reset(baseFiles, b)
           val r = l.work.compile()
           l.cache(baseFiles) = r.copy(recompiled = Set.empty)
           l.current = Some(b.id -> r)
@@ -430,10 +506,10 @@ object Conformance:
         )
       else
         cases += 1
-        val files = Render.files(b.prog, Some(e))
+        val files = b.sources(Some(e))
         l.work.write(files)
         val inc = l.work.compile()
-        val cl = l.cleanBuild(files)
+        val cl = l.cleanBuild(files, b)
         val verdict = compare(inc, cl)
         if o.stop && !agrees(verdict) then
           Console.err.println(s"stopped: incremental build in ${dir.resolve(s"${it.layout}-work")}")
@@ -446,7 +522,9 @@ object Conformance:
           s"""{"layout":"${it.layout}","space":"${b.space}","base":"${b.id}","cfg":"${b.cfg}",""" +
             s""""edit":"${e.cls}","edited":"${e.cfg}","verdict":"$verdict","revert":"$revert",""" +
             s""""recompiled":${json(inc.recompiled.toSeq.sorted)},""" +
-            s""""revertRecompiled":${json(back.recompiled.toSeq.sorted)},${e.model},""" +
+            s""""revertRecompiled":${json(back.recompiled.toSeq.sorted)},${
+                if e.model.isEmpty then "" else e.model + ","
+              }""" +
             s""""cleanOk":${cl.ok},"diff":${json(diff(inc, cl))},""" +
             s""""revertDiff":${json(diff(back, r0))},""" +
             s""""incErrors":${json(inc.errors)},"cleanErrors":${json(cl.errors)},""" +
