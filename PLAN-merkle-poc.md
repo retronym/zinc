@@ -68,6 +68,8 @@ Stored: name hashes 212,389 → 90,711 before the library stubs, 94,046 after; a
 
 The corpus found three overcompilations the scripted suite had not, each recompiling most of catalyst: header comparison by `equals` on types with lazy parts (now by `HashAPI`), a `mirror` rule that fired for every case class's companion (now only objects that themselves extend the changed class), and a trait's `extraHash` folding in its *class* parents' (now trait parents only; this predates the PoC). With pipelining on, every Java source's API also looked fully changed on each compile, so catalyst runs use `pipelining=false`.
 
+**Extraction cost** (scalac `-Yprofile-enabled` via `--scalac-option`, catalyst warm clean builds, mean of 2): `xsbt-api` 0.85 s and 1,093 MB allocated on develop, 0.75 s and 704 MB on the PoC (−12% time, −36% allocation). For scale, typer allocates 1,250 MB and all phases take 10.1 s; Zinc's work outside the compiler is about 2 s on both sides.
+
 ## Holes found by review (2026-10-09)
 
 - DONE **Test discovery.** sbt's annotated-test discovery reads inherited methods' annotations (`savedAnnotations`); a JUnit `@Test` in a base class was lost. The bridge keeps annotated inherited members; the `annotated` rule refreshes descendants (`merkle-discovery`, `merkle-discovery-added`).
@@ -80,7 +82,7 @@ The corpus found three overcompilations the scripted suite had not, each recompi
 
 TODO:
 
-- Measure bridge extraction time (the platform stubs' benefit) and Zinc's invalidation time.
+- Measure Zinc's invalidation time on incremental edits (per-step phase profiles).
 - Name-filter the header path by the names whose as-seen-from rendering changed.
 - Per-class ABI hashing of library classes.
 - Cross-module real corpus (catalyst + sql/core).
