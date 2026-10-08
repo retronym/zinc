@@ -104,6 +104,7 @@ object Conformance:
       decls: Seq[Decl],
       body: Seq[(String, String)],
       observes: Seq[String] = Nil,
+      under: Option[String] = None,
   )
 
   /** A member: `mod` is `def`, `val`, `var` or `lazy val`. */
@@ -146,7 +147,9 @@ object Conformance:
   ):
     def tier(file: String): Int = tiers.getOrElse(
       file,
-      if file == "Mac.scala" then 0 else if file == "A.scala" || file == "M.scala" then 1 else 2
+      if file == "Mac.scala" then 0
+      else if file == "A.scala" || file == "M.scala" || file == "V.scala" then 1
+      else 2
     )
 
     /** The sources of the base, or of the program after `edit`. */
@@ -204,6 +207,7 @@ object Conformance:
           case Seq(a, b) => (str(a), str(b))
       ),
       f.get("observes").fold(Nil)(o => arr(o).map(str)),
+      f.get("under").collect { case JString(u) => u },
     )
   }
 
@@ -279,6 +283,7 @@ object Conformance:
     private def default(ty: String): String = ty match
       case "Int"    => "1"
       case "String" => "\"\""
+      case "V"      => "V.mk"
       case t        => s"null.asInstanceOf[$t]"
 
     private def tps(ps: Seq[String]) = if ps.isEmpty then "" else ps.mkString("[", ", ", "]")
@@ -290,8 +295,17 @@ object Conformance:
           ("[U]", s"$r${c.tparams.map(_ => "U").mkString("[", ", ", "]")}")
         case _ => ("", r)
 
+    /** `V`: a value class over its underlying type, or a plain class. */
+    def valueClass(c: Cls): String = c.under match
+      case Some(u) =>
+        s"package $pkg\n\nclass V(val u: $u) extends AnyVal\nobject V { def mk: V = new V(${default(u)}) }\n"
+      case None => s"package $pkg\n\nclass V\nobject V { def mk: V = new V }\n"
+
     /** The source of class `c` as written in program `p`. */
     def source(p: Prog, c: Cls): String =
+      if c.name == "V" then valueClass(c) else sourceOf(p, c)
+
+    private def sourceOf(p: Prog, c: Cls): String =
       val byName = p.map(x => x.name -> x).toMap
       val anc = ancestors(p, c.name)
       def concreteAbove(n: String) =
@@ -320,7 +334,7 @@ object Conformance:
           s"  def use$i$mtp(x: $rt) = x.$n\n"
       }
       s"package $pkg\n\n${c.kind} ${c.name}${tps(c.tparams)}$ext {\n${decls.mkString}${body.mkString}${observes.mkString}}\n"
-    end source
+    end sourceOf
 
     /** A macro that renders the public members of its type argument declared in this package. */
     val mac: String =
