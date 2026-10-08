@@ -54,6 +54,7 @@ object IncBench:
       label: String = "",
       build: Option[Path] = None,
       edits: Option[Path] = None,
+      logLevel: Level.Value = Level.Warn,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
@@ -68,6 +69,7 @@ object IncBench:
     case "--reps" :: v :: rest        => parse(rest, o.copy(reps = v.toInt))
     case "--build" :: v :: rest       => parse(rest, o.copy(build = Some(Paths.get(v))))
     case "--edits" :: v :: rest       => parse(rest, o.copy(edits = Some(Paths.get(v))))
+    case "--debug" :: rest            => parse(rest, o.copy(logLevel = Level.Debug))
     case "--out" :: v :: rest         => parse(rest, o.copy(out = Some(Paths.get(v))))
     case "--label" :: v :: rest       => parse(rest, o.copy(label = v))
     case "--inc-option" :: kv :: rest =>
@@ -150,7 +152,7 @@ object IncBench:
       shape: String,
       extract: Option[String] = None
   ): Unit =
-    val runner = new Runner(dir, moduleNames, o.scalaVersion)
+    val runner = new Runner(dir, moduleNames, o.scalaVersion, o.logLevel)
     val lines = Vector.newBuilder[String]
     def emit(line: String): Unit =
       println(line)
@@ -216,9 +218,14 @@ object IncBench:
   /** Shared by every runner: IncHandler caches the compiled bridge's path in it per JVM. */
   private lazy val cacheDir = Files.createTempDirectory("incbench-cache")
 
-  final class Runner(dir: Path, moduleNames: Seq[String], scalaVersion: String):
+  final class Runner(
+      dir: Path,
+      moduleNames: Seq[String],
+      scalaVersion: String,
+      logLevel: Level.Value = Level.Warn
+  ):
     private val handler =
-      new IncHandler(dir, cacheDir, UnitSpec.newLogger(Level.Warn), compileToJar = false)
+      new IncHandler(dir, cacheDir, UnitSpec.newLogger(logLevel), compileToJar = false)
     private var state: handler.State = handler.initialState
 
     /** Deletes every module's outputs and analysis, for a full rebuild in a warm JVM. */

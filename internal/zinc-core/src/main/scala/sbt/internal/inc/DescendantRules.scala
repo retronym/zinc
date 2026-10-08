@@ -13,6 +13,7 @@ package sbt
 package internal
 package inc
 
+import xsbt.api.HashAPI
 import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType }
 import xsbti.compile.IncOptions
 
@@ -37,14 +38,22 @@ private[inc] final case class AncestorChange(
     List(c.api().classApi(), c.api().objectApi())
 
 private[inc] object AncestorChange:
-  private def sameHeader(a: ClassLike, b: ClassLike): Boolean =
-    a.definitionType == b.definitionType &&
-      a.modifiers == b.modifiers &&
-      a.access == b.access &&
-      a.annotations.sameElements(b.annotations) &&
-      a.typeParameters.sameElements(b.typeParameters) &&
-      a.selfType == b.selfType &&
-      a.structure.parents.sameElements(b.structure.parents)
+  /**
+   * Compared by hash: equal API types need not be `equals`, as types with refinements hold lazy
+   * parts, which made every class look as if its header had changed.
+   */
+  private def sameHeader(a: ClassLike, b: ClassLike): Boolean = header(a) == header(b)
+
+  private def header(c: ClassLike): HashAPI.Hash =
+    HashAPI { h =>
+      h.hashString(c.definitionType.toString)
+      h.hashModifiers(c.modifiers)
+      h.hashAccess(c.access)
+      h.hashAnnotations(c.annotations)
+      h.hashTypeParameters(c.typeParameters)
+      h.hashType(c.selfType, includeDefinitions = false)
+      h.hashTypes(c.structure.parents, includeDefinitions = false)
+    }
 
 /**
  * What a [[DescendantRule]] may read: the relations and the APIs of the current analysis.
