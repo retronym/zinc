@@ -46,17 +46,17 @@ object IncBench:
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
-    case Nil                        => o
-    case "--dir" :: v :: rest       => parse(rest, o.copy(dir = Paths.get(v)))
-    case "--modules" :: v :: rest   => parse(rest, o.copy(modules = v.toInt))
-    case "--depth" :: v :: rest     => parse(rest, o.copy(depth = v.toInt))
-    case "--fan-out" :: v :: rest   => parse(rest, o.copy(fanOut = v.toInt))
-    case "--padding" :: v :: rest   => parse(rest, o.copy(padding = v.toInt))
-    case "--trait" :: rest          => parse(rest, o.copy(rootIsTrait = true))
-    case "--scala" :: v :: rest     => parse(rest, o.copy(scalaVersion = v))
-    case "--reps" :: v :: rest      => parse(rest, o.copy(reps = v.toInt))
-    case "--out" :: v :: rest       => parse(rest, o.copy(out = Some(Paths.get(v))))
-    case "--label" :: v :: rest     => parse(rest, o.copy(label = v))
+    case Nil                          => o
+    case "--dir" :: v :: rest         => parse(rest, o.copy(dir = Paths.get(v)))
+    case "--modules" :: v :: rest     => parse(rest, o.copy(modules = v.toInt))
+    case "--depth" :: v :: rest       => parse(rest, o.copy(depth = v.toInt))
+    case "--fan-out" :: v :: rest     => parse(rest, o.copy(fanOut = v.toInt))
+    case "--padding" :: v :: rest     => parse(rest, o.copy(padding = v.toInt))
+    case "--trait" :: rest            => parse(rest, o.copy(rootIsTrait = true))
+    case "--scala" :: v :: rest       => parse(rest, o.copy(scalaVersion = v))
+    case "--reps" :: v :: rest        => parse(rest, o.copy(reps = v.toInt))
+    case "--out" :: v :: rest         => parse(rest, o.copy(out = Some(Paths.get(v))))
+    case "--label" :: v :: rest       => parse(rest, o.copy(label = v))
     case "--inc-option" :: kv :: rest =>
       val Array(k, v) = kv.split("=", 2)
       parse(rest, o.copy(incOptions = o.incOptions + (k -> v)))
@@ -72,7 +72,9 @@ object IncBench:
     val moduleNames = (0 until o.modules).map(i => s"m$i")
     if o.incOptions.nonEmpty then
       val props = o.incOptions.map((k, v) => s"$k = $v").mkString("", "\n", "\n")
-      moduleNames.foreach(m => Files.writeString(dir.resolve(m).resolve("incOptions.properties"), props))
+      moduleNames.foreach(m =>
+        Files.writeString(dir.resolve(m).resolve("incOptions.properties"), props)
+      )
     val shape =
       s""""label":"${o.label}","modules":${o.modules},"depth":${o.depth},"fanOut":${o.fanOut},""" +
         s""""padding":${o.padding},"trait":${o.rootIsTrait},"classes":${corpus.classes.size}"""
