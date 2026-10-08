@@ -1,0 +1,5 @@
+> run
+
+# A becomes a trait: Z must call m with invokeinterface, though no member of A changed
+$ copy-file changes/A.scala A.scala
+> run
