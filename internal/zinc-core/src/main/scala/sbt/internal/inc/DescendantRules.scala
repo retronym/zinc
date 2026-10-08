@@ -243,6 +243,23 @@ private[inc] object DescendantRules:
     else None
   }
 
+  /**
+   * Test discovery reads the annotations of a class's inherited methods, which the bridge
+   * materialises for annotated members only. A changed name annotated in the changed class must
+   * refresh every descendant's stored copy.
+   */
+  val annotated: DescendantRule = rule("annotated") { (_, _, change) =>
+    def annotatedNames(c: AnalyzedClass) =
+      List(c.api().classApi(), c.api().objectApi()).iterator
+        .flatMap(_.structure.declared.iterator)
+        .collect { case m if m.annotations.nonEmpty => m.name }
+        .toSet
+    onNames(
+      hit(annotatedNames(change.before) ++ annotatedNames(change.after), change),
+      "annotated"
+    )
+  }
+
   /** Name hashing's own fallbacks: a changed implicit member. */
   val fallbacks: DescendantRule = rule("fallbacks") { (_, _, change) =>
     onNames(change.modifiedNames.in(xsbti.UseScope.Implicit).map(_.name), "implicit")
@@ -256,11 +273,22 @@ private[inc] object DescendantRules:
    * stored linearization fresh, which [[MerkleHashes]] reads for other subprojects.
    */
   val default: List[DescendantRule] =
-    List(overrides, conflicts, `abstract`, header, traitDirect, mirror)
+    List(overrides, conflicts, `abstract`, header, traitDirect, mirror, annotated)
 
   /** `default` plus rules it subsumes: `uses`, `fallbacks` (by `memberRef` edges) and `trait`. */
   val all: List[DescendantRule] =
-    List(uses, overrides, conflicts, `abstract`, header, `trait`, traitDirect, mirror, fallbacks)
+    List(
+      uses,
+      overrides,
+      conflicts,
+      `abstract`,
+      header,
+      `trait`,
+      traitDirect,
+      mirror,
+      annotated,
+      fallbacks
+    )
 
   val Key = "descendantRules"
 

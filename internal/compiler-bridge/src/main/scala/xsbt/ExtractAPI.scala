@@ -478,14 +478,18 @@ class ExtractAPI[GlobalType <: Global](
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
     val declSet = decls.toSet
     val inherited =
-      info.nonPrivateMembers.toList.filter(m => !declSet(m) && !isInternal(m.owner))
+      info.nonPrivateMembers.toList.filter(m =>
+        !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty)
+      )
     mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
   }
 
   /**
    * Is `owner` defined in this subproject, or in another one that Zinc has analysed? Zinc
    * composes the name hashes of members inherited from such classes from their own decls, so
-   * they are not materialised here. Members of plain library classes still are.
+   * they are not materialised here, except annotated ones: test discovery reads the annotations
+   * of inherited methods (a JUnit `@Test` in a base class). Members of plain library classes
+   * still are.
    */
   private def isInternal(owner: Symbol): Boolean =
     internalCache.getOrElseUpdate(owner, isInternal0(owner))

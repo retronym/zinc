@@ -75,9 +75,9 @@ object APIUtil:
     )
 
   /**
-   * Keeps the parents, main methods, and a stub (name, access, modifiers) of every other
-   * declaration: descendant invalidation reads which names a class declares, overrides or leaves
-   * abstract.
+   * Keeps the parents, main methods, and a stub (name, access, modifiers, annotations) of every
+   * other declaration: descendant invalidation reads which names a class declares, overrides,
+   * leaves abstract or annotates.
    */
   def minimizeStructure(s: Structure, isModule: Boolean): Structure =
     val mains = if isModule then s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
@@ -89,7 +89,7 @@ object APIUtil:
     )
 
   def stubDefinition(d: ClassDefinition): ClassDefinition =
-    Def.of(d.name, d.access, d.modifiers, Array.empty, Array.empty, Array.empty, emptyType)
+    Def.of(d.name, d.access, d.modifiers, d.annotations, Array.empty, Array.empty, emptyType)
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean
