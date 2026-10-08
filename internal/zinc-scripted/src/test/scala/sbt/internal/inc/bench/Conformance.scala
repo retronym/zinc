@@ -101,9 +101,13 @@ object Conformance:
       kind: String,
       tparams: Seq[String],
       parents: Seq[(String, String)],
-      decls: Seq[(String, String, Boolean)],
+      decls: Seq[Decl],
       body: Seq[(String, String)],
+      observes: Seq[String] = Nil,
   )
+
+  /** A member: `mod` is `def`, `val`, `var` or `lazy val`. */
+  final case class Decl(name: String, ty: String, deferred: Boolean, mod: String, priv: Boolean)
 
   type Prog = Seq[Cls]
 
@@ -142,19 +146,22 @@ object Conformance:
   ):
     def tier(file: String): Int = tiers.getOrElse(
       file,
-      if file == "A.scala" || file == "M.scala" then 1 else 2
+      if file == "Mac.scala" then 0 else if file == "A.scala" || file == "M.scala" then 1 else 2
     )
 
     /** The sources of the base, or of the program after `edit`. */
     def sources(edit: Option[EditCase]): Map[String, String] =
       if prog.nonEmpty then
         val header = s"package ${Render.pkg}\n\n"
-        Render.files(prog, edit).toSeq
-          .groupBy((c, _) => groups.getOrElse(c, s"$c.scala"))
-          .map { (file, cs) =>
-            val srcs = cs.sortBy(_._1).map(_._2)
-            file -> (srcs.head +: srcs.tail.map(_.stripPrefix(header))).mkString("\n")
-          }
+        val observed = (prog ++ edit.toSeq.flatMap(_.prog)).exists(_.observes.nonEmpty)
+        val mac = if observed then Map("Mac.scala" -> Render.mac) else Map.empty
+        mac ++
+          Render.files(prog, edit).toSeq
+            .groupBy((c, _) => groups.getOrElse(c, s"$c.scala"))
+            .map { (file, cs) =>
+              val srcs = cs.sortBy(_._1).map(_._2)
+              file -> (srcs.head +: srcs.tail.map(_.stripPrefix(header))).mkString("\n")
+            }
       else
         edit.fold(files)(e =>
           e.files.foldLeft(files) {
@@ -189,12 +196,14 @@ object Conformance:
       ),
       arr(f("decls")).map(d =>
         arr(d) match
-          case Seq(n, t, JBoolean(b)) => (str(n), str(t), b)
+          case Seq(n, t, JBoolean(b))                   => Decl(str(n), str(t), b, "def", false)
+          case Seq(n, t, JBoolean(b), mod, JBoolean(p)) => Decl(str(n), str(t), b, str(mod), p)
       ),
       arr(f("body")).map(s =>
         arr(s) match
           case Seq(a, b) => (str(a), str(b))
       ),
+      f.get("observes").fold(Nil)(o => arr(o).map(str)),
     )
   }
 
@@ -286,16 +295,23 @@ object Conformance:
       val byName = p.map(x => x.name -> x).toMap
       val anc = ancestors(p, c.name)
       def concreteAbove(n: String) =
-        anc.exists(a => byName.get(a).exists(_.decls.exists(d => d._1 == n && !d._3)))
+        anc.exists(a =>
+          byName.get(a).exists(_.decls.exists(d => d.name == n && !d.deferred && !d.priv))
+        )
       val ext = c.parents.zipWithIndex.map { case ((q, t), i) =>
         val targs = if byName.get(q).exists(_.tparams.nonEmpty) then s"[$t]" else ""
         (if i == 0 then " extends " else " with ") + q + targs
       }.mkString
-      val decls = c.decls.map { (n, ty, deferred) =>
-        if deferred then s"  def $n: $ty\n"
+      val decls = c.decls.map { d =>
+        val priv = if d.priv then "private " else ""
+        if d.deferred then s"  $priv${d.mod} ${d.name}: ${d.ty}\n"
         else
-          val ov = if concreteAbove(n) then "override " else ""
-          s"  ${ov}def $n: $ty = ${default(ty)}\n"
+          val ov = if !d.priv && concreteAbove(d.name) then "override " else ""
+          s"  $priv$ov${d.mod} ${d.name}: ${d.ty} = ${default(d.ty)}\n"
+      }
+      val observes = c.observes.zipWithIndex.map { (r, i) =>
+        val targs = byName.get(r).fold("")(x => x.tparams.map(_ => "Int").mkString("[", ", ", "]"))
+        s"  val obs$i = Mac.members[$r${if targs == "[]" then "" else targs}]\n"
       }
       val body = c.body.zipWithIndex.map { case ((r, n), i) =>
         if r == c.name then s"  def use$i = this.$n\n"
@@ -303,8 +319,27 @@ object Conformance:
           val (mtp, rt) = receiver(p, r)
           s"  def use$i$mtp(x: $rt) = x.$n\n"
       }
-      s"package $pkg\n\n${c.kind} ${c.name}${tps(c.tparams)}$ext {\n${decls.mkString}${body.mkString}}\n"
+      s"package $pkg\n\n${c.kind} ${c.name}${tps(c.tparams)}$ext {\n${decls.mkString}${body.mkString}${observes.mkString}}\n"
     end source
+
+    /** A macro that renders the public members of its type argument declared in this package. */
+    val mac: String =
+      s"""package $pkg
+         |
+         |import scala.language.experimental.macros
+         |import scala.reflect.macros.blackbox.Context
+         |
+         |object Mac {
+         |  def members[T]: String = macro impl[T]
+         |  def impl[T: c.WeakTypeTag](c: Context): c.Tree = {
+         |    import c.universe._
+         |    val t = weakTypeOf[T]
+         |    val ms = t.members.toList.filter(s => s.isPublic && s.owner.fullName.startsWith("$pkg."))
+         |      .map(s => s.name.decodedName.toString + ": " + s.typeSignatureIn(t).toString).sorted
+         |    Literal(Constant(ms.mkString(", ")))
+         |  }
+         |}
+         |""".stripMargin
 
     /** Each class's file, rendered against the program the class was last written in. */
     def files(base: Prog, edit: Option[EditCase]): Map[String, String] =
