@@ -56,7 +56,8 @@ class ExtractAPI[GlobalType <: Global](
     val global: GlobalType,
     // Tracks the source file associated with the CompilationUnit currently being processed by the API phase.
     // This is used when recording inheritance dependencies.
-    sourceFile: VirtualFile
+    sourceFile: VirtualFile,
+    outputDirs: Iterable[java.nio.file.Path] = Nil
 ) extends Compat
     with ClassName
     with GlobalHelpers {
@@ -476,9 +477,28 @@ class ExtractAPI[GlobalType <: Global](
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
     val declSet = decls.toSet
     val inherited =
-      info.nonPrivateMembers.toList.filterNot(declSet) // private members are not inherited
+      info.nonPrivateMembers.toList.filter(m => !declSet(m) && !isInternal(m.owner))
     mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
   }
+
+  /**
+   * Is `owner` defined in this subproject? Zinc composes the name hashes of members inherited
+   * from such classes from their own decls, so they are not materialised here.
+   */
+  private def isInternal(owner: Symbol): Boolean =
+    owner.sourceFile match {
+      case AbstractZincFile(_) => true
+      case _                   =>
+        val at = owner.associatedFile
+        def inOutput(f: java.io.File) =
+          f != null && outputDirs.exists(d => f.toPath.toAbsolutePath.startsWith(d.toAbsolutePath))
+        at match {
+          case null                                     => false
+          case entry: scala.reflect.io.ZipArchive#Entry =>
+            entry.underlyingSource.exists(z => inOutput(z.file))
+          case f => inOutput(f.file)
+        }
+    }
 
   // Note that the ordering of classes in `baseClasses` is important.
   // It would be easier to just say `baseTypeSeq.toList.tail`,

@@ -62,7 +62,7 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       val sourceFile: VirtualFile = unit.source.file match { case AbstractZincFile(vf) => vf }
       debuglog("Traversing " + sourceFile)
       callback.startSource(sourceFile)
-      val extractApi = new ExtractAPI[global.type](global, sourceFile)
+      val extractApi = new ExtractAPI[global.type](global, sourceFile, global.outputDirs)
       val traverser = new TopLevelHandler(extractApi)
       traverser.apply(unit.body)
 
