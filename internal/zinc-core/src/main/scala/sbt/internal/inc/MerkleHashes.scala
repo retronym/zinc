@@ -14,6 +14,7 @@ package internal
 package inc
 
 import xsbt.api.Discovery
+import xsbti.UseScope
 import xsbti.api.{ AnalyzedClass, NameHash, Parameterized, Type }
 
 /**
@@ -24,7 +25,8 @@ import xsbti.api.{ AnalyzedClass, NameHash, Parameterized, Type }
  * Ancestors in other subprojects come from their own analyses: a class does not recompile when
  * an upstream ancestor changes, so the members it materialised from it may be stale.
  * An ancestor contributes its extraHash rather than its apiHash: that covers its class side only,
- * since members of a companion object are not inherited.
+ * since members of a companion object are not inherited. Its implicit members are added from both
+ * sides, since a companion's implicits are in the implicit scope of its descendants.
  */
 private[inc] object MerkleHashes:
   def composed(
@@ -46,11 +48,25 @@ private[inc] object MerkleHashes:
           .map { case ((name, scope), hashes) => NameHash.of(name, scope, hashes.hashCode) }
           .toArray
         val apiHash =
-          (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash))).hashCode
+          (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash, implicits(c))))
+            .hashCode
         own
           .withApiHash(apiHash)
           .withNameHashes(nameHashes)
     }
+
+  /**
+   * An ancestor's implicit members, its companion's included. The companions of a class's base
+   * classes are in the implicit scope of its type, so a client whose implicit search found an
+   * instance there, or would now find a better one, depends on them without naming the ancestor.
+   */
+  private def implicits(c: AnalyzedClass): Int =
+    c.nameHashes.iterator
+      .filter(_.scope == UseScope.Implicit)
+      .map(h => (h.name, h.hash))
+      .toVector
+      .sorted
+      .hashCode
 
   /**
    * What HashAPI leaves out of a top-level class's hash: its own modifiers, access and
