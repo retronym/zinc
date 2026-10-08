@@ -401,10 +401,28 @@ object Incremental:
       )
 
     val hasSubprojectChange = initialChanges.external.apiChanges.nonEmpty
+
+    /**
+     * Records the current API of every upstream class whose change this run has processed. A
+     * recompiled class records the upstream APIs it depends on, but a descendant that the rules
+     * skip records nothing, and a stale record would hide the next change to that class.
+     */
+    def refreshExternalAPIs(analysis: Analysis): Analysis =
+      if !hasSubprojectChange then analysis
+      else
+        analysis.copy(
+          apis = initialChanges.external.allModified.foldLeft[APIs](analysis.apis) {
+            (apis, clazz) =>
+              lookup.lookupAnalyzedClass(clazz, None) match
+                case Some(ac) if apis.external.contains(clazz) => apis.markExternalAPI(clazz, ac)
+                case _                                         => apis
+          }
+        )
+
     val analysis = withClassfileManager(options, converter, output, outputJarContent) {
       classfileManager =>
         if hasModified then
-          incremental.cycle(
+          refreshExternalAPIs(incremental.cycle(
             initialInvClasses,
             initialInvSources,
             sources,
@@ -417,7 +435,7 @@ object Incremental:
             output,
             1,
             initialInvSources -- initialInvSources0,
-          )
+          ))
         else
           val analysis =
             if hasSubprojectChange then
