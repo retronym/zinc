@@ -121,6 +121,27 @@ private[inc] final class HierarchyView(
   def isTrait(className: String): Boolean =
     api(className).exists(_.api().classApi().definitionType == DefinitionType.Trait)
 
+  private def isClass(className: String): Boolean =
+    api(className).exists { c =>
+      val cls = c.api().classApi()
+      cls.definitionType == DefinitionType.ClassDef && !isEmpty(cls)
+    }
+
+  private def linearization(className: String): Vector[String] =
+    api(className).toVector.flatMap(MerkleHashes.linearization)
+
+  /**
+   * Does `className` mix `trt` in itself, and so get mixin forwarders for its members? Only a
+   * class or object does, and only for a trait that its superclass's linearization lacks. The
+   * superclass is not stored, so this asks instead whether any known class among the ancestors
+   * already has `trt`; an ancestor with no API (a library class) cannot.
+   */
+  def mixesIn(className: String, trt: String): Boolean =
+    !isTrait(className) && {
+      val lin = linearization(className)
+      lin.contains(trt) && !lin.exists(q => isClass(q) && linearization(q).contains(trt))
+    }
+
   private def isEmpty(c: ClassLike): Boolean =
     c.structure.parents.isEmpty && c.structure.declared.isEmpty && c.modifiers.raw == 0 &&
       c.annotations.isEmpty
@@ -203,6 +224,16 @@ private[inc] object DescendantRules:
   }
 
   /**
+   * `trait` narrowed to the descendants that hold the forwarders: a class or object that mixes the
+   * trait in where its superclass does not. Deeper subclasses inherit the forwarders, and traits
+   * get none. The Lean model's exhaustive check (`FlatRules.lean`) finds it as clean as `trait`.
+   */
+  val traitDirect: DescendantRule = rule("traitDirect") { (view, d, change) =>
+    val p = change.className
+    if view.isTrait(p) && view.mixesIn(d, p) then Some(s"mixes in trait $p") else None
+  }
+
+  /**
    * A top-level object's mirror or companion class has static forwarders for every member,
    * including those it inherits from the changed class.
    */
@@ -225,11 +256,11 @@ private[inc] object DescendantRules:
    * stored linearization fresh, which [[MerkleHashes]] reads for other subprojects.
    */
   val default: List[DescendantRule] =
-    List(overrides, conflicts, `abstract`, header, `trait`, mirror)
+    List(overrides, conflicts, `abstract`, header, traitDirect, mirror)
 
-  /** `default` plus rules that are subsumed by `memberRef` edges. */
+  /** `default` plus rules it subsumes: `uses`, `fallbacks` (by `memberRef` edges) and `trait`. */
   val all: List[DescendantRule] =
-    List(uses, overrides, conflicts, `abstract`, header, `trait`, mirror, fallbacks)
+    List(uses, overrides, conflicts, `abstract`, header, `trait`, traitDirect, mirror, fallbacks)
 
   val Key = "descendantRules"
 
