@@ -2,11 +2,37 @@
 
 Context: talk §7–11 (Zinc Incrementality). Today `ExtractAPI.mkStructureWithInherited` materialises every inherited member into each class's `Structure`, so editing an ancestor changes every descendant's name hashes, and Zinc recompiles the whole hierarchy just to refresh them. The Merkle alternative stores decls only and composes a descendant's per-name hash from its ancestors', so an ancestor edit recompiles clients, not the hierarchy.
 
-Ground rules: Scala 2.13 + `scala2-sbt-bridge` only, in this repo. No flags, no compat: this worktree *is* the B side; a sibling worktree on `1.x` is the A side. Java (`ClassToAPI`) and Scala 3 are out of scope.
+Ground rules: Scala 2 with the in-repo compiler bridge (scripted's default `2.12.x` label). No compat: this worktree *is* the B side; a sibling worktree on `1.x` is the A side. The `descendantRules` incOption also gives an in-build A/B (`all` = previous behaviour). Java (`ClassToAPI`) and Scala 3 are out of scope.
+
+## Status
+
+DONE (commits on `claude/merkle-hash-poc-path-ec0cd8`):
+
+- Baseline `merkle-*` scripted tests, pinned on today's Zinc. This found a pre-existing undercompilation: making a parent `final` didn't recompile subclasses, because `HashAPI.hashAPI` skips a top-level class's own modifiers. It is spun off as a separate fix for `1.x`.
+- Bridge: no materialised members from internal ancestors (decision 4).
+- Zinc: `DescendantRule`s + presets + decl stubs in the minimized API (decision 3).
+- Zinc: Merkle composition for *cross-project* lookups (`MerkleHashes`, `Lookup`).
+- Full `scripted` green (195 pass, 20 pre-existing pending); unit tests green.
+
+Result: §10a Edit 1 recompiles `X Y` instead of `B C X Y`. `transitive-class`, `transitive-memberRef`, `class-based-inheritance` and `local-class-inheritance` now recompile fewer descendants, and each case was checked for soundness (a concrete member added that no descendant declares, uses or must implement).
+
+What implementing it taught us, which changes decisions 1–3:
+
+- **Inside a subproject, no composed hashes are needed.** Zinc records a `memberRef` dependency on the *owner* of every selected member, so clients already carry `(owner, name)` keys, which is the decls+walk design. And `invalidateClassesInternally` already invalidates the `memberRef` clients of every descendant using the ancestor's changed names. That walk *is* decision 2's closure diff. Decision 1 as written was not built.
+- **Across subprojects, composition is needed**, and the downstream analysis lookup has no relations. So `MerkleHashes` composes from the stored linearization (`structure.parents`): decision 1, flattened, at lookup time. `macros/macro-type-change-3` is the case that needs it: a macro reflecting over `baseClasses` names no owner. Ancestors contribute their class-side `extraHash`, not `apiHash`, so companion-object members (not inherited) don't leak; this is the sbt/zinc#1796 conflation again. An object's ancestors count only when it has no class side.
+- **The rule table shrank to five.** Ablation shows `uses`, `header` and `fallbacks` are subsumed: a descendant is a `memberRef` client of its parent (constructor call, inherited member selections), and a header change already invalidates every `memberRef` client of every descendant. `default` = `overrides, conflicts, abstract, trait, mirror`; `strict` = all eight. Each default rule has a test that fails without it (`merkle-override`, `-conflict`, `-abstract`, `-trait-override`, `-mirror`), and `none` fails all five. Framing: the rules cover what a descendant's compilation reads *outside* `U(D)`, i.e. its refchecks and forwarder generation.
+- **`merkle-trait` doesn't discriminate.** A missing mixin forwarder is invisible at runtime when the JVM resolves the trait's default method. It only shows when the trait overrides a class member, since class methods win resolution (`merkle-trait-override`). In general, behaviour-level checks are a weak oracle for bytecode differences, which argues again for 4b.
+
+TODO:
+
+- 4b differential test (incremental vs clean bytes).
+- Performance deliverable.
+- Lean: see the chip; feed it the findings above.
+- Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`; descendants not recompiled keep possibly stale header stubs (overcompile only); header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change.
 
 ## Key decisions
 
-**1. Flattened composition over the stored linearization, done in Zinc at diff time.** The stub that `APIUtil.minimize` keeps already contains `structure.parents` = the linearized ancestor types as seen from the class (type args included). So for class `C` and name `n`:
+**1. Flattened composition over the stored linearization, done in Zinc at diff time.** *(Built only for cross-project lookups; see Status.)* The stub that `APIUtil.minimize` keeps already contains `structure.parents` = the linearized ancestor types as seen from the class (type args included). So for class `C` and name `n`:
 
     H_C(n) = hash( own_C(n), [ (hash(P as seen from C), own_P(n)) | P ∈ lin(C), P internal, n ∈ decls(P) ] )
 
@@ -25,7 +51,7 @@ trait DescendantRule:
   def apply(ctx: HierarchyView, d: String, p: String, changed: Set[String]): Option[String]
 ```
 
-`HierarchyView` is built once per round, from old and new Analysis: decl stubs per class, `lin(d)`, `U(d)` (`relations.names`), and header diffs. The policy is the disjunction of the enabled rules, chosen through `IncOptions.extra("zinc.descendantRules")`. Each hit goes to the invalidation log with its rule name ("C: conflict on m via M"), so both scripted tests and perf runs can explain every descendant recompile.
+`HierarchyView` is built once per round, from old and new Analysis: decl stubs per class, `lin(d)`, `U(d)` (`relations.names`), and header diffs. The policy is the disjunction of the enabled rules, chosen through the `descendantRules` incOption (`IncOptions.extra`). Each hit goes to the invalidation log with its rule name ("C: conflict on m via M"), so both scripted tests and perf runs can explain every descendant recompile.
 
 The rules:
 
@@ -42,7 +68,7 @@ The rules:
 
 Presets: `all` (today: every descendant, for A/B inside one build), `default` (every rule above), and `none` (never recompile descendants: deliberately unsound, used only for ablation).
 
-**Default = all rules.** This is sound for everything I can enumerate, and it still recompiles none of the hierarchy in §10a Edit 1, which is the common case: changing a concrete method's signature in a base class whose descendants neither override it nor use it.
+**Default = all rules** *(superseded: ablation reduced the default to five; see Status)*. This is sound for everything I can enumerate, and it still recompiles none of the hierarchy in §10a Edit 1, which is the common case: changing a concrete method's signature in a base class whose descendants neither override it nor use it.
 
 Data needed: `abstract`, `overrides` and `conflicts` need per-class decl *names with modifiers*, and `NameHashing` can't provide them. Change `APIUtil.minimize` to keep decls as stubs (name, `DefinitionType`, modifiers; types dropped), and keep `selfType` for `header`. Compat is ignored, so this is free; it is also a small down payment on the §11 "thin discovery channel".
 
@@ -62,12 +88,12 @@ Where Lean doesn't help: *completeness of the rule table against real scalac*. T
 
 ## Steps
 
-1. **Baseline scripted tests (no code change).** Add `source-dependencies/merkle-*` tests encoding the §10a program and its three edits, with `checkRecompilations` asserting *today's* sets (B C X Y / C X Y / C Y). Also add the counterexamples for decision 3: an override in a descendant, a conflict via a mixin, abstract → concrete. Commit on `1.x` too, so A and B share the tests.
-2. **Bridge: decls-only for internal ancestors** (decision 4). Run all of `scripted source-dependencies/*`; expect undercompilation failures. That list is the oracle that steps 3–4 have to bring back to green.
-3. **Zinc: composed hashes + closure diff** (decisions 1–2) in `IncrementalCommon.detectAPIChanges` / `IncrementalNameHashing`. Add the composed hash to the invalidation log so "why did Y recompile" shows the ancestor.
-4. **Zinc: `DescendantRule` + presets + stub decls** (decision 3). Flip the step-1 expectations to the Merkle sets (X Y / X Y Z; Edit 3 still recompiles C). Add one ablation test per rule.
+1. DONE **Baseline scripted tests (no code change).** Add `source-dependencies/merkle-*` tests encoding the §10a program and its three edits, with `checkRecompilations` asserting *today's* sets (B C X Y / C X Y / C Y). Also add the counterexamples for decision 3: an override in a descendant, a conflict via a mixin, abstract → concrete. Commit on `1.x` too, so A and B share the tests.
+2. DONE **Bridge: decls-only for internal ancestors** (decision 4). Run all of `scripted source-dependencies/*`; expect undercompilation failures. That list is the oracle that steps 3–4 have to bring back to green.
+3. DONE, differently **Zinc: composed hashes + closure diff** (decisions 1–2) in `IncrementalCommon.detectAPIChanges` / `IncrementalNameHashing`. Add the composed hash to the invalidation log so "why did Y recompile" shows the ancestor.
+4. DONE **Zinc: `DescendantRule` + presets + stub decls** (decision 3). Flip the step-1 expectations to the Merkle sets (X Y / X Y Z; Edit 3 still recompiles C). Add one ablation test per rule.
 4b. **Differential Hedgehog test** (incremental vs clean on generated hierarchies × edits), run under `default` and `none` as a sanity check that it can find bugs.
-5. **Soundness sweep:** full `scripted` on B. Every expectation that changes must be a strict subset of A's and must be explained in the commit. Before trusting the failure list, cross-check the step-2 list against §16's taxonomy.
+5. DONE **Soundness sweep:** full `scripted` on B. Every expectation that changes must be a strict subset of A's and must be explained in the commit. Before trusting the failure list, cross-check the step-2 list against §16's taxonomy.
 
 Correctness milestone = step 5 green, with a diff of recompilation sets vs A.
 
