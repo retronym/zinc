@@ -26,7 +26,8 @@ import xsbti.compile.AnalysisContents
  * through the scripted [[IncHandler]] so that it uses this checkout's Zinc and compiler bridge.
  *
  * For each edit: apply it, compile the last module (and so every module), record per module the
- * rounds, the classes recompiled and the wall time, then revert it and compile again. Results go
+ * rounds, the classes recompiled and the wall time, then revert it and compile again. Finally a
+ * `clean-build` step rebuilds everything from scratch in the warm JVM, as a reference. Results go
  * to stdout and `--out` as JSON lines, so two checkouts compare by diffing their output.
  *
  * {{{
@@ -95,6 +96,9 @@ object IncBench:
       emit(s"""{$shape,"step":"${edit.name}","rep":$rep,${runner.compileAll().json}}""")
       Files.writeString(file, original)
       emit(s"""{$shape,"step":"${edit.name}-revert","rep":$rep,${runner.compileAll().json}}""")
+    for rep <- 1 to o.reps do
+      runner.cleanAll()
+      emit(s"""{$shape,"step":"clean-build","rep":$rep,${runner.compileAll().json}}""")
     o.out.foreach(p => Files.write(p, lines.result().mkString("", "\n", "\n").getBytes("UTF-8")))
     runner.finish()
   end main
@@ -146,6 +150,10 @@ object IncBench:
     private val handler =
       new IncHandler(dir, cacheDir, UnitSpec.newLogger(Level.Warn), compileToJar = false)
     private var state: handler.State = handler.initialState
+
+    /** Deletes every module's outputs and analysis, for a full rebuild in a warm JVM. */
+    def cleanAll(): Unit =
+      moduleNames.foreach(m => state = handler.apply(s"$m/clean", Nil, state))
 
     def compileAll(): StepResult =
       val start = System.currentTimeMillis()
