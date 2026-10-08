@@ -1,0 +1,5 @@
+> run 0
+
+$ copy-file changes/T.scala T.scala
+# B's mixin forwarder for m must be regenerated
+> run s

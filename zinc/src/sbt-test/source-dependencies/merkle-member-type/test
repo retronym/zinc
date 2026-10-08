@@ -1,0 +1,6 @@
+> run 0
+
+$ copy-file changes/A.scala A.scala
+> run s
+> checkRecompilations 1 A
+> checkRecompilations 2 B C X Y
