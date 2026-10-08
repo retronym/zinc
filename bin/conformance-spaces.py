@@ -21,7 +21,8 @@ PKG = "package conf\n\n"
 
 
 def default(ty):
-    return {"Int": "1", "String": '""', "Long": "1L"}.get(ty, f"null.asInstanceOf[{ty}]")
+    return {"Int": "1", "String": '""', "Long": "1L", "Array[Int]": "Array(1)",
+            "Option[Int]": "Some(1)"}.get(ty, f"null.asInstanceOf[{ty}]")
 
 
 # --- trait fields, private members and super calls -----------------------------------------
@@ -89,7 +90,9 @@ def valueclass(c):
         f"class V(val u: {u}){ext}\nobject V {{ def mk: V = new V({default(u)}) }}\n")
     files["M.scala"] = (1, PKG + "trait M[T] { def m: T }\n")
     par = {"none": "", "MV": " extends M[V]"}[c["aGen"]]
-    am = {"V": "  def m: V = V.mk\n", "Int": "  def m: Int = 1\n", "none": ""}[c["aRes"]]
+    am = {"V": "  def m: V = V.mk\n", "Int": "  def m: Int = 1\n", "none": "",
+          "ArrV": "  def m: Array[V] = Array(V.mk)\n", "OptV": "  def m: Option[V] = Some(V.mk)\n",
+          "FunV": "  def m: V => Int = _ => 1\n"}[c["aRes"]]
     ap = {"none": "", "V": "  def p(v: V): Int = 1\n", "Vs": "  def p(v: V): Int = 1\n  def p(i: Int): Int = 2\n"}[c["aParam"]]
     files["A.scala"] = (1, PKG + f"abstract class A{par} {{\n{am}{ap}}}\n")
     bo = {"none": "", "m": "  override def m: V = V.mk\n", "p": "  override def p(v: V): Int = 3\n"}[c["bOver"]]
@@ -110,10 +113,10 @@ def valueclass(c):
 
 VALUECLASS = dict(
     factors=dict(
-        vUnder=["Int", "String", "Long"],
+        vUnder=["Int", "String", "Long", "Array[Int]", "Option[Int]"],
         vKind=["anyval", "plain"],
         aGen=["none", "MV"],
-        aRes=["V", "Int", "none"],
+        aRes=["V", "Int", "none", "ArrV", "OptV", "FunV"],
         aParam=["none", "V", "Vs"],
         bOver=["none", "m", "p"],
         xUse=["m", "pB", "mM"],
