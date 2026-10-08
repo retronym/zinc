@@ -55,7 +55,7 @@ trait Lookup extends ExternalLookup:
       analysis = analysis0 match
         case a: Analysis => a
       className <- analysis.relations.productClassName.reverse(binaryClassName).headOption
-      analyzedClass <- analysis.apis.internal.get(className)
+      analyzedClass <- MerkleHashes.composed(analysis, className)
     yield analyzedClass
 end Lookup
 
