@@ -556,7 +556,7 @@ class ExtractAPI[GlobalType <: Global](
       ancestorTypes,
       declsNoModuleCtor,
       inherited,
-      (platform ++ overriddenLibraryDecls(info, inherited ++ platform)).flatMap(stub)
+      (platform ++ overriddenLibraryDecls(info, declSet, inherited ++ platform)).flatMap(stub)
     )
   }
 
@@ -651,48 +651,28 @@ class ExtractAPI[GlobalType <: Global](
    * stops implementing `LibT`'s abstract `n`, `D` must recompile, and a library class has no
    * stored API to show that `n` is abstract there. One stub per name, abstract if any is.
    */
-  private def overriddenLibraryDecls(info: Type, present: List[Symbol]): List[Symbol] = {
-    val decls = info.decls
-    def isPresent(name: Name): Boolean = (decls.lookupEntry(name) ne null) || {
-      var rest = present
-      while ((rest ne Nil) && (rest.head.name ne name)) rest = rest.tail
-      rest ne Nil
-    }
-    var byName: java.util.LinkedHashMap[Name, Symbol] = null
-    var bcs = info.baseClasses.tail
-    while (bcs ne Nil) {
-      var ms = libraryDecls(bcs.head)
-      while (ms ne Nil) {
-        val m = ms.head
-        if (!isPresent(m.name)) {
-          if (byName eq null) byName = new java.util.LinkedHashMap[Name, Symbol]()
+  private def overriddenLibraryDecls(
+      info: Type,
+      declSet: Set[Symbol],
+      present: List[Symbol]
+  ): List[Symbol] = {
+    val presentNames = new java.util.HashSet[Name]()
+    present.foreach(m => presentNames.add(m.name))
+    declSet.foreach(m => presentNames.add(m.name))
+    val byName = new java.util.LinkedHashMap[Name, Symbol]()
+    info.baseClasses.drop(1).foreach { bc =>
+      if (!isInternal(bc)) bc.info.decls.foreach { m =>
+        if (!m.isPrivate && !m.isConstructor && !presentNames.contains(m.name)) {
           val seen = byName.get(m.name)
           if ((seen eq null) || (!seen.isDeferred && m.isDeferred)) byName.put(m.name, m)
         }
-        ms = ms.tail
       }
-      bcs = bcs.tail
     }
     var result: List[Symbol] = Nil
-    if (byName ne null) {
-      val it = byName.values.iterator
-      while (it.hasNext) result = it.next() :: result
-    }
+    val it = byName.values.iterator
+    while (it.hasNext) result = it.next() :: result
     result
   }
-
-  /** The non-private declarations of a library class, other than constructors; none if internal. */
-  private def libraryDecls(bc: Symbol): List[Symbol] = {
-    var ds = libraryDeclsCache.get(bc)
-    if (ds eq null) {
-      ds =
-        if (isInternal(bc)) Nil
-        else bc.info.decls.toList.filter(m => !m.isPrivate && !m.isConstructor)
-      libraryDeclsCache.put(bc, ds)
-    }
-    ds
-  }
-  private[this] val libraryDeclsCache = new java.util.HashMap[Symbol, List[Symbol]]()
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
   private def discoveryReads(m: Symbol): Boolean = m.annotations.nonEmpty || m.name == nme.main
@@ -1693,7 +1673,7 @@ class ExtractAPI[GlobalType <: Global](
         .partition(m => !isPlatform(m.owner) || discoveryReads(m))
     val inherited: List[Symbol] = sort(inherited0.toArray).toList
     val stubbed: List[Symbol] =
-      platform ++ overriddenLibraryDecls(info, inherited0 ++ platform)
+      platform ++ overriddenLibraryDecls(info, declSet, inherited0 ++ platform)
     def ancestorTypes: List[Type] = {
       val ancestorTypes0 = linearizedAncestorTypes(info)
       if (sym.isDerivedValueClass) sym.derivedValueClassUnbox.tpe.finalResultType :: ancestorTypes0
