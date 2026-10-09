@@ -432,9 +432,16 @@ object Conformance:
         dir.resolve("build.json"),
         ps.mkString("{\n  \"projects\": [\n", ",\n", "\n  ]\n}\n")
       )
+      // Scala 3 writes source paths relative to `-sourceroot` (by default the working directory)
+      // into TASTy, whose hash is in every classfile: root them at the subproject, so that the
+      // work and clean builds, in different directories, can agree.
+      val options =
+        (base.scalacOptions +:
+          (if o.scalaVersion.startsWith("3") then Seq("-sourceroot [basedir]")
+           else Nil)).filter(_.nonEmpty).mkString(" ")
       val scalac =
-        if base.scalacOptions.isEmpty then Map.empty
-        else Map("scalac.options" -> base.scalacOptions)
+        if options.isEmpty then Map.empty
+        else Map("scalac.options" -> options)
       val props = (Conformance.storedApis ++ o.incOptions ++ scalac)
         .map((k, v) => s"$k = $v")
         .mkString("", "\n", "\n")
