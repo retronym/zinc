@@ -619,15 +619,22 @@ class ExtractAPI[GlobalType <: Global](
       declSet: Set[Symbol],
       present: List[Symbol]
   ): List[Symbol] = {
-    val presentNames = (present ++ declSet).map(_.name).toSet
-    val candidates = for {
-      bc <- info.baseClasses.drop(1) if !isInternal(bc)
-      m <- bc.info.decls.toList
-      if !m.isPrivate && !m.isConstructor && !presentNames(m.name)
-    } yield m
-    candidates.groupBy(_.name).values.toList.map { ms =>
-      ms.find(_.isDeferred).getOrElse(ms.head)
+    val presentNames = new java.util.HashSet[Name]()
+    present.foreach(m => presentNames.add(m.name))
+    declSet.foreach(m => presentNames.add(m.name))
+    val byName = new java.util.LinkedHashMap[Name, Symbol]()
+    info.baseClasses.drop(1).foreach { bc =>
+      if (!isInternal(bc)) bc.info.decls.foreach { m =>
+        if (!m.isPrivate && !m.isConstructor && !presentNames.contains(m.name)) {
+          val seen = byName.get(m.name)
+          if ((seen eq null) || (!seen.isDeferred && m.isDeferred)) byName.put(m.name, m)
+        }
+      }
     }
+    var result: List[Symbol] = Nil
+    val it = byName.values.iterator
+    while (it.hasNext) result = it.next() :: result
+    result
   }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
@@ -1040,20 +1047,22 @@ class ExtractAPI[GlobalType <: Global](
   private[this] var structSink: List[Symbol] = Nil
 
   private final class TypeH(val hash: Int, val structs: List[Symbol])
-  private[this] val typeHashCache = perRunCaches.newMap[(Symbol, Type), TypeH]()
+  private[this] val typeHashCache = new java.util.HashMap[Symbol, java.util.HashMap[Type, TypeH]]()
 
   private def typeHash(in: Symbol, t: Type): Int = {
-    val key = (in, t)
-    val th = typeHashCache.get(key) match {
-      case Some(th) => th
-      case None     =>
-        val saved = structSink
-        structSink = Nil
-        val th =
-          try new TypeH(makeTypeHash(in, t), structSink)
-          finally structSink = saved
-        typeHashCache(key) = th
-        th
+    var inCache = typeHashCache.get(in)
+    if (inCache eq null) {
+      inCache = new java.util.HashMap[Type, TypeH]()
+      typeHashCache.put(in, inCache)
+    }
+    var th = inCache.get(t)
+    if (th eq null) {
+      val saved = structSink
+      structSink = Nil
+      th =
+        try new TypeH(makeTypeHash(in, t), structSink)
+        finally structSink = saved
+      inCache.put(t, th)
     }
     if (th.structs ne Nil) structSink = th.structs ::: structSink
     th.hash
@@ -1206,6 +1215,10 @@ class ExtractAPI[GlobalType <: Global](
       val base = if (s.hasFlag(Flags.ACCESSOR)) s.accessed else NoSymbol
       val b = if (base == NoSymbol) s else base
       if (b.hasGetter) {
+        val getter = b.getterIn(b.enclClass)
+        val setter = b.setterIn(b.enclClass)
+        def none(sym: Symbol) = sym == NoSymbol || sym.annotations.isEmpty
+        if (none(b) && none(getter) && none(setter)) return Nil
         val hs = collection.mutable.LinkedHashSet[Int]()
         def add(sym: Symbol) = if (sym != NoSymbol) hs ++= annotationHashes(in, sym.annotations)
         add(b)
@@ -1299,11 +1312,24 @@ class ExtractAPI[GlobalType <: Global](
       val structs: List[Symbol]
   )
 
-  private[this] val defHCache = perRunCaches.newMap[(Symbol, Symbol), DefH]()
+  private[this] val defHCache = new java.util.HashMap[Symbol, java.util.HashMap[Symbol, DefH]]()
+  private[this] val NoDefH = new DefH("", 0, false, false, false, false, false, Nil)
 
   /** `null` when `definition(in, sym)` is `None`. */
-  private def defH(in: Symbol, sym: Symbol): DefH =
-    defHCache.getOrElseUpdate((in, sym), mkDefH(in, sym))
+  private def defH(in: Symbol, sym: Symbol): DefH = {
+    var inCache = defHCache.get(in)
+    if (inCache eq null) {
+      inCache = new java.util.HashMap[Symbol, DefH]()
+      defHCache.put(in, inCache)
+    }
+    var d = inCache.get(sym)
+    if (d eq null) {
+      d = mkDefH(in, sym)
+      if (d eq null) d = NoDefH
+      inCache.put(sym, d)
+    }
+    if (d eq NoDefH) null else d
+  }
 
   private def mkDefH(in: Symbol, sym: Symbol): DefH = {
     val saved = structSink
@@ -1506,9 +1532,18 @@ class ExtractAPI[GlobalType <: Global](
     val nameHashes = {
       import xsbti.UseScope
       val location = mix(strHash(p.name), boolHash(isModule))
-      val groups = collection.mutable.LinkedHashMap[(String, UseScope), Unordered]()
-      def add(name: String, scope: UseScope, hash: Int): Unit =
-        groups.getOrElseUpdate((localName(name), scope), new Unordered).add(mix(hash, location))
+      val groups = Array.fill(3)(new java.util.HashMap[String, Unordered]())
+      val scopes = Array(UseScope.Default, UseScope.Implicit, UseScope.PatMatTarget)
+      def add(name: String, scope: UseScope, hash: Int): Unit = {
+        val group = groups(scopes.indexOf(scope))
+        val key = localName(name)
+        var u = group.get(key)
+        if (u eq null) {
+          u = new Unordered
+          group.put(key, u)
+        }
+        u.add(mix(hash, location))
+      }
       def scopeOf(isImplicit: Boolean) = if (isImplicit) UseScope.Implicit else UseScope.Default
       def header(withSealed: Boolean): Int = {
         var h = strHash(p.name)
@@ -1544,9 +1579,17 @@ class ExtractAPI[GlobalType <: Global](
           }
         }
       }
-      groups.iterator.map { case ((name, scope), u) =>
-        xsbti.api.NameHash.of(name, scope, u.result)
-      }.toArray
+      val result = new Array[xsbti.api.NameHash](groups.map(_.size).sum)
+      var i = 0
+      for (g <- 0 until 3) {
+        val it = groups(g).entrySet.iterator
+        while (it.hasNext) {
+          val e = it.next()
+          result(i) = xsbti.api.NameHash.of(e.getKey, scopes(g), e.getValue.result)
+          i += 1
+        }
+      }
+      result
     }
 
     val hasMacro = p.modifiers.isMacro || declared.exists(_.isMacro)
@@ -1577,11 +1620,19 @@ class ExtractAPI[GlobalType <: Global](
       inheritedKept.filter(isAbstractMember).map(stubOf(sym, _)) ++
         members.stubbed.flatMap(stub).filter(_.modifiers.isAbstract)
     val inherited = (inheritedMains ++ abstractInherited).toArray[xsbti.api.ClassDefinition]
-    val savedAnnotations = (members.declared ++ members.inherited).iterator
-      .filter(d => d.isSourceMethod && !d.isSetter && !d.isGetter && d.isPublic && hasDefinition(d))
-      .flatMap(d => annotations(sym, d).iterator.flatMap(a => ExtractAPI.simpleName(a.base)))
-      .toSet
-      .toArray
+    val savedAnnotations = {
+      val names = new java.util.LinkedHashSet[String]()
+      def addAnnotations(d: Symbol): Unit =
+        if (d.isSourceMethod && !d.isSetter && !d.isGetter && d.isPublic && hasDefinition(d)) {
+          val as = enteringPhase(currentRun.typerPhase)(d.annotations)
+          if (as.nonEmpty) staticAnnotations(as).foreach { a =>
+            annotationName(sym, a.atp).foreach(names.add)
+          }
+        }
+      members.declared.foreach(addAnnotations)
+      members.inherited.foreach(addAnnotations)
+      names.toArray(new Array[String](names.size))
+    }
     xsbti.api.ClassLike.of(
       p.name,
       p.acc,
@@ -1601,6 +1652,18 @@ class ExtractAPI[GlobalType <: Global](
       p.topLevel,
       p.tParams
     )
+  }
+
+  private[this] val annotationNameCache = new java.util.HashMap[Type, Option[String]]()
+
+  /** `Discovery.simpleName` of the annotation type `atp`, as `mkAnnotations` would render it. */
+  private def annotationName(in: Symbol, atp: Type): Option[String] = {
+    var n = annotationNameCache.get(atp)
+    if (n eq null) {
+      n = ExtractAPI.simpleName(processType(in, atp))
+      annotationNameCache.put(atp, n)
+    }
+    n
   }
 
   private def isAbstractMember(s: Symbol): Boolean =
