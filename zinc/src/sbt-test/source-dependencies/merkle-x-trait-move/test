@@ -1,0 +1,6 @@
+> app/run 1
+
+$ copy-file lib/changes/A.scala lib/A.scala
+$ copy-file lib/changes/Q.scala lib/Q.scala
+# m moved from the trait Q to the class A: B's mixin forwarder to Q.m must go
+> app/run 2

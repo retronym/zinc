@@ -250,10 +250,23 @@ private[inc] object DescendantRules:
    * `trait` narrowed to the descendants that hold the forwarders: a class or object that mixes the
    * trait in where its superclass does not. Deeper subclasses inherit the forwarders, and traits
    * get none. The Lean model's exhaustive check (`FlatRules.lean`) finds it as clean as `trait`.
+   * An upstream trait's composed API says which names its forwarders cover (see [[MerkleHashes]]),
+   * so a change it sees only through a class ancestor recompiles no descendant here.
    */
   val traitDirect: DescendantRule = rule("traitDirect") { (view, d, change) =>
     val p = change.className
-    if view.isTrait(p) && view.mixesIn(d, p) then Some(s"mixes in trait $p") else None
+    if !view.isTrait(p) || !view.mixesIn(d, p) then None
+    else if MerkleHashes.hasForwarderHashes(change.before) ||
+      MerkleHashes.hasForwarderHashes(change.after)
+    then
+      onNames(
+        change.modifiedNameStrings.flatMap(MerkleHashes.forwarded).map {
+          case "" => "private fields"
+          case n  => n
+        },
+        s"mixes in trait $p, forwarders for"
+      )
+    else Some(s"mixes in trait $p")
   }
 
   /**
