@@ -33,6 +33,18 @@ class ExtractAPISpecification
     assert(SameAPI(fooClassApi1, fooClassApi2) !== true)
   }
 
+  it should "keep the declared literal type of a def or var" in {
+    if (scalaVersion.startsWith("2.13")) {
+      def fooApi(src: String): ClassLike = extractApisFromSrc(src).find(_.name() == "Foo").get
+      val def1 = fooApi("class Foo { def x: 1 = 1 }")
+      val def2 = fooApi("class Foo { def x: 2 = 2 }")
+      assert(SameAPI(def1, def2) !== true)
+      val var1 = fooApi("class Foo { var x: 1 = 1 }")
+      val var2 = fooApi("class Foo { var x: 2 = 2 }")
+      assert(SameAPI(var1, var2) !== true)
+    }
+  }
+
   it should "extract correctly the definition type of a package object" in {
     val src = "package object foo".stripMargin
     val apis = extractApisFromSrc(src)
