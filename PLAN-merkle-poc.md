@@ -88,6 +88,40 @@ TODO:
 - Cross-module real corpus (catalyst + sql/core).
 - Known gaps: `ExternalLookup` fast-track (sbt's own hook) bypasses `MerkleHashes`; header detection relies on `bytecodeHash` differing when `HashAPI` doesn't see the change; the bridge cache in `~/.ivy2/local` is shared between worktrees, so runs take turns.
 
+## Phase 2 (design, for review): hash in the bridge
+
+Goal: one performance package, Merkle plus in-bridge hashing, measured as A = develop, B = Merkle, C = Merkle + bridge hashing, on catalyst and the cross-module Spark build.
+
+**Problem.** For every compiled class, `xsbt-api` builds a full `xsbti.api` tree: every declared member with its types, plus stubs and some inherited members now. Zinc then hashes it (`HashAPI`, `NameHashing`, `ExtraHashes`) and minimizes it, discarding most of the tree. On catalyst that tree is the phase's 704 MB of allocation, about as much as typer's 1,250 MB. Zinc's own work outside the compiler is about 2 s of a 12 s clean build, part of which is that hashing. The tree is a general reflection of the type system, built so it can be hashed and thrown away (talk §11).
+
+**Key decisions.**
+
+1. **The bridge sends what Zinc keeps, plus the hashes.** Per class: the thin `ClassLike` that `APIUtil.minimize` produces today (header, parents, declaration stubs, abstract inherited stubs, mains, annotated members) and a `ClassHashes` value (apiHash, extraHash, name hashes by `UseScope`, hasMacro, isAnnotationDefinition). The descendant rules, test and main discovery, and `MerkleHashes` read only the thin part, so they keep working unchanged.
+2. **A new callback, with a fallback.** `AnalysisCallback5.api(source, thinClass, hashes)`. Zinc keeps computing hashes from the tree for older bridges and for Java (`ClassToAPI`). Under `apiDebug` the bridge sends the full tree as today, so `APIDiff` still explains changes.
+3. **The hash function lives in the bridge, over compiler types.** It's a type hasher that mirrors `ExtractAPI.makeType` case by case: refinement unrolling, existential renaming, refinement-relative names, value-class erasure. It feeds a hasher instead of allocating `xsbti.api.Type`, and is memoised per (owner, type) like `typeCache`. A parent's per-name hashes are computed once per run and reused by every subclass, which is also the memoised Merkle composition of §10.
+4. **Equivalence is checked, not assumed.** In a transition mode the bridge computes both: the tree, hashed the old way, and the direct hash. Wherever the two disagree on *equality*, i.e. whether two versions of a class hash the same, that's a bug. Hash *values* may differ from today's, which costs one full recompile on upgrade. The conformance harness and the scripted suite run in this mode.
+5. **The name-hash contract gets written down,** because Zinc can no longer change it unilaterally: the `UseScope` partition, sealed children (`useOptimizedSealed`), private-member rules, and trait breakers for extraHash. That spec doubles as documentation of §12's key space.
+
+**Phasing,** each step measured A/B/C:
+
+- **H1:** keep the tree, move only the hashing into the bridge (over `xsbti.api`, a port of `HashAPI`/`NameHashing` into compiler-interface or the bridge), and send the thin class plus hashes. This proves the callback, the fallback and equivalence. It saves Zinc's hashing time and the minimize step, but not bridge allocation.
+- **H2:** hash directly from compiler types, and stop building the tree except for the thin parts. This is the allocation win, and the bulk of the work.
+- **H3:** memoise per symbol across classes in a run, so ancestors' per-name hashes are shared. This one is Merkle-specific.
+
+**Costs and risks.**
+- Hashing code then exists in two bridges plus Zinc's Java path.
+- A hashing bug needs a bridge release.
+- Hash stability between typing from source and unpickling must be preserved. The existing `ExtractAPI` special cases exist for exactly this, and the type hasher must mirror them.
+- Tools reading `Analysis.apis` see the same thin classes as today's minimized ones.
+
+**Out of scope for the PoC:** the Scala 3 bridge, which has its own ExtractAPI; `scala2-sbt-bridge` in scala/scala; Java.
+
+**Measurement:**
+- `xsbt-api` time and allocation, from scalac's `-Yprofile-enabled`;
+- Zinc time outside the compiler;
+- analysis size, and load and save time;
+- IncBench edit timings on catalyst, the cross-module build and the synthetic tree.
+
 ## Key decisions
 
 **1. Flattened composition over the stored linearization, done in Zinc at diff time.** *(Built only for cross-project lookups; see Status.)* The stub that `APIUtil.minimize` keeps already contains `structure.parents` = the linearized ancestor types as seen from the class (type args included). So for class `C` and name `n`:
