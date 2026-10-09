@@ -1,0 +1,10 @@
+# A public member added to class C changes the API of trait T extending it (inherited members
+# are part of T's API), so T and D are recompiled in the second round as descendants of C, and
+# no third round follows. T's extraHash folds in only trait parents, so the change to C is not
+# also reported as a change to T's private members.
+> compile
+$ copy-file changes/C1.scala C.scala
+> compile
+> checkIterations 3
+> checkRecompilations 1 C
+> checkRecompilations 2 T D

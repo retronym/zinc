@@ -1,0 +1,8 @@
+# Private members of class C, reached from D through T's super call, are C's own: D's bytecode
+# does not depend on them. A private change to C recompiles only C, and D still sees it.
+> run 11
+$ copy-file changes/C1.scala C.scala
+> run 112
+> checkIterations 2
+> checkRecompilations 1 C
+> checkRecompilations 0 T D Main
