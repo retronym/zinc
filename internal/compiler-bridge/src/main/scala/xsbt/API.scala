@@ -63,27 +63,52 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       case _                           => _ => false
     }
 
+    private val callback5: Option[xsbti.AnalysisCallback5] = callback match {
+      case cb: xsbti.AnalysisCallback5 => Some(cb)
+      case _                           => None
+    }
+    private val apiMode: xsbti.AnalysisCallback5.ApiMode =
+      callback5.fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
+    private val optimizedSealed: Boolean = callback5.exists(_.useOptimizedSealed())
+    private val materialiseLibraryMembers: String => Boolean =
+      callback5.fold((_: String) => true)(cb => cb.materialiseLibraryMembers(_))
+
+    import xsbti.AnalysisCallback5.ApiMode
+    private val extractApi =
+      new ExtractAPI[global.type](
+        global,
+        global.outputDirs,
+        isSubprojectClass,
+        materialiseLibraryMembers,
+        buildTree = apiMode != ApiMode.HASHES,
+        buildHashes = apiMode != ApiMode.TREE,
+        optimizedSealed = optimizedSealed
+      )
+
     private def processScalaUnit(unit: CompilationUnit): Unit = {
       val sourceFile: VirtualFile = unit.source.file match { case AbstractZincFile(vf) => vf }
       debuglog("Traversing " + sourceFile)
       callback.startSource(sourceFile)
-      val extractApi =
-        new ExtractAPI[global.type](global, sourceFile, global.outputDirs, isSubprojectClass)
+      extractApi.startUnit()
       val traverser = new TopLevelHandler(extractApi)
       traverser.apply(unit.body)
 
       val extractUsedNames = new ExtractUsedNames[global.type](global)
       extractUsedNames.extractAndReport(unit)
 
-      val classApis = traverser.allNonLocalClasses
-      val mainClasses = traverser.mainClasses
-
-      // Use of iterators make this code easier to profile
-
-      val classApisIt = classApis.iterator
-      while (classApisIt.hasNext) {
-        callback.api(sourceFile, classApisIt.next())
+      (apiMode, callback5) match {
+        case (ApiMode.HASHES, Some(cb)) =>
+          extractApi.allExtracted.foreach(e => cb.api(sourceFile, e.thin, e.hashes))
+        case (ApiMode.CHECK, Some(cb)) =>
+          extractApi.allExtracted.foreach(e => cb.apiCheck(sourceFile, e.full, e.thin, e.hashes))
+        case _ =>
+          // Use of iterators make this code easier to profile
+          val classApisIt = traverser.allNonLocalClasses.iterator
+          while (classApisIt.hasNext) {
+            callback.api(sourceFile, classApisIt.next())
+          }
       }
+      val mainClasses = traverser.mainClasses
 
       val mainClassesIt = mainClasses.iterator
       while (mainClassesIt.hasNext) {

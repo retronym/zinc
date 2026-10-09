@@ -92,8 +92,18 @@ object APIUtil:
       lzy(inheritedMains ++ abstractInherited.map(stubDefinition))
     )
 
+  /** Drops the bridge's erased-signature witness, which only feeds the hash. */
   def stubDefinition(d: ClassDefinition): ClassDefinition =
-    Def.of(d.name, d.access, d.modifiers, d.annotations, Array.empty, Array.empty, emptyType)
+    val annotations = d.annotations.filterNot(isErasedSignature)
+    Def.of(d.name, d.access, d.modifiers, annotations, Array.empty, Array.empty, emptyType)
+
+  private def isErasedSignature(a: Annotation): Boolean =
+    a.base match
+      case s: Singleton =>
+        s.path.components match
+          case Array(id: Id) => id.id == "<erased-signature>"
+          case _             => false
+      case _ => false
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean

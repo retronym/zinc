@@ -327,6 +327,12 @@ private[inc] abstract class IncrementalCommon(
    * @param newAPI A function that returns the current class associated with a given class name.
    * @return A list of API changes of the given two analyzed classes.
    */
+  /** The classes to recompile because a library ancestor changed. See [[LibraryAncestors]]. */
+  protected def libraryDescendants(relations: Relations): Set[String] = Set.empty
+
+  /** The classes of the libraries that changed since the previous compile, set before it. */
+  private[inc] var changedLibraryClasses: Set[String] = Set.empty
+
   def detectAPIChanges(
       recompiledClasses: collection.Set[String],
       oldAPI: String => AnalyzedClass,
@@ -598,7 +604,8 @@ private[inc] abstract class IncrementalCommon(
         invalidateClassesExternally(previous, externalAPIChange, isScalaSource)
       }.toSet
 
-    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep
+    val byLibraryAncestor = libraryDescendants(previous)
+    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor
     val allInvalidatedSourcefiles = addedSrcs ++ modifiedSrcs ++ byProduct ++ byLibraryDep
 
     if previous.allSources.isEmpty then
@@ -624,6 +631,7 @@ private[inc] abstract class IncrementalCommon(
             "sources invalidated by products" -> byProduct.map(_.id),
             "sources invalidated by binary dependencies" -> byLibraryDep.map(_.id),
             "classes invalidated by external sources" -> byExtSrcDep,
+            "classes with a changed library ancestor" -> byLibraryAncestor,
           )
         )
       )
