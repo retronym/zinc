@@ -396,11 +396,17 @@ case class ProjectStructure(
         xsbti.compile.TransactionalManagerType
           .of((targetDir / "classes.bak").toFile, sbt.util.Logger.Null)
       )
+    // As sbt does for Scala 3: delete and restore a class's TASTy file with its classfile.
+    val auxiliary: Array[xsbti.compile.AuxiliaryClassFiles] =
+      if scalaVersion.startsWith("3") then Array(xsbti.compile.TastyFiles.instance())
+      else incOptions0.auxiliaryClassFiles()
     val incO =
       incOptions0
         .withClassfileManagerType(transactional)
         .withStoreApis(storeApis)
+        .withAuxiliaryClassFiles(auxiliary)
     (incO, sco)
+  end val
   val exportPipelining = incOptions.pipelining
 
   def prev(useCachedAnalysis: Boolean = true) =
