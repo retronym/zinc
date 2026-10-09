@@ -261,6 +261,17 @@ class ExtractAPI[GlobalType <: Global](
     }
   }
 
+  private[this] val printedArgsCache = new java.util.IdentityHashMap[AnnotationInfo, String]()
+  private def printedArgs(a: AnnotationInfo): String = {
+    val cached = printedArgsCache.get(a)
+    if (cached ne null) cached
+    else {
+      val printed = ReusableTreePrinter.mkString(a.args, "(", ",", ")")
+      printedArgsCache.put(a, printed)
+      printed
+    }
+  }
+
   // The compiler only pickles static annotations, so only include these in the API.
   // This way, the API is not sensitive to whether we compiled from source or loaded from classfile.
   // (When looking at the sources we see all annotations, but when loading from classes we only see the pickled (static) ones.)
@@ -276,7 +287,7 @@ class ExtractAPI[GlobalType <: Global](
               if (a.assocs.isEmpty)
                 Array(
                   xsbti.api.AnnotationArgument
-                    .of("", ReusableTreePrinter.mkString(a.args, "(", ",", ")"))
+                    .of("", printedArgs(a))
                 ) // what else to do with a Tree?
               else
                 a.assocs
@@ -628,6 +639,9 @@ class ExtractAPI[GlobalType <: Global](
    * paying for their signatures.
    */
   private def stub(m: Symbol): Option[xsbti.api.ClassDefinition] =
+    stubCache.getOrElseUpdate(m, stub0(m))
+  private[this] val stubCache = perRunCaches.newMap[Symbol, Option[xsbti.api.ClassDefinition]]()
+  private def stub0(m: Symbol): Option[xsbti.api.ClassDefinition] =
     if (isClass(m) || m.isNonClassType || (m.isMethod && (!m.isSourceMethod || m.isSetter))) None
     else {
       val name = if (m.isMethod) simpleNameForMethod(m) else simpleName(m)
@@ -679,7 +693,10 @@ class ExtractAPI[GlobalType <: Global](
     // `isParamAccessor` does not exist in all supported versions of Scala, so the flag check is done directly
     (getter == NoSymbol && !sym.hasFlag(Flags.PARAMACCESSOR)) || (getter eq sym)
   }
-  private def getModifiers(s: Symbol): xsbti.api.Modifiers = {
+  private[this] val modifiersCache = perRunCaches.newMap[Symbol, xsbti.api.Modifiers]()
+  private def getModifiers(s: Symbol): xsbti.api.Modifiers =
+    modifiersCache.getOrElseUpdate(s, getModifiers0(s))
+  private def getModifiers0(s: Symbol): xsbti.api.Modifiers = {
     import Flags._
     import xsbt.Compat._
     val absOver = s.hasFlag(ABSOVERRIDE)
@@ -1172,7 +1189,7 @@ class ExtractAPI[GlobalType <: Global](
           if (a.assocs.isEmpty)
             mix(
               mix(H.ListHash, strHash("")),
-              strHash(ReusableTreePrinter.mkString(a.args, "(", ",", ")"))
+              strHash(printedArgs(a))
             )
           else
             listHash(a.assocs) { case (name, value) =>
@@ -1201,11 +1218,30 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   private[this] val erasedSignatureHashCache = perRunCaches.newMap[Symbol, Int]()
+
+  /** The hash of `erasedSignature(transformedType(s))`, without building the string. */
   private def erasedSignatureHash(s: Symbol): Int =
     erasedSignatureHashCache.getOrElseUpdate(
       s,
-      mix(H.ErasedSignatureHash, strHash(erasedSignature(transformedType(s))))
+      mix(H.ErasedSignatureHash, erasedTypeHash(transformedType(s)))
     )
+
+  private def erasedTypeHash(tp: Type): Int = tp match {
+    case MethodType(params, res) =>
+      mix(
+        mix(H.ValueParamsHash, listHash(params)(p => erasedTypeHash(p.info))),
+        erasedTypeHash(res)
+      )
+    case NullaryMethodType(res) => mix(H.ValueParamsHash, erasedTypeHash(res))
+    case TypeRef(_, sym, arg :: Nil) if sym == definitions.ArrayClass =>
+      mix(H.ParameterizedHash, erasedTypeHash(arg))
+    case TypeRef(_, sym, _) => fullNameHash(sym)
+    case _                  => fullNameHash(tp.typeSymbol)
+  }
+
+  private[this] val fullNameHashCache = perRunCaches.newMap[Symbol, Int]()
+  private def fullNameHash(s: Symbol): Int =
+    fullNameHashCache.getOrElseUpdate(s, strHash(s.fullName))
 
   private def accessHash(a: xsbti.api.Access): Int = a match {
     case q: xsbti.api.Qualified =>
@@ -1577,14 +1613,17 @@ class ExtractAPI[GlobalType <: Global](
     else if (sym.isVariable || sym.isStable) isSourceField(sym)
     else sym.isSourceMethod && !sym.isSetter
 
-  /** A stub of the member `definition(in, s)` extracts, as `APIUtil.stubDefinition` makes it. */
+  /**
+   * A stub of the member `definition(in, s)` extracts, as `APIUtil.stubDefinition` makes it,
+   * which drops the erased-signature witness: it only feeds the hash.
+   */
   private def stubOf(in: Symbol, s: Symbol): xsbti.api.ClassDefinition = {
     val (name, as) =
       if (isClass(s)) (classNameAsSeenIn(in, s), annotations(in, s))
       else if (s.isNonClassType) (simpleName(s), annotations(in, s))
       else if (s.isVariable || s.isStable || s.isGetter)
-        (simpleName(s), withErasedSignature(s, annotations(in, s)))
-      else (simpleNameForMethod(s), withErasedSignature(s, annotations(in, s)))
+        (simpleName(s), annotations(in, s))
+      else (simpleNameForMethod(s), annotations(in, s))
     xsbti.api.Def.of(
       name,
       getAccess(s),
@@ -1729,16 +1768,21 @@ class ExtractAPI[GlobalType <: Global](
     s.unexpandedName.decode.trim
   }
 
-  private def simpleNameForMethod(s: Symbol): String = {
+  private[this] val methodNameCache = perRunCaches.newMap[Symbol, String]()
+  private def simpleNameForMethod(s: Symbol): String =
+    methodNameCache.getOrElseUpdate(s, simpleNameForMethod0(s))
+  private def simpleNameForMethod0(s: Symbol): String = {
     val name = s.unexpandedName
     val untrimmedName = if (name == nme.CONSTRUCTOR)
       constructorNameAsString(s.enclClass)
     else {
       val decoded = name.decode
-      decoded match {
-        case ConstructorWithDefaultArgument(index) => constructorNameAsString(s.enclClass, index)
-        case _                                     => decoded
-      }
+      if (!decoded.startsWith("<init>$default$")) decoded
+      else
+        decoded match {
+          case ConstructorWithDefaultArgument(index) => constructorNameAsString(s.enclClass, index)
+          case _                                     => decoded
+        }
     }
     untrimmedName.trim
   }
