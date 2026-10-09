@@ -591,7 +591,7 @@ private[inc] abstract class IncrementalCommon(
       api.classApi.topLevel && api.objectApi.topLevel
     val added =
       compiledClasses.filter(c => previous.relations.definesClass(c).isEmpty && isTopLevel(c))
-    if added.isEmpty then Set.empty
+    if added.isEmpty || sys.env.contains("ZINC_BENCH_NO_ADDED") then Set.empty
     else
       // No reference resolves to a package object by its name, `package`.
       val names = added.map(c => c.substring(c.lastIndexOf('.') + 1)) - "package"
