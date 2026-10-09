@@ -25,12 +25,18 @@ import xsbti.api.{ ClassLike, DefinitionType, NameHash }
  * Checks the bridge's hashes against Zinc's, under `apiCheck`. Hash values differ between the two,
  * so the check is on what they are for: whether a class, or a name in it, changed since the last
  * compile of that class in this JVM. Each disagreement is a warning tagged `[api-check]`, and is
- * appended to the file named by the `xsbt.api.check.report` system property, if set. Within one
+ * appended to the file named by the `xsbt.api.check.report` system property or the
+ * `apiCheckReport` incOption, if set. Within one
  * compile, it also checks that both have the same name-hash keys and macro flag, and that the
  * bridge's thin class is what `APIUtil.minimize` makes of the full one.
  */
 object ApiHashCheck:
-  final case class Hashes(api: Int, extra: Int, names: Map[(String, UseScope), Int], hasMacro: Boolean)
+  final case class Hashes(
+      api: Int,
+      extra: Int,
+      names: Map[(String, UseScope), Int],
+      hasMacro: Boolean
+  )
 
   def treeHashes(classApi: ClassLike, optimizedSealed: Boolean): ClassHashes =
     val apiHash = HashAPI(classApi)
@@ -69,6 +75,7 @@ object ApiHashCheck:
       thin: ClassLike,
       bridgeHashes: ClassHashes,
       optimizedSealed: Boolean,
+      report: Option[String],
       log: Logger
   ): Unit =
     val tree = toHashes(treeHashes(full, optimizedSealed))
@@ -77,7 +84,8 @@ object ApiHashCheck:
     if tree.names.keySet != bridge.names.keySet then
       val onlyTree = (tree.names.keySet -- bridge.names.keySet).map(show).toList.sorted
       val onlyBridge = (bridge.names.keySet -- tree.names.keySet).map(show).toList.sorted
-      problems += s"name keys differ: only Zinc's ${onlyTree.mkString(", ")}; only the bridge's ${onlyBridge.mkString(", ")}"
+      problems +=
+        s"name keys differ: only Zinc's ${onlyTree.mkString(", ")}; only the bridge's ${onlyBridge.mkString(", ")}"
     if tree.hasMacro != bridge.hasMacro then
       problems += s"hasMacro: Zinc ${tree.hasMacro}, bridge ${bridge.hasMacro}"
     thinDifference(APIUtil.minimize(full), thin).foreach(problems += _)
@@ -87,7 +95,8 @@ object ApiHashCheck:
       comparisons.incrementAndGet()
       def agree(what: String, treeChanged: Boolean, bridgeChanged: Boolean): Unit =
         if treeChanged != bridgeChanged then
-          problems += s"$what: Zinc says ${changed(treeChanged)}, the bridge ${changed(bridgeChanged)}"
+          problems +=
+            s"$what: Zinc says ${changed(treeChanged)}, the bridge ${changed(bridgeChanged)}"
       agree("apiHash", prevTree.api != tree.api, prevBridge.api != bridge.api)
       agree("extraHash", prevTree.extra != tree.extra, prevBridge.extra != bridge.extra)
       val keys = prevTree.names.keySet ++ tree.names.keySet ++ prevBridge.names.keySet ++
@@ -105,7 +114,7 @@ object ApiHashCheck:
       disagreements.addAndGet(ps.size.toLong)
       val lines = ps.map(p => s"[api-check] ${full.name} (${full.definitionType}): $p")
       lines.foreach(log.warn(_))
-      Option(System.getProperty("xsbt.api.check.report")).foreach { f =>
+      report.foreach { f =>
         ApiHashCheck.synchronized {
           Files.write(
             Paths.get(f),
@@ -117,9 +126,9 @@ object ApiHashCheck:
       }
   end check
 
-  def reportSummary(log: Logger): Unit =
+  def reportSummary(report: Option[String], log: Logger): Unit =
     log.info(summary)
-    Option(System.getProperty("xsbt.api.check.report")).foreach { f =>
+    report.foreach { f =>
       Files.write(
         Paths.get(f + ".summary"),
         (summary + "\n").getBytes(StandardCharsets.UTF_8)
@@ -149,5 +158,10 @@ object ApiHashCheck:
             expected.savedAnnotations.toList.sorted,
             actual.savedAnnotations.toList.sorted
           )
-      Some(s"thin class differs from minimize: ${if details.isEmpty then "in signatures, modifiers or annotations" else details.mkString("; ")}")
+      Some(s"thin class differs from minimize: ${
+          if details.isEmpty then "in signatures, modifiers or annotations"
+          else details.mkString("; ")
+        }")
+    end if
+  end thinDifference
 end ApiHashCheck

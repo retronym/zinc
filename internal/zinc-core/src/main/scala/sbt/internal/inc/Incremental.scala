@@ -503,6 +503,10 @@ object Incremental:
     java.lang.Boolean.getBoolean(apiCheckProp) ||
       options.extra().getOrDefault("apiCheck", "false").trim == "true"
 
+  private[inc] def apiCheckReport(options: IncOptions): Option[String] =
+    Option(System.getProperty("xsbt.api.check.report"))
+      .orElse(Option(options.extra().get("apiCheckReport")).map(_.trim))
+
   /** Whether a bridge that can hash APIs itself should, rather than send the full API. */
   private[inc] def bridgeHashing(options: IncOptions): Boolean =
     options.extra().getOrDefault("bridgeHashing", "true").trim != "false"
@@ -1034,7 +1038,15 @@ private final class AnalysisCallback(
       hashes: ClassHashes
   ): Unit =
     val key = jo2o(output.getSingleOutputAsPath).fold("")(_.toString)
-    ApiHashCheck.check(key, fullClass, thinClass, hashes, options.useOptimizedSealed(), log)
+    ApiHashCheck.check(
+      key,
+      fullClass,
+      thinClass,
+      hashes,
+      options.useOptimizedSealed(),
+      Incremental.apiCheckReport(options),
+      log
+    )
     storeApi(sourceFile, if Incremental.apiDebug(options) then fullClass else thinClass, hashes)
 
   private def storeApi(sourceFile: VirtualFileRef, classApi: ClassLike, hashes: ClassHashes): Unit =
@@ -1372,7 +1384,8 @@ private final class AnalysisCallback(
       case None               => sourceInfoFromCurrentRun
 
   override def apiPhaseCompleted(): Unit =
-    if Incremental.apiCheck(options) then ApiHashCheck.reportSummary(log)
+    if Incremental.apiCheck(options) then
+      ApiHashCheck.reportSummary(Incremental.apiCheckReport(options), log)
 
   val phaseListener = CompilerPhaseListener(
     waitForInlining = currentSetup.compilerVersion.startsWith("3."),

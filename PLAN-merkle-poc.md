@@ -114,6 +114,22 @@ Goal: one performance package, Merkle plus in-bridge hashing, measured as A = de
 - Hash stability between typing from source and unpickling must be preserved. The existing `ExtractAPI` special cases exist for exactly this, and the type hasher must mirror them.
 - Tools reading `Analysis.apis` see the same thin classes as today's minimized ones.
 
+**H2 status (2026-10-09).** Built on `claude/merkle-bridge-hashing`:
+
+- `AnalysisCallback5` (`apiMode`, `useOptimizedSealed`, `api(source, thinClass, ClassHashes)`, `apiCheck(source, full, thin, hashes)`) and `ClassHashes` (apiHash, extraHash before Zinc folds in trait parents, name hashes, hasMacro). `isAnnotationDefinition` stays in Zinc: the thin class keeps the parents it reads.
+- Zinc picks the mode: `TREE` under `apiDebug` or `bridgeHashing=false` (incOption), `CHECK` under `apiCheck=true` (incOption or `-Dxsbt.api.check=true`), else `HASHES`. Java (`ClassToAPI`) and older bridges keep the tree path.
+- The bridge builds the thin class directly (no full structure), and hashes from symbols and types (`ExtractAPI`, "Direct hashing").
+- `ApiHashCheck`: under `CHECK`, per class, Zinc hashes the tree too and reports (`[api-check]` warnings, and the `apiCheckReport` file) where the two disagree on whether the class's apiHash, extraHash or any name hash changed since the previous compile of that class in the JVM; and, within one compile, any difference in name-hash keys, `hasMacro`, or the thin class vs `APIUtil.minimize(full)`.
+
+**Name-hash contract (H2).** What the bridge hashes, so that Zinc and the bridge agree on it. Values are not stable across Zinc versions; only equality between two versions of a class is.
+
+- *apiHash* covers the class's type parameters, self type, sealed descendants (including itself), whether it is a trait, its linearized parents as seen from it (plus a value class's underlying type), and every non-private declared and inherited member. Inherited members are those `ExtractAPI` materialises: from library ancestors in full, platform and overridden-library members as typeless stubs. Non-private means not `private` or `private[this]`; `private[pkg]` counts. A top-level class's own name, access, modifiers and annotations are not in it.
+- A *member* hashes its API name, static annotations (plus the erased-signature witness for vals, vars and defs), modifiers, access, and its signature as seen from the class: type parameters, value parameter lists (names, types, repeated/by-name, defaults, implicitness), result type; a type member's bounds or alias; a nested class's type parameters only.
+- *Types* hash as `makeType` would build them: aliases dealiased, references to refinement classes unrolled once (recursive references dropped), existential variables renamed by nesting position, type parameters named relative to the outermost refinement (sbt/sbt#1079), raw Java types as existentials, constant types with their value, non-static annotations dropped.
+- *extraHash*: for a trait, apiHash plus its private fields, objects and super accessors (trait breakers); otherwise apiHash. Zinc folds in trait parents' extraHashes.
+- *Name hashes* are keyed by simple name (after the last `.`) and `UseScope`. Entries: the class itself under its simple name (its header and parents, without members); every non-private member; and the non-private members of every refinement reachable from those, recursively. Implicit members go to `Implicit`, others to `Default`. With `useOptimizedSealed`, sealed descendants are hashed only into a `PatMatTarget` entry for a sealed class; otherwise into its `Default` entry. Each entry is salted with the class's name and namespace.
+- *hasMacro*: the class or any declared member (private too) is a macro, or `@inline` under the optimizer.
+
 **Out of scope for the PoC:** the Scala 3 bridge, which has its own ExtractAPI; `scala2-sbt-bridge` in scala/scala; Java.
 
 **Measurement:**
