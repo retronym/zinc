@@ -8,7 +8,30 @@ The conformance harness (retronym/zinc#25) found no undercompilation in generate
 - **Check.** After each edit's incremental compile, `IncBench --verify` builds the edited sources from scratch in a mirror and compares every classfile by digest. Each revert is compared with the initial clean build.
 - **Batch dependence.** scalac's output depends on its batch, so a digest difference alone doesn't mean staleness. Differences are explained against further clean builds, built only when needed: one that sees the Java classes as classfiles, and one per round that reproduces which Java sources the incremental round had as sources. Each step gets a verdict: `same`, `signature` (only type-variable names in generic signatures differ), `java-context` (explained by those builds), `fresh-mismatch` (written by this compile but explained by none), or `bytecode` (a stale, missing or extra classfile: undercompilation).
 
-## Results (Scala 2.13.16, pipelining off)
+## Results with a batch-stable scalac (headline)
+
+Scala `2.13.19-stability-4` is retronym/scala `stability-fixes` at 145161e92e: scala/scala#11289, #11290, #11291 and #11292 merged into 2.13.x. It ran with `javac -parameters` and pipelining off, on all 146 edits for both the PoC and develop. All 146 compile.
+
+- **No undercompilation:** both PoC and develop verify all 292 steps (146 edits, each with its revert). No stale, missing or extra classfiles.
+- **One class still differs:** `CatalogV2Util$`. An eta-expanded Java enum `valueOf` names its parameter `x` when the enum is a Java source in the batch and `name` when it's a classfile (fixed by scala/scala#11293). It matches the clean build that reads Java from classfiles.
+- **On `2.13.19-stability-5`,** which adds that fix, the edit that exposed it is byte-identical incremental vs clean.
+
+Recompiled classes (median / max) and wall time (median, s) on this compiler:
+
+| target | edit | n | develop | PoC | develop s | PoC s |
+|---|---|---|---|---|---|---|
+| ancestor | add-member | 28 | 531 / 1372 | 290 / 751 | 6.3 | 3.2 |
+| ancestor | overload | 24 | 716 / 1514 | 544 / 1514 | 11.7 | 6.3 |
+| ancestor | body | 28 | 8 / 520 | 8 / 531 | 0.4 | 0.5 |
+| ancestor | serializable | 28 | 870 / 2305 | 872 / 1988 | 13.9 | 10.9 |
+| leaf | add-member | 10 | 16 / 59 | 16 / 59 | 0.5 | 0.6 |
+| leaf | body | 10 | 13 / 48 | 13 / 48 | 0.4 | 0.4 |
+| leaf | overload | 10 | 120 / 591 | 120 / 591 | 1.8 | 1.6 |
+| leaf | serializable | 8 | 33 / 748 | 33 / 760 | 0.6 | 0.5 |
+
+Totals over 146 edits: develop 70,097 classes and 1,113 s; PoC 58,675 and 695 s.
+
+## Earlier results (Scala 2.13.16, pipelining off)
 
 No undercompilation in the PoC or in develop.
 
@@ -44,9 +67,10 @@ Each makes an incremental build differ from a clean one without any undercompila
 | static forwarders' type variables, `compose[A]` vs `compose[A$]` | cloned type parameters renamed depending on the batch | scala/scala#11289 |
 | Java `static final` constant expressions inlined from a classfile, read as fields from a source | `JavaParsers` folds only single literals | scala/scala#11290 (scala/bug#10410) |
 | mixin forwarders' parameter names for Java interfaces | no parameter names in classfiles | compile Java with `javac -parameters` |
-| erased lub: `Unevaluable` vs `ImplicitCastInputTypes` | base types of equal depth ordered by symbol id | scala/scala#11291 (draft) |
-| mixin forwarder `lazyZip[B]`: `B$` vs `B$$$$$` | `$` suffix count depends on the batch | open |
-| pickle of a Scala class implementing a Java interface | Java interface from source vs classfile | open |
+| erased lub: `Unevaluable` vs `ImplicitCastInputTypes` | base types of equal depth ordered by symbol id | scala/scala#11291 |
+| mixin forwarder `lazyZip[B]`: `B$` vs `B$$$$$` | an existential forwarder info wasn't cloned | scala/scala#11289 (third commit) |
+| pickle of a Scala class implementing a Java interface | `Object` typed as `ObjectTpeJava` in Java sources only | scala/scala#11292 |
+| Java enum `valueOf` parameter name, `x` vs `name` | `JavaParsers` named it `x`; javac, `name` | scala/scala#11293 |
 
 ## Harness changes on this branch
 
