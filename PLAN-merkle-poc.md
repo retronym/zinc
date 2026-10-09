@@ -121,6 +121,14 @@ Goal: one performance package, Merkle plus in-bridge hashing, measured as A = de
 - The bridge builds the thin class directly (no full structure), and hashes from symbols and types (`ExtractAPI`, "Direct hashing").
 - `ApiHashCheck`: under `CHECK`, per class, Zinc hashes the tree too and reports (`[api-check]` warnings, and the `apiCheckReport` file) where the two disagree on whether the class's apiHash, extraHash or any name hash changed since the previous compile of that class in the JVM; and, within one compile, any difference in name-hash keys, `hasMacro`, or the thin class vs `APIUtil.minimize(full)`.
 
+**H2 results (catalyst, 2026-10-09; times unreliable, machine loaded).**
+
+- Equivalence, check mode, 0 disagreements everywhere: smoke scripted (76 tests; 541 classes, 231 cross-version comparisons); catalyst member edits (10,200 classes, 6,390 comparisons); catalyst header edits (23,673 classes, 19,797 comparisons). The checker catches a broken hasher: dropping member signatures gives 6 disagreements and two undercompiling tests.
+- Recompiled sets are identical to the PoC's on every catalyst edit (10 / 420 / 388; header 1,987 and 1,897).
+- `xsbt-api` allocation, warm clean build, mean of 2: 737 MB on the tree path (PoC), 512 MB with H2 (-31%). The first H2 version allocated 800 MB; the cuts were not building the erased-signature string, caching method names (one regex per name), stubs, modifiers and printed annotation arguments, two-level memo maps without tuple keys, and saved annotations read from symbols. Of what remains, about two thirds is the bridge's own work (mostly selecting inherited members and erasing for the witness), a sixth `ExtractUsedNames`, a tenth `registerGeneratedClasses`.
+- Zinc's `HashAPI`/`NameHashing`/`minimize` no longer run on the H2 path (0.39 s on catalyst in the PoC measurement).
+- Thin stubs drop the erased-signature witness, and so does `APIUtil.minimize`: it only feeds the hash.
+
 **Name-hash contract (H2).** What the bridge hashes, so that Zinc and the bridge agree on it. Values are not stable across Zinc versions; only equality between two versions of a class is.
 
 - *apiHash* covers the class's type parameters, self type, sealed descendants (including itself), whether it is a trait, its linearized parents as seen from it (plus a value class's underlying type), and every non-private declared and inherited member. Inherited members are those `ExtractAPI` materialises: from library ancestors in full, platform and overridden-library members as typeless stubs. Non-private means not `private` or `private[this]`; `private[pkg]` counts. A top-level class's own name, access, modifiers and annotations are not in it.
