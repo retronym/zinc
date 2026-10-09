@@ -152,6 +152,7 @@ object Conformance:
       tiers: Map[String, Int] = Map.empty,
       scalacOptions: String = "",
       groups: Map[String, String] = Map.empty,
+      probe: String = "",
   ):
     def tier(file: String): Int = tiers.getOrElse(
       file,
@@ -272,6 +273,7 @@ object Conformance:
           case _                 =>
             Map.empty
         ,
+        f.get("probe").map(str).getOrElse(""),
       )
     }
 
@@ -383,7 +385,8 @@ object Conformance:
       ok: Boolean,
       classes: Map[String, String],
       errors: Seq[String],
-      recompiled: Set[String]
+      recompiled: Set[String],
+      probe: Seq[String] = Nil,
   )
 
   private def silentLogger(): ManagedLogger =
@@ -482,6 +485,16 @@ object Conformance:
         }
       }.toSet
 
+    /**
+     * The class names in the constant pool of the classfile `name` (a path under a subproject's
+     * classes, without `.class`): what a compiled reference resolved to.
+     */
+    def probe(name: String): Seq[String] =
+      projects.flatMap { p =>
+        val f = dir.resolve(p).resolve("target").resolve("classes").resolve(name + ".class")
+        if !Files.exists(f) then Nil else constantNames(Files.readAllBytes(f))
+      }
+
     private def classes(): Map[String, String] =
       projects.flatMap { p =>
         val root = dir.resolve(p).resolve("target").resolve("classes")
@@ -496,6 +509,25 @@ object Conformance:
 
     def finish(): Unit = if handler != null then handler.finish(state)
   end Build
+
+  /** The UTF-8 constants of a classfile that look like internal class names. */
+  def constantNames(b: Array[Byte]): Seq[String] =
+    val in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(b))
+    in.skipBytes(8)
+    val n = in.readUnsignedShort()
+    val out = mutable.ArrayBuffer.empty[String]
+    var i = 1
+    while i < n do
+      in.readUnsignedByte() match
+        case 1 =>
+          val s = in.readUTF()
+          if s.contains('/') then out += s
+        case 7 | 8 | 16 | 19 | 20 => in.skipBytes(2)
+        case 15                   => in.skipBytes(3)
+        case 5 | 6                => in.skipBytes(8); i += 1
+        case _                    => in.skipBytes(4)
+      i += 1
+    out.toSeq.distinct.sorted
 
   extension [A](o: java.util.Optional[A])
     private def toScala: Option[A] = if o.isPresent then Some(o.get) else None
@@ -538,8 +570,11 @@ object Conformance:
       var current: Option[(String, Result)] = None
       def cleanBuild(files: Map[String, String], base: Base): Result =
         cache.getOrElseUpdate(
-          key(files, base),
-          { clean.reset(files, base); clean.compile().copy(recompiled = Set.empty) }
+          key(files, base), {
+            clean.reset(files, base)
+            val r = clean.compile().copy(recompiled = Set.empty)
+            if base.probe.isEmpty || !r.ok then r else r.copy(probe = clean.probe(base.probe))
+          }
         )
       def finish(): Unit =
         work.finish(); clean.finish()
@@ -554,7 +589,8 @@ object Conformance:
         case Some((id, r)) if id == b.id => r
         case _                           =>
           l.work.reset(baseFiles, b)
-          val r = l.work.compile()
+          val rb = l.work.compile()
+          val r = if b.probe.isEmpty || !rb.ok then rb else rb.copy(probe = l.work.probe(b.probe))
           l.cache(l.key(baseFiles, b)) = r.copy(recompiled = Set.empty)
           l.current = Some(b.id -> r)
           r
@@ -587,6 +623,8 @@ object Conformance:
                 if e.model.isEmpty then "" else e.model + ","
               }""" +
             s""""cleanOk":${cl.ok},"diff":${json(diff(inc, cl))},""" +
+            (if b.probe.isEmpty then ""
+             else s""""baseProbe":${json(r0.probe)},"cleanProbe":${json(cl.probe)},""") +
             s""""revertDiff":${json(diff(back, r0))},""" +
             s""""incErrors":${json(inc.errors)},"cleanErrors":${json(cl.errors)},""" +
             s""""revertErrors":${json(back.errors)}}"""
