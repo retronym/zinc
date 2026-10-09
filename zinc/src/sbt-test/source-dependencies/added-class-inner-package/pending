@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, resolves `Foo` to `a.Foo`.
+> compile
+
+# Adding `a.b.Foo` shadows `a.Foo` for Client, and its `v` is a String: a clean build fails.
+# Zinc records no dependency from Client on the name it missed in package `a.b`.
+$ copy-file changes/Inner.scala Inner.scala
+-> compile
