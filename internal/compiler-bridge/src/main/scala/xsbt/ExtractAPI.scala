@@ -372,7 +372,14 @@ class ExtractAPI[GlobalType <: Global](
           (tpe.typeArgs.head, ByName)
         else
           (tpe, Plain)
-      xsbti.api.MethodParameter.of(name, processType(in, t), hasDefault(paramSym), special)
+      // Parameter annotations such as `@deprecatedName` affect call sites; the API has no place
+      // for them other than the parameter type.
+      val paramAnnotations =
+        if (paramSym == NoSymbol) ExtractAPI.emptyAnnotationArray else annotations(in, paramSym)
+      val paramType =
+        if (paramAnnotations.isEmpty) processType(in, t)
+        else xsbti.api.Annotated.of(processType(in, t), paramAnnotations)
+      xsbti.api.MethodParameter.of(name, paramType, hasDefault(paramSym), special)
     }
     val t = viewer(in).memberInfo(s)
     build(t, Array(), Nil)
