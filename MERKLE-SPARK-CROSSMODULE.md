@@ -26,15 +26,15 @@ Classes recompiled / rounds, per module. "B₀" is the PoC before the `traitDire
 
 | edit (in catalyst) | catalyst A | catalyst B | core A | core B₀ | core B | wall A | wall B |
 |---|---|---|---|---|---|---|---|
-| `TreeNode`: add unused member | 1,371 / 3 | 420 / 2 | 518 / 2 | 201 / 3 | **44 / 2** | 25.7 s | 8.2 s |
-| `Expression`: add unused member | 1,200 / 3 | 388 / 2 | 59 / 1 | 45 / 2 | **28 / 2** | 19.7 s | 6.0 s |
-| `LogicalPlan`: add unused member | 389 / 3 | 47 / 2 | 148 / 1 | 143 / 3 | **2 / 1** | 7.9 s | 2.6 s |
-| `UnaryExpression`: add unused member | 800 / 3 | 146 / 2 | 21 / 1 | 8 / 1 | **8 / 1** | 7.6 s | 2.6 s |
+| `TreeNode`: add unused member | 1,371 / 3 | 420 / 2 | 518 / 2 | 201 / 3 | **44 / 2** | 25.7–54.6 s | 8.2 s |
+| `Expression`: add unused member | 1,200 / 3 | 388 / 2 | 59 / 1 | 45 / 2 | **28 / 2** | 19.7–21.2 s | 6.0 s |
+| `LogicalPlan`: add unused member | 389 / 3 | 47 / 2 | 148 / 1 | 143 / 3 | **2 / 1** | 7.9–8.6 s | 2.6 s |
+| `UnaryExpression`: add unused member | 800 / 3 | 146 / 2 | 21 / 1 | 8 / 1 | **8 / 1** | 7.6–10.6 s | 2.6 s |
 | `TreeNode`: body only | 10 / 1 | 10 / 1 | 0 | 0 | 0 | 0.75 s | 1.08 s |
-| `TreeNode`: add `java.io.Serializable` | 2,304 / 4 | 1,987 / 3 | 1,051 / 2 | 1,051 / 1 | 1,051 / 1 | 39.2 s | 49.6 s |
-| clean build, warm JVM | 2,527 | 2,527 | 1,961 | 1,961 | 1,961 | 31.9 s | 32.7 s |
+| `TreeNode`: add `java.io.Serializable` | 2,304 / 4 | 1,987 / 3 | 1,051 / 2 | 1,051 / 1 | 1,051 / 1 | 39.2–56.9 s | 49.6 s |
+| clean build, warm JVM | 2,527 | 2,527 | 1,961 | 1,961 | 1,961 | 28.7–31.9 s | 32.7 s |
 
-Body-only wall times are medians of 5 edit/revert pairs; the other wall times come from one run per side. The Serializable row is a header change, which both sides handle by recompiling every downstream descendant. B's slower time there is not yet explained; a repeat run is pending.
+Body-only wall times are medians of 5 edit/revert pairs. For the other rows, A shows the range over two runs, B one run of the fixed branch. The spread on A is load from other sessions. The Serializable row is a header change, which both sides handle by recompiling every downstream descendant; its timings are within that noise.
 
 Stored after a clean build:
 
