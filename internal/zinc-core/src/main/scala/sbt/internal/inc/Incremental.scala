@@ -27,6 +27,7 @@ import scala.jdk.OptionConverters.*
 import scala.collection.mutable
 import scala.util.control.NonFatal
 import xsbti.{
+  ClassHashes,
   ClassRef,
   FileConverter,
   NameKind,
@@ -493,6 +494,19 @@ object Incremental:
   private[inc] def apiDebug(options: IncOptions): Boolean =
     options.apiDebug || java.lang.Boolean.getBoolean(apiDebugProp)
 
+  /**
+   * The bridge sends the full API and its own hashes, and Zinc checks that the two hashings agree
+   * on which classes and names changed (see [[ApiHashCheck]]).
+   */
+  private[inc] val apiCheckProp = "xsbt.api.check"
+  private[inc] def apiCheck(options: IncOptions): Boolean =
+    java.lang.Boolean.getBoolean(apiCheckProp) ||
+      options.extra().getOrDefault("apiCheck", "false").trim == "true"
+
+  /** Whether a bridge that can hash APIs itself should, rather than send the full API. */
+  private[inc] def bridgeHashing(options: IncOptions): Boolean =
+    options.extra().getOrDefault("bridgeHashing", "true").trim != "false"
+
   private[sbt] def prune(
       invalidatedSrcs: Set[VirtualFile],
       previous0: CompileAnalysis,
@@ -679,7 +693,7 @@ private final class AnalysisCallback(
     progress: Option[CompileProgress],
     incHandlerOpt: Option[Incremental.IncrementalCallback],
     log: Logger
-) extends xsbti.AnalysisCallback4, HasCompilerPhaseListener:
+) extends xsbti.AnalysisCallback5, HasCompilerPhaseListener:
 
   private val subprojectClasses = new scala.collection.concurrent.TrieMap[String, Boolean]
 
@@ -997,30 +1011,47 @@ private final class AnalysisCallback(
     api(converter.toVirtualFile(sourceFile.toPath), classApi)
 
   override def api(sourceFile: VirtualFileRef, classApi: ClassLike): Unit =
-    import xsbt.api.{ APIUtil, HashAPI }
+    val shouldMinimize = !Incremental.apiDebug(options)
+    val savedClassApi = if shouldMinimize then APIUtil.minimize(classApi) else classApi
+    val hashes = ApiHashCheck.treeHashes(classApi, options.useOptimizedSealed())
+    storeApi(sourceFile, savedClassApi, hashes)
+
+  override def apiMode(): xsbti.AnalysisCallback5.ApiMode =
+    import xsbti.AnalysisCallback5.ApiMode
+    if Incremental.apiCheck(options) then ApiMode.CHECK
+    else if Incremental.apiDebug(options) || !Incremental.bridgeHashing(options) then ApiMode.TREE
+    else ApiMode.HASHES
+
+  override def useOptimizedSealed(): Boolean = options.useOptimizedSealed()
+
+  override def api(sourceFile: VirtualFileRef, thinClass: ClassLike, hashes: ClassHashes): Unit =
+    storeApi(sourceFile, thinClass, hashes)
+
+  override def apiCheck(
+      sourceFile: VirtualFileRef,
+      fullClass: ClassLike,
+      thinClass: ClassLike,
+      hashes: ClassHashes
+  ): Unit =
+    val key = jo2o(output.getSingleOutputAsPath).fold("")(_.toString)
+    ApiHashCheck.check(key, fullClass, thinClass, hashes, options.useOptimizedSealed(), log)
+    storeApi(sourceFile, if Incremental.apiDebug(options) then fullClass else thinClass, hashes)
+
+  private def storeApi(sourceFile: VirtualFileRef, classApi: ClassLike, hashes: ClassHashes): Unit =
     val className = classApi.name
-    if APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.hasMacro(classApi) then
-      macroClasses.add(className)
+    if APIUtil.isScalaSourceName(sourceFile.id) && hashes.hasMacro then macroClasses.add(className)
     // sbt/zinc#630
     if !APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.isAnnotationDefinition(classApi) then
       annotationClasses.add(className)
-    val shouldMinimize = !Incremental.apiDebug(options)
-    val savedClassApi = if shouldMinimize then APIUtil.minimize(classApi) else classApi
-    val apiHash: HashAPI.Hash = HashAPI(classApi)
-    val nameHashes = (new xsbt.api.NameHashing(options.useOptimizedSealed())).nameHashes(classApi)
+    val info = ApiInfo(hashes.apiHash, hashes.extraHash, classApi)
     classApi.definitionType match
-      case d @ (DefinitionType.ClassDef | DefinitionType.Trait) =>
-        // Only the trait's own members; ExtraHashes folds in the parents' later.
-        val extraApiHash =
-          if d != DefinitionType.Trait then apiHash
-          else HashAPI(_.hashAPI(classApi), includePrivateDefsInTrait = true)
-
-        classApis(className) = ApiInfo(apiHash, extraApiHash, savedClassApi)
-        classPublicNameHashes(className) = nameHashes
+      case DefinitionType.ClassDef | DefinitionType.Trait =>
+        classApis(className) = info
+        classPublicNameHashes(className) = hashes.nameHashes
       case DefinitionType.Module | DefinitionType.PackageModule =>
-        objectApis(className) = ApiInfo(apiHash, apiHash, savedClassApi)
-        objectPublicNameHashes(className) = nameHashes
-  end api
+        objectApis(className) = info
+        objectPublicNameHashes(className) = hashes.nameHashes
+  end storeApi
 
   // Called by sbt-dotty
   override def mainClass(sourceFile: File, className: String): Unit =
@@ -1340,7 +1371,8 @@ private final class AnalysisCallback(
       case Some(prevAnalysis) => prevAnalysis.infos ++ sourceInfoFromCurrentRun
       case None               => sourceInfoFromCurrentRun
 
-  override def apiPhaseCompleted(): Unit = ()
+  override def apiPhaseCompleted(): Unit =
+    if Incremental.apiCheck(options) then ApiHashCheck.reportSummary(log)
 
   val phaseListener = CompilerPhaseListener(
     waitForInlining = currentSetup.compilerVersion.startsWith("3."),

@@ -58,7 +58,10 @@ class ExtractAPI[GlobalType <: Global](
     // This is used when recording inheritance dependencies.
     sourceFile: VirtualFile,
     outputDirs: Iterable[java.nio.file.Path] = Nil,
-    isSubprojectClass: String => Boolean = _ => false
+    isSubprojectClass: String => Boolean = _ => false,
+    buildTree: Boolean = true,
+    buildHashes: Boolean = false,
+    optimizedSealed: Boolean = false
 ) extends Compat
     with ClassName
     with GlobalHelpers {
@@ -904,6 +907,695 @@ class ExtractAPI[GlobalType <: Global](
     _mainClasses.toSet
   }
 
+  /**
+   * A class extracted with its hashes: `full` is the full API (when `buildTree`), `thin` the part
+   * Zinc keeps, as `APIUtil.minimize` produces it.
+   */
+  final class Extracted(val full: ClassLike, val thin: ClassLike, val hashes: xsbti.ClassHashes)
+
+  private final class PendingClass(
+      val in: Symbol,
+      val c: Symbol,
+      val sym: Symbol,
+      val info: Type,
+      val name: String,
+      val acc: xsbti.api.Access,
+      val modifiers: xsbti.api.Modifiers,
+      val anns: Array[xsbti.api.Annotation],
+      val defType: DefinitionType,
+      val selfType: xsbti.api.Lazy[xsbti.api.Type],
+      val childrenOfSealedClass: Array[xsbti.api.Type],
+      val topLevel: Boolean,
+      val tParams: Array[xsbti.api.TypeParameter]
+  )
+
+  private[this] val fullClasses = perRunCaches.newMap[Symbol, ClassLike]()
+  private[this] val pendingHashes = collection.mutable.ArrayBuffer[PendingClass]()
+  private[this] val extracted = collection.mutable.LinkedHashMap[Symbol, Extracted]()
+
+  /** The classes extracted from this unit, each with its thin API and hashes (`buildHashes`). */
+  def allExtracted: List[Extracted] = {
+    forceAll()
+    extracted.valuesIterator.toList
+  }
+
+  @tailrec private def forceAll(): Unit = {
+    forceStructures()
+    if (pendingHashes.nonEmpty) {
+      val todo = pendingHashes.toList
+      pendingHashes.clear()
+      todo.foreach(p => extracted(p.sym) = hashClass(p))
+      forceAll()
+    }
+  }
+
+  /*
+   * Direct hashing. Each function below mirrors the `xsbti.api` value that `makeType`,
+   * `definition` and `mkClassLike` would build, and `HashAPI` would hash, folding the same
+   * information into an `Int` without allocating the value. Hashes are context free: a
+   * subterm hashes the same wherever it appears, so they are memoised per (owner, type) and per
+   * (owner, member), like `typeCache`. See "Name-hash contract" in PLAN-merkle-poc.md.
+   */
+  private object H {
+    final val ValHash = 1
+    final val VarHash = 2
+    final val DefHash = 3
+    final val ClassDefHash = 4
+    final val TypeDeclHash = 5
+    final val TypeAliasHash = 6
+    final val PublicHash = 30
+    final val ProtectedHash = 31
+    final val PrivateHash = 32
+    final val UnqualifiedHash = 33
+    final val ThisQualifierHash = 34
+    final val IdQualifierHash = 35
+    final val ThisPathHash = 22
+    final val ValueParamsHash = 40
+    final val StructurePendingHash = 42
+    final val EmptyTypeHash = 51
+    final val ParameterRefHash = 52
+    final val SingletonHash = 53
+    final val ProjectionHash = 54
+    final val ParameterizedHash = 55
+    final val AnnotatedHash = 56
+    final val PolymorphicHash = 57
+    final val ConstantHash = 58
+    final val ExistentialHash = 59
+    final val StructureHash = 60
+    final val ClassHash = 70
+    final val TraitHash = 71
+    final val ErasedSignatureHash = 80
+    final val ListHash = 90
+    final val TrueHash = 97
+    final val FalseHash = 98
+  }
+  import scala.util.hashing.MurmurHash3
+
+  @inline private def mix(h: Int, d: Int): Int = MurmurHash3.mix(h, d)
+  @inline private def strHash(s: String): Int = MurmurHash3.stringHash(s)
+  @inline private def boolHash(b: Boolean): Int = if (b) H.TrueHash else H.FalseHash
+
+  private final class Unordered {
+    private[this] var a, b, n = 0
+    private[this] var c = 1
+    def add(h: Int): Unit = {
+      a += h; b ^= h; if (h != 0) c *= h; n += 1
+    }
+    def result: Int =
+      MurmurHash3.finalizeHash(mix(mix(mix(H.ListHash, a), b), c), n)
+  }
+
+  private def listHash[A](as: List[A])(f: A => Int): Int = {
+    var h = mix(H.ListHash, as.length)
+    var rest = as
+    while (rest ne Nil) {
+      h = mix(h, f(rest.head))
+      rest = rest.tail
+    }
+    MurmurHash3.finalizeHash(h, 0)
+  }
+
+  /**
+   * Refinement classes met while hashing the current type or member. Name hashes include the
+   * members of refinements reachable from a class's non-private members, as `NameHashing`'s
+   * visitor does, so each memo entry remembers the refinements below it.
+   */
+  private[this] var structSink: List[Symbol] = Nil
+
+  private final class TypeH(val hash: Int, val structs: List[Symbol])
+  private[this] val typeHashCache = perRunCaches.newMap[(Symbol, Type), TypeH]()
+
+  private def typeHash(in: Symbol, t: Type): Int = {
+    val key = (in, t)
+    val th = typeHashCache.get(key) match {
+      case Some(th) => th
+      case None     =>
+        val saved = structSink
+        structSink = Nil
+        val th =
+          try new TypeH(makeTypeHash(in, t), structSink)
+          finally structSink = saved
+        typeHashCache(key) = th
+        th
+    }
+    if (th.structs ne Nil) structSink = th.structs ::: structSink
+    th.hash
+  }
+
+  private def typesHash(in: Symbol, ts: List[Type]): Int = listHash(ts)(typeHash(in, _))
+
+  private[this] val nameHashCache = perRunCaches.newMap[Symbol, Int]()
+  private def simpleNameHash(s: Symbol): Int =
+    nameHashCache.getOrElseUpdate(s, strHash(simpleName(s)))
+
+  private[this] val thisPathHashCache = perRunCaches.newMap[Symbol, Int]()
+  private def thisPathHash(sym: Symbol): Int =
+    thisPathHashCache.getOrElseUpdate(
+      sym, {
+        var h = H.ThisPathHash
+        var s = sym
+        while (!(s == NoSymbol || s.isRoot || s.isEmptyPackageClass || s.isRootPackage)) {
+          h = mix(h, simpleNameHash(s))
+          s = s.owner
+        }
+        MurmurHash3.finalizeHash(h, 0)
+      }
+    )
+
+  private[this] val tparamIDHashCache = perRunCaches.newMap[Symbol, Int]()
+  private def tparamIDHash(s: Symbol): Int =
+    existentialRenamings.renaming(s) match {
+      case Some(rename) => strHash(rename)
+      case None         => tparamIDHashCache.getOrElseUpdate(s, strHash(refinementRelativeName(s)))
+    }
+
+  private def projectionHash(in: Symbol, pre: Type, sym: Symbol): Int =
+    if (pre == NoPrefix) {
+      if (sym.isLocalClass || sym.isRoot || sym.isRootPackage) H.EmptyTypeHash
+      else mix(H.ParameterRefHash, tparamIDHash(sym))
+    } else if (sym.isRoot || sym.isRootPackage) H.EmptyTypeHash
+    else mix(mix(H.ProjectionHash, simpleNameHash(sym)), typeHash(in, pre))
+
+  private def makeTypeHash(in: Symbol, t: Type): Int = {
+    val dealiased = t match {
+      case TypeRef(_, sym, _) if sym.isAliasType => t.dealias
+      case _                                     => t
+    }
+    dealiased match {
+      case NoPrefix               => H.EmptyTypeHash
+      case ThisType(sym)          => mix(H.SingletonHash, thisPathHash(sym))
+      case SingleType(pre, sym)   => projectionHash(in, pre, sym)
+      case ConstantType(constant) =>
+        mix(mix(H.ConstantHash, strHash(constant.stringValue)), typeHash(in, constant.tpe))
+      case TypeRef(pre, sym, Nil) if sym.isRefinementClass =>
+        val unrolling = pre.memberInfo(sym)
+        val withoutRecursiveRefs = new SuppressSymbolRef(sym).mapOver(unrolling)
+        if (!buildTree && (unrolling ne withoutRecursiveRefs))
+          reporter.warning(
+            sym.pos,
+            "sbt-api: approximated refinement ref" + t + " (== " + unrolling + ") to " +
+              withoutRecursiveRefs +
+              "\nThis is currently untested, please report the code you were compiling."
+          )
+        structureHash(withoutRecursiveRefs, sym)
+      case tr @ TypeRef(pre, sym, args) =>
+        val base = projectionHash(in, pre, sym)
+        if (args.isEmpty)
+          if (isRawType(tr)) typeHash(in, rawToExistential(tr))
+          else base
+        else mix(mix(H.ParameterizedHash, base), typesHash(in, args))
+      case SuperType(_, _)   => H.EmptyTypeHash
+      case at: AnnotatedType =>
+        at.annotations match {
+          case Nil    => typeHash(in, at.underlying)
+          case annots =>
+            mix(
+              mix(H.AnnotatedHash, typeHash(in, at.underlying)),
+              listHash(annotationHashes(in, annots))(identity)
+            )
+        }
+      case rt: CompoundType    => structureHash(rt, rt.typeSymbol)
+      case et: ExistentialType =>
+        val ExistentialType(typeVariables, qualified) = et
+        existentialRenamings.enterExistentialTypeVariables(typeVariables)
+        try {
+          val tps = typeParamsHash(in, typeVariables)
+          mix(mix(H.ExistentialHash, tps), typeHash(in, qualified))
+        } finally existentialRenamings.leaveExistentialTypeVariables(typeVariables)
+      case NoType                           => H.EmptyTypeHash
+      case PolyType(typeParams, resultType) =>
+        mix(mix(H.PolymorphicHash, typeParamsHash(in, typeParams)), typeHash(in, resultType))
+      case _ => H.EmptyTypeHash
+    }
+  }
+
+  private[this] val structureHashCache = perRunCaches.newMap[Symbol, Int]()
+  private[this] val structureInfos = perRunCaches.newMap[Symbol, Type]()
+  private[this] val structuresInProgress = collection.mutable.HashSet[Symbol]()
+
+  /** A refinement (or other compound type) as `mkStructure` builds it: parents and decls. */
+  private def structureHash(info: Type, s: Symbol): Int = {
+    structSink = s :: structSink
+    structureHashCache.get(s) match {
+      case Some(h) => h
+      case None    =>
+        if (!structuresInProgress.add(s)) H.StructurePendingHash
+        else
+          try {
+            structureInfos(s) = info
+            val parents = typesHash(s, info.parents)
+            val declared = new Unordered
+            structureDecls(info, s).foreach { m =>
+              val d = defH(s, m)
+              if ((d ne null) && d.nonPrivate) declared.add(d.hash)
+            }
+            val h = mix(mix(mix(H.StructureHash, parents), declared.result), (new Unordered).result)
+            structureHashCache(s) = h
+            h
+          } finally {
+            structuresInProgress -= s
+            ()
+          }
+    }
+  }
+
+  private def structureDecls(info: Type, s: Symbol): List[Symbol] = {
+    val decls = info.decls.toList
+    if (s.isModuleClass) removeConstructors(decls) else decls
+  }
+
+  private def annotationHashes(in: Symbol, as: List[AnnotationInfo]): List[Int] =
+    if (in == NoSymbol) Nil
+    else
+      staticAnnotations(as).map { a =>
+        val args =
+          if (a.assocs.isEmpty)
+            mix(
+              mix(H.ListHash, strHash("")),
+              strHash(ReusableTreePrinter.mkString(a.args, "(", ",", ")"))
+            )
+          else
+            listHash(a.assocs) { case (name, value) =>
+              mix(strHash(name.toString), strHash(value.toString))
+            }
+        mix(typeHash(in, a.atp), args)
+      }
+
+  /** Mirrors `annotations(in, s)`, deduplicated the same way for fields and their accessors. */
+  private def symAnnotationHashes(in: Symbol, s: Symbol): List[Int] = {
+    val saved = phase
+    phase = currentRun.typerPhase
+    try {
+      val base = if (s.hasFlag(Flags.ACCESSOR)) s.accessed else NoSymbol
+      val b = if (base == NoSymbol) s else base
+      if (b.hasGetter) {
+        val hs = collection.mutable.LinkedHashSet[Int]()
+        def add(sym: Symbol) = if (sym != NoSymbol) hs ++= annotationHashes(in, sym.annotations)
+        add(b)
+        add(b.getterIn(b.enclClass))
+        add(b.setterIn(b.enclClass))
+        hs.toList
+      } else if (b.annotations.isEmpty) Nil
+      else annotationHashes(in, b.annotations)
+    } finally phase = saved
+  }
+
+  private[this] val erasedSignatureHashCache = perRunCaches.newMap[Symbol, Int]()
+  private def erasedSignatureHash(s: Symbol): Int =
+    erasedSignatureHashCache.getOrElseUpdate(
+      s,
+      mix(H.ErasedSignatureHash, strHash(erasedSignature(transformedType(s))))
+    )
+
+  private def accessHash(a: xsbti.api.Access): Int = a match {
+    case q: xsbti.api.Qualified =>
+      val kind = q match {
+        case _: xsbti.api.Protected => H.ProtectedHash
+        case _                      => H.PrivateHash
+      }
+      val qual = q.qualifier match {
+        case _: xsbti.api.Unqualified   => H.UnqualifiedHash
+        case _: xsbti.api.ThisQualifier => H.ThisQualifierHash
+        case id: xsbti.api.IdQualifier  => mix(H.IdQualifierHash, strHash(id.value))
+        case _                          => H.UnqualifiedHash
+      }
+      mix(kind, qual)
+    case _ => H.PublicHash
+  }
+
+  private def typeParamsHash(in: Symbol, tps: List[Symbol]): Int =
+    listHash(tps)(typeParamHash(in, _))
+
+  private def typeParamHash(in: Symbol, s: Symbol): Int = {
+    val annots = listHash(symAnnotationHashes(in, s))(identity)
+    val (nested, lo, hi) = viewer(in).memberInfo(s) match {
+      case TypeBounds(low, high)      => (typeParamsHash(in, s.typeParams), low, high)
+      case PolyType(typeParams, base) =>
+        (typeParamsHash(in, typeParams), base.bounds.lo, base.bounds.hi)
+      case x => error("Unknown type parameter info: " + x.getClass)
+    }
+    var h = tparamIDHash(s)
+    val varianceInt = s.variance
+    h = mix(h, if (varianceInt < 0) 0 else if (varianceInt > 0) 2 else 1)
+    h = mix(h, nested)
+    h = mix(h, typeHash(in, lo))
+    h = mix(h, typeHash(in, hi))
+    mix(h, annots)
+  }
+
+  private def selfTypeHash(in: Symbol, s: Symbol): Int =
+    if ((s.thisSym eq s) || (s.thisSym.tpeHK == s.tpeHK)) H.EmptyTypeHash
+    else typeHash(in, s.typeOfThis)
+
+  /**
+   * A member as `definition` would extract it. `name` is its API name, `nonPrivate` whether
+   * `HashAPI` and `NameHashing` count it, and `traitBreaker` whether it is one of the private
+   * members of a trait that its implementors depend on.
+   */
+  private final class DefH(
+      val name: String,
+      val hash: Int,
+      val isImplicit: Boolean,
+      val isAbstract: Boolean,
+      val nonPrivate: Boolean,
+      val traitBreaker: Boolean,
+      val isMacro: Boolean,
+      val structs: List[Symbol]
+  )
+
+  private[this] val defHCache = perRunCaches.newMap[(Symbol, Symbol), DefH]()
+
+  /** `null` when `definition(in, sym)` is `None`. */
+  private def defH(in: Symbol, sym: Symbol): DefH =
+    defHCache.getOrElseUpdate((in, sym), mkDefH(in, sym))
+
+  private def mkDefH(in: Symbol, sym: Symbol): DefH = {
+    val saved = structSink
+    structSink = Nil
+    try {
+      if (isClass(sym))
+        if (ignoreClass(sym)) {
+          allNonLocalClassSymbols += sym; null
+        } else {
+          classLike(in, sym)
+          val cls = if (sym.isModule) sym.moduleClass else sym
+          val body = mix(H.ClassDefHash, typeParamsHash(in, cls.typeParams))
+          val isModule = cls.isModuleClass && !cls.isPackageObjectClass
+          member(classNameAsSeenIn(in, sym), sym, symAnnotationHashes(in, sym), body, isModule)
+        }
+      else if (sym.isNonClassType) typeDefH(in, sym)
+      else if (sym.isVariable)
+        if (isSourceField(sym)) fieldH(in, sym, keepConst = false) else null
+      else if (sym.isStable)
+        if (isSourceField(sym)) fieldH(in, sym, keepConst = true) else null
+      else if (sym.isSourceMethod && !sym.isSetter)
+        if (sym.isGetter) fieldH(in, sym, keepConst = false) else defDefH(in, sym)
+      else null
+    } finally structSink = saved
+  }
+
+  private def member(
+      name: String,
+      s: Symbol,
+      annots: List[Int],
+      body: Int,
+      traitBreaker: Boolean
+  ): DefH = {
+    val mods = getModifiers(s)
+    val acc = getAccess(s)
+    var h = strHash(name)
+    h = mix(h, listHash(annots)(identity))
+    h = mix(h, mods.raw.toInt)
+    h = mix(h, accessHash(acc))
+    h = mix(h, body)
+    val nonPrivate = acc match {
+      case p: xsbti.api.Private => p.qualifier.isInstanceOf[xsbti.api.IdQualifier]
+      case _                    => true
+    }
+    val isPrivate = acc.isInstanceOf[xsbti.api.Private]
+    new DefH(
+      name,
+      MurmurHash3.finalizeHash(h, 0),
+      mods.isImplicit,
+      mods.isAbstract,
+      nonPrivate,
+      isPrivate && (traitBreaker || mods.isSuperAccessor),
+      mods.isMacro,
+      structSink
+    )
+  }
+
+  private def typeDefH(in: Symbol, s: Symbol): DefH = {
+    val (tps, tpe) = viewer(in).memberInfo(s) match {
+      case PolyType(typeParams0, base) => (typeParamsHash(in, typeParams0), base)
+      case t                           => (typeParamsHash(in, Nil), t)
+    }
+    val body =
+      if (s.isAliasType) mix(mix(H.TypeAliasHash, tps), typeHash(in, tpe))
+      else if (s.isAbstractType) {
+        val bounds = tpe.bounds
+        mix(mix(mix(H.TypeDeclHash, tps), typeHash(in, bounds.lo)), typeHash(in, bounds.hi))
+      } else error("Unknown type member" + s)
+    member(simpleName(s), s, symAnnotationHashes(in, s), body, traitBreaker = false)
+  }
+
+  private def fieldH(in: Symbol, s: Symbol, keepConst: Boolean): DefH = {
+    val t = dropNullary(viewer(in).memberType(s))
+    val t2 = if (keepConst) t else dropConst(t)
+    val body = mix(if (keepConst) H.ValHash else H.VarHash, typeHash(in, t2))
+    val annots = symAnnotationHashes(in, s) :+ erasedSignatureHash(s)
+    member(simpleName(s), s, annots, body, traitBreaker = true)
+  }
+
+  private def defDefH(in: Symbol, s: Symbol): DefH = {
+    def paramHash(p: Symbol): Int = {
+      val tp = p.info
+      val ts = tp.typeSymbol
+      val (t, special) =
+        if (ts == definitions.RepeatedParamClass) (tp.typeArgs.head, 1)
+        else if (ts == definitions.ByNameParamClass) (tp.typeArgs.head, 2)
+        else (tp, 0)
+      var h = simpleNameHash(p)
+      h = mix(h, typeHash(in, t))
+      h = mix(h, special)
+      mix(h, boolHash(hasDefault(p)))
+    }
+    @tailrec def loop(t: Type, tps: Int, vls: List[Int]): Int = t match {
+      case PolyType(typeParams0, base)    => loop(base, typeParamsHash(in, typeParams0), Nil)
+      case MethodType(params, resultType) =>
+        val isImplicitList = cond(params) { case head :: _ => isImplicit(head) }
+        val vl = mix(mix(H.ValueParamsHash, boolHash(isImplicitList)), listHash(params)(paramHash))
+        loop(resultType, tps, vl :: vls)
+      case NullaryMethodType(resultType) => loop(resultType, tps, vls)
+      case returnType                    =>
+        val ret = typeHash(in, dropConst(returnType))
+        mix(mix(mix(H.DefHash, tps), listHash(vls.reverse)(identity)), ret)
+    }
+    val body = loop(viewer(in).memberInfo(s), typeParamsHash(in, Nil), Nil)
+    val annots = symAnnotationHashes(in, s) :+ erasedSignatureHash(s)
+    member(simpleNameForMethod(s), s, annots, body, traitBreaker = false)
+  }
+
+  /** A typeless stub, as `stub` builds it. */
+  private def stubH(m: Symbol): Option[DefH] =
+    stub(m).map { d =>
+      val saved = structSink
+      structSink = Nil
+      try member(d.name, m, Nil, stubBodyHash, traitBreaker = false)
+      finally structSink = saved
+    }
+
+  private[this] lazy val stubBodyHash =
+    mix(
+      mix(mix(H.DefHash, typeParamsHash(NoSymbol, Nil)), listHash(List.empty[Int])(identity)),
+      H.EmptyTypeHash
+    )
+
+  /** The members of a class's API, as `mkStructureWithInherited` selects them. */
+  private final class Members(info: Type, sym: Symbol) {
+    val decls: List[Symbol] = info.decls.toList
+    val declared: List[Symbol] =
+      sort((if (sym.isModuleClass) removeConstructors(decls) else decls).toArray).toList
+    private val declSet = decls.toSet
+    private val (inherited0, platform) =
+      info.nonPrivateMembers.toList
+        .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
+        .partition(m => !isPlatform(m.owner) || discoveryReads(m))
+    val inherited: List[Symbol] = sort(inherited0.toArray).toList
+    val stubbed: List[Symbol] =
+      platform ++ overriddenLibraryDecls(info, declSet, inherited0 ++ platform)
+    def ancestorTypes: List[Type] = {
+      val ancestorTypes0 = linearizedAncestorTypes(info)
+      if (sym.isDerivedValueClass) sym.derivedValueClassUnbox.tpe.finalResultType :: ancestorTypes0
+      else ancestorTypes0
+    }
+  }
+
+  private def localName(name: String): String = name.substring(name.lastIndexOf('.') + 1)
+
+  private def hashClass(p: PendingClass): Extracted = {
+    val sym = p.sym
+    val in = p.in
+    val members = new Members(p.info, sym)
+    val ancestorTypes = members.ancestorTypes
+    val isTrait = p.defType == DefinitionType.Trait
+    val isModule = p.defType == DefinitionType.Module || p.defType == DefinitionType.PackageModule
+
+    val saved = structSink
+    structSink = Nil
+    val tparamsH = typeParamsHash(in, sym.typeParams)
+    val selfH = selfTypeHash(in, sym)
+    val parentsH = typesHash(sym, ancestorTypes)
+    val headerStructs = structSink
+    val sealedH = {
+      val u = new Unordered
+      sym.sealedDescendants.foreach(c => u.add(typeHash(c, c.tpe)))
+      u.result
+    }
+    structSink = saved
+
+    val declared = members.declared.flatMap(d => Option(defH(sym, d)))
+    val inherited = members.inherited.flatMap(d => Option(defH(sym, d))) ++
+      members.stubbed.flatMap(stubH)
+
+    def unordered(ds: List[DefH]): Int = {
+      val u = new Unordered
+      ds.foreach(d => u.add(d.hash))
+      u.result
+    }
+    val declaredH = unordered(declared.filter(_.nonPrivate))
+    val inheritedH = unordered(inherited.filter(_.nonPrivate))
+    def classHash(withSealed: Boolean, structure: Int): Int = {
+      var h = mix(H.ClassHash, tparamsH)
+      h = mix(h, selfH)
+      if (withSealed) h = mix(h, sealedH)
+      if (isTrait) h = mix(h, H.TraitHash)
+      MurmurHash3.finalizeHash(mix(h, structure), 0)
+    }
+    def structureHash(declaredH: Int): Int =
+      mix(mix(mix(H.StructureHash, parentsH), declaredH), inheritedH)
+    val apiHash = classHash(withSealed = true, structureHash(declaredH))
+    val extraHash =
+      if (!isTrait) apiHash
+      else {
+        val breakers = declared.filter(_.traitBreaker)
+        if (breakers.isEmpty) apiHash
+        else
+          classHash(
+            withSealed = true,
+            structureHash(unordered(declared.filter(_.nonPrivate) ++ breakers))
+          )
+      }
+
+    val nameHashes = {
+      import xsbti.UseScope
+      val location = mix(strHash(p.name), boolHash(isModule))
+      val groups = collection.mutable.LinkedHashMap[(String, UseScope), Unordered]()
+      def add(name: String, scope: UseScope, hash: Int): Unit =
+        groups.getOrElseUpdate((localName(name), scope), new Unordered).add(mix(hash, location))
+      def scopeOf(isImplicit: Boolean) = if (isImplicit) UseScope.Implicit else UseScope.Default
+      def header(withSealed: Boolean): Int = {
+        var h = strHash(p.name)
+        h = mix(h, listHash(symAnnotationHashes(in, p.c))(identity))
+        h = mix(h, p.modifiers.raw.toInt)
+        h = mix(h, accessHash(p.acc))
+        mix(h, classHash(withSealed, mix(H.StructureHash, parentsH)))
+      }
+      add(p.name, scopeOf(p.modifiers.isImplicit), header(withSealed = !optimizedSealed))
+      if (optimizedSealed && p.modifiers.isSealed)
+        add(p.name, UseScope.PatMatTarget, header(withSealed = true))
+      val seen = collection.mutable.HashSet[Symbol]()
+      var work: List[Symbol] = headerStructs
+      def addDef(d: DefH): Unit =
+        if (d.nonPrivate) {
+          add(d.name, scopeOf(d.isImplicit), d.hash)
+          if (d.structs ne Nil) work = d.structs ::: work
+        }
+      declared.foreach(addDef)
+      inherited.foreach(addDef)
+      while (work ne Nil) {
+        val s = work.head
+        work = work.tail
+        if (seen.add(s)) structureInfos.get(s).foreach { info =>
+          val saved = structSink
+          structSink = Nil
+          typesHash(s, info.parents)
+          work = structSink ::: work
+          structSink = saved
+          structureDecls(info, s).foreach { m =>
+            val d = defH(s, m)
+            if (d ne null) addDef(d)
+          }
+        }
+      }
+      groups.iterator.map { case ((name, scope), u) =>
+        xsbti.api.NameHash.of(name, scope, u.result)
+      }.toArray
+    }
+
+    val hasMacro = p.modifiers.isMacro || declared.exists(_.isMacro)
+    val hashes = new xsbti.ClassHashes(apiHash, extraHash, nameHashes, hasMacro)
+    new Extracted(fullClasses.getOrElse(sym, null), thinClass(p, members, isModule), hashes)
+  }
+
+  /** What `APIUtil.minimize` keeps of the class `mkClassLike` builds. */
+  private def thinClass(p: PendingClass, members: Members, isModule: Boolean): ClassLike = {
+    val sym = p.sym
+    val parents = types(sym, members.ancestorTypes)
+    def isMainCandidate(d: Symbol) =
+      isModule && d.isSourceMethod && !d.isSetter && !d.isGetter && d.name == nme.main
+    def mainOrStub(d: Symbol): Either[xsbti.api.ClassDefinition, xsbti.api.ClassDefinition] =
+      if (isMainCandidate(d)) {
+        val full = defDef(sym, d)
+        if (ExtractAPI.isMainMethod(full)) Left(full) else Right(stubOf(sym, d))
+      } else Right(stubOf(sym, d))
+    val declaredKept = members.declared.filter(hasDefinition).map(mainOrStub)
+    val declared =
+      (declaredKept.collect { case Left(d) => d } ++ declaredKept.collect { case Right(d) => d })
+        .toArray[xsbti.api.ClassDefinition]
+    val inheritedKept = members.inherited.filter(hasDefinition)
+    val inheritedMains = inheritedKept.filter(isMainCandidate).map(defDef(sym, _)).filter(
+      ExtractAPI.isMainMethod
+    )
+    val abstractInherited =
+      inheritedKept.filter(isAbstractMember).map(stubOf(sym, _)) ++
+        members.stubbed.flatMap(stub).filter(_.modifiers.isAbstract)
+    val inherited = (inheritedMains ++ abstractInherited).toArray[xsbti.api.ClassDefinition]
+    val savedAnnotations = (members.declared ++ members.inherited).iterator
+      .filter(d => d.isSourceMethod && !d.isSetter && !d.isGetter && d.isPublic && hasDefinition(d))
+      .flatMap(d => annotations(sym, d).iterator.flatMap(a => ExtractAPI.simpleName(a.base)))
+      .toSet
+      .toArray
+    xsbti.api.ClassLike.of(
+      p.name,
+      p.acc,
+      p.modifiers,
+      p.anns,
+      p.defType,
+      p.selfType,
+      xsbti.api.SafeLazy.strict(
+        xsbti.api.Structure.of(
+          xsbti.api.SafeLazy.strict(parents),
+          xsbti.api.SafeLazy.strict(declared),
+          xsbti.api.SafeLazy.strict(inherited)
+        )
+      ),
+      savedAnnotations,
+      p.childrenOfSealedClass,
+      p.topLevel,
+      p.tParams
+    )
+  }
+
+  private def isAbstractMember(s: Symbol): Boolean =
+    s.hasFlag(Flags.ABSTRACT) || s.hasFlag(Flags.DEFERRED) || s.hasFlag(Flags.ABSOVERRIDE)
+
+  /** Whether `definition(in, sym)` is defined, without its side effects. */
+  private def hasDefinition(sym: Symbol): Boolean =
+    if (isClass(sym)) !ignoreClass(sym)
+    else if (sym.isNonClassType) true
+    else if (sym.isVariable || sym.isStable) isSourceField(sym)
+    else sym.isSourceMethod && !sym.isSetter
+
+  /** A stub of the member `definition(in, s)` extracts, as `APIUtil.stubDefinition` makes it. */
+  private def stubOf(in: Symbol, s: Symbol): xsbti.api.ClassDefinition = {
+    val (name, as) =
+      if (isClass(s)) (classNameAsSeenIn(in, s), annotations(in, s))
+      else if (s.isNonClassType) (simpleName(s), annotations(in, s))
+      else if (s.isVariable || s.isStable || s.isGetter)
+        (simpleName(s), withErasedSignature(s, annotations(in, s)))
+      else (simpleNameForMethod(s), withErasedSignature(s, annotations(in, s)))
+    xsbti.api.Def.of(
+      name,
+      getAccess(s),
+      getModifiers(s),
+      as,
+      Array.empty,
+      Array.empty,
+      Constants.emptyType
+    )
+  }
+
   private def classLike(in: Symbol, c: Symbol): ClassLikeDef =
     classLikeCache.getOrElseUpdate((in, c), mkClassLike(in, c))
   private def mkClassLike(in: Symbol, c: Symbol): ClassLikeDef = {
@@ -925,8 +1617,10 @@ class ExtractAPI[GlobalType <: Global](
     val name = classNameAsSeenIn(in, c)
     val tParams = typeParameters(in, sym) // look at class symbol
     val selfType = lzy(this.selfType(in, sym))
-    def constructClass(structure: xsbti.api.Lazy[Structure]): ClassLike = {
-      xsbti.api.ClassLike.of(
+    val info = viewer(in).memberInfo(sym)
+    if (buildTree) {
+      val structure = lzy(structureWithInherited(info, sym))
+      val classWithMembers = xsbti.api.ClassLike.of(
         name,
         acc,
         modifiers,
@@ -939,12 +1633,25 @@ class ExtractAPI[GlobalType <: Global](
         topLevel,
         tParams
       ) // use original symbol (which is a term symbol when `c.isModule`) for `name` and other non-classy stuff
+      allNonLocalClassesInSrc += classWithMembers
+      fullClasses(sym) = classWithMembers
     }
-    val info = viewer(in).memberInfo(sym)
-    val structure = lzy(structureWithInherited(info, sym))
-    val classWithMembers = constructClass(structure)
-
-    allNonLocalClassesInSrc += classWithMembers
+    if (buildHashes)
+      pendingHashes += new PendingClass(
+        in,
+        c,
+        sym,
+        info,
+        name,
+        acc,
+        modifiers,
+        anns,
+        defType,
+        selfType,
+        childrenOfSealedClass,
+        topLevel,
+        tParams
+      )
     allNonLocalClassSymbols += sym
 
     if (isJava25Plus) {
@@ -1060,4 +1767,42 @@ object ExtractAPI {
   private val erasedSignatureMarker: xsbti.api.Type =
     xsbti.api.Singleton.of(xsbti.api.Path.of(Array(xsbti.api.Id.of("<erased-signature>"))))
   private val ConstructorWithDefaultArgument = "<init>\\$default\\$(\\d+)".r
+
+  /** `Discovery.isMainMethod`, which the bridge cannot depend on. */
+  def isMainMethod(d: xsbti.api.Definition): Boolean = d match {
+    case d: xsbti.api.Def =>
+      d.name == "main" && d.access.isInstanceOf[xsbti.api.Public] && !d.modifiers.isAbstract &&
+      simpleName(d.returnType) == Some("scala.Unit") &&
+      d.valueParameters.length == 1 && d.valueParameters()(0).parameters.length == 1 && {
+        val p = d.valueParameters()(0).parameters()(0)
+        (p.modifier == xsbti.api.ParameterModifier.Plain ||
+          p.modifier == xsbti.api.ParameterModifier.Repeated) &&
+        (p.tpe match {
+          case pt: xsbti.api.Parameterized =>
+            simpleName(pt.baseType) == Some("scala.Array") && pt.typeArguments.length == 1 &&
+            simpleName(pt.typeArguments()(0)) == Some("java.lang.String")
+          case _ => false
+        })
+      }
+    case _ => false
+  }
+
+  /** `Discovery.simpleName`. */
+  @tailrec def simpleName(t: xsbti.api.Type): Option[String] = t match {
+    case a: xsbti.api.Annotated  => simpleName(a.baseType)
+    case p: xsbti.api.Projection =>
+      p.prefix match {
+        case s: xsbti.api.Singleton =>
+          val cs = s.path.components
+          cs.last match {
+            case _: xsbti.api.This =>
+              val ids = cs.init.collect { case i: xsbti.api.Id => i.id }
+              if (ids.length == cs.length - 1) Some((ids :+ p.id).mkString(".")) else None
+            case _ => None
+          }
+        case _: xsbti.api.EmptyType => Some(p.id)
+        case _                      => None
+      }
+    case _ => None
+  }
 }
