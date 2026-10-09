@@ -1,0 +1,9 @@
+> p/compile
+$ copy-file changes/A.scala p/A.scala
+> p/compile
+> p/checkRecompilations 1 A
+
+# Nothing changed since, so this compilation must be a no-op. When compiling
+# straight to a jar, it instead finds B.class "removed" and recompiles B; the
+# compilation after that finds A.class "removed", and so on.
+> p/checkIterations 2

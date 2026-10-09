@@ -1,0 +1,12 @@
+# compound-type-member-inheritance on scala2-sbt-bridge, which still records
+# the parents of a compound member type as parents of the enclosing class
+# (sbt/zinc#1803), so an API change to B recompiles A.
+# general/bridge-2.13.y checks that 2.13.y really is scala2-sbt-bridge.
+
+> p/compile
+> p/checkRecompilations 0 A B
+
+$ copy-file changes/B1.scala p/B.scala
+> p/compile
+
+> p/checkRecompilations 0 A

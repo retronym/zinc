@@ -1,0 +1,5 @@
+> p/run seqx
+
+# The pattern now resolves to Ex.unapply, which Main never named
+$ copy-file changes/Ex.scala p/Ex.scala
+> p/run fixedx
