@@ -117,9 +117,11 @@ private[inc] object LibraryAncestors:
   /** Binary names a class rendered as `name` may have: `a.b.C.D` is `a.b.C$D` if C is a class. */
   def binaryNameCandidates(name: String): List[String] =
     Iterator
-      .iterate(name)(n => n.lastIndexOf('.') match
-        case -1 => n
-        case i  => n.substring(0, i) + "$" + n.substring(i + 1))
+      .iterate(name)(n =>
+        n.lastIndexOf('.') match
+          case -1 => n
+          case i  => n.substring(0, i) + "$" + n.substring(i + 1)
+      )
       .take(name.count(_ == '.') + 1)
       .toList
 
