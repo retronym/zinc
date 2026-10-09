@@ -59,7 +59,13 @@ class LocalToNonLocalClass[G <: CallbackGlobal](val global: G) {
 
   private def resolveCached(s: Symbol): Symbol = {
     assert(s.isClass, s"The ${s.fullName} is not a class.")
-    cache.getOrElseUpdate(s, lookupNonLocal(s))
+    val cached = cache.get(s)
+    if (cached.isDefined) cached.get
+    else {
+      val nonLocal = lookupNonLocal(s)
+      cache.put(s, nonLocal)
+      nonLocal
+    }
   }
 
   private def lookupNonLocal(s: Symbol): Symbol = {
