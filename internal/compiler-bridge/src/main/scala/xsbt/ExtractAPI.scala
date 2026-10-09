@@ -73,6 +73,7 @@ class ExtractAPI[GlobalType <: Global](
   private[this] val typeCache = perRunCaches.newMap[(Symbol, Type), xsbti.api.Type]()
   // these caches are necessary for correctness
   private[this] val structureCache = perRunCaches.newMap[Symbol, xsbti.api.Structure]()
+  private[this] val erasedSignatureCache = perRunCaches.newMap[Symbol, xsbti.api.Annotation]()
   private[this] val classLikeCache =
     perRunCaches.newMap[(Symbol, Symbol), xsbti.api.ClassLikeDef]()
   private[this] val pending = perRunCaches.newSet[xsbti.api.Lazy[_]]()
@@ -320,6 +321,37 @@ class ExtractAPI[GlobalType <: Global](
     }
   }
 
+  /**
+   * Bridges, mixin and mirror forwarders are generated from the erasure of a member as declared
+   * in its owner, which the source signature as seen from `in` does not determine: a value class
+   * erases to its underlying type, an intersection to its dominator, and a type parameter of the
+   * owner to its bound. Hashing the erased signature with the member makes the API of every class
+   * that declares or inherits it change exactly when that erasure does.
+   */
+  private def withErasedSignature(
+      s: Symbol,
+      as: Array[xsbti.api.Annotation]
+  ): Array[xsbti.api.Annotation] = {
+    val erased = erasedSignatureCache.getOrElseUpdate(
+      s,
+      xsbti.api.Annotation.of(
+        ExtractAPI.erasedSignatureMarker,
+        Array(xsbti.api.AnnotationArgument.of("descriptor", erasedSignature(transformedType(s))))
+      )
+    )
+    as :+ erased
+  }
+
+  private def erasedSignature(tp: Type): String = tp match {
+    case MethodType(params, res) =>
+      params.map(p => erasedSignature(p.info)).mkString("(", ",", ")") + erasedSignature(res)
+    case NullaryMethodType(res)                                       => "()" + erasedSignature(res)
+    case TypeRef(_, sym, arg :: Nil) if sym == definitions.ArrayClass =>
+      "[" + erasedSignature(arg)
+    case TypeRef(_, sym, _) => sym.fullName
+    case _                  => tp.typeSymbol.fullName
+  }
+
   private def viewer(s: Symbol) = (if (s.isModule) s.moduleClass else s).thisType
 
   private def defDef(in: Symbol, s: Symbol): xsbti.api.Def = {
@@ -348,7 +380,7 @@ class ExtractAPI[GlobalType <: Global](
             simpleNameForMethod(s),
             getAccess(s),
             getModifiers(s),
-            annotations(in, s),
+            withErasedSignature(s, annotations(in, s)),
             typeParams,
             valueParameters.reverse.toArray,
             retType
@@ -394,7 +426,8 @@ class ExtractAPI[GlobalType <: Global](
   ): T = {
     val t = dropNullary(viewer(in).memberType(s))
     val t2 = if (keepConst) t else dropConst(t)
-    create(simpleName(s), getAccess(s), getModifiers(s), annotations(in, s), processType(in, t2))
+    val as = withErasedSignature(s, annotations(in, s))
+    create(simpleName(s), getAccess(s), getModifiers(s), as, processType(in, t2))
   }
   private def dropConst(t: Type): Type = t match {
     case ConstantType(constant) => constant.tpe
@@ -689,28 +722,6 @@ class ExtractAPI[GlobalType <: Global](
       else mapOver(tp)
   }
 
-  private[this] val expandingValueClasses = scala.collection.mutable.Set.empty[Symbol]
-
-  /**
-   * A reference to a value class erases to its underlying type, so a signature that mentions
-   * the value class changes its erasure, and the bridges and forwarders other classes generate
-   * for it, when that underlying type changes, though the signature reads the same. The
-   * underlying type, as seen from the reference, is attached as an annotation so that the API
-   * determines the erasure. A value class whose underlying type mentions itself is expanded once.
-   */
-  private def withErasure(in: Symbol, tr: Type, applied: xsbti.api.Type): xsbti.api.Type = {
-    val sym = tr.typeSymbol
-    if (!sym.isDerivedValueClass || expandingValueClasses(sym)) applied
-    else {
-      expandingValueClasses += sym
-      try {
-        val underlying = tr.memberType(sym.derivedValueClassUnbox).finalResultType
-        val erasure = xsbti.api.Annotation.of(processType(in, underlying), Array.empty)
-        xsbti.api.Annotated.of(applied, Array(erasure))
-      } finally expandingValueClasses -= sym
-    }
-  }
-
   private def processType(in: Symbol, t: Type): xsbti.api.Type =
     typeCache.getOrElseUpdate((in, t), makeType(in, t))
   private def makeType(in: Symbol, t: Type): xsbti.api.Type = {
@@ -762,15 +773,13 @@ class ExtractAPI[GlobalType <: Global](
         structure(withoutRecursiveRefs, sym)
       case tr @ TypeRef(pre, sym, args) =>
         val base = projectionType(in, pre, sym)
-        val applied =
-          if (args.isEmpty)
-            if (isRawType(tr))
-              processType(in, rawToExistential(tr))
-            else
-              base
+        if (args.isEmpty)
+          if (isRawType(tr))
+            processType(in, rawToExistential(tr))
           else
-            xsbti.api.Parameterized.of(base, types(in, args))
-        withErasure(in, tr, applied)
+            base
+        else
+          xsbti.api.Parameterized.of(base, types(in, args))
       case SuperType(thistpe: Type, supertpe: Type) =>
         reporter.warning(
           NoPosition,
@@ -1048,5 +1057,7 @@ class ExtractAPI[GlobalType <: Global](
 
 object ExtractAPI {
   private val emptyAnnotationArray = new Array[xsbti.api.Annotation](0)
+  private val erasedSignatureMarker: xsbti.api.Type =
+    xsbti.api.Singleton.of(xsbti.api.Path.of(Array(xsbti.api.Id.of("<erased-signature>"))))
   private val ConstructorWithDefaultArgument = "<init>\\$default\\$(\\d+)".r
 }
