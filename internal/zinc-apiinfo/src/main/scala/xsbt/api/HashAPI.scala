@@ -122,6 +122,7 @@ final class HashAPI private (
   private final val StructureHash = 60
 
   private val ClassHash = 70
+  private final val TraitHash = 71
 
   private final val TrueHash = 97
   private final val FalseHash = 98
@@ -237,6 +238,7 @@ final class HashAPI private (
       hashTypesSymmetric(c.childrenOfSealedClass, includeDefinitions)
 
     val isTrait = c.definitionType() == DefinitionType.Trait
+    if isTrait then extend(TraitHash)
     hashStructure(c.structure, includeDefinitions, isTrait)
   def hashField(f: FieldLike): Unit =
     f match

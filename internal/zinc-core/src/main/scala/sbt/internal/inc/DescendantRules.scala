@@ -13,7 +13,7 @@ package sbt
 package internal
 package inc
 
-import xsbt.api.HashAPI
+import xsbt.api.{ Discovery, HashAPI }
 import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType }
 import xsbti.compile.IncOptions
 
@@ -275,7 +275,10 @@ private[inc] object DescendantRules:
     def annotatedNames(c: AnalyzedClass) =
       List(c.api().classApi(), c.api().objectApi()).iterator
         .flatMap(_.structure.declared.iterator)
-        .collect { case m if m.annotations.nonEmpty => m.name }
+        .collect {
+          case m if m.annotations.exists(a => Discovery.simpleName(a.base).isDefined) =>
+            m.name
+        }
         .toSet
     onNames(
       hit(annotatedNames(change.before) ++ annotatedNames(change.after), change),
