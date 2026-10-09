@@ -145,13 +145,10 @@ trait GlobalHelpers { self: Compat =>
     val all = in.attachments.all
     if (all.isEmpty) null
     else {
-      val it = all.iterator
       var result: Tree = null
-      while ((result eq null) && it.hasNext) {
-        it.next() match {
-          case macroAttachment: MacroExpansionAttachment => result = macroAttachment.expandee
-          case _                                         =>
-        }
+      all.foreach {
+        case att: MacroExpansionAttachment if result eq null => result = att.expandee
+        case _                                               =>
       }
       result
     }
