@@ -354,6 +354,9 @@ object Incremental:
       override val modifiedClasses = initialChanges.external.allModified.toArray
       def isEmpty = modifiedLibraries.isEmpty && modifiedClasses.isEmpty
     incremental.previousAPIs = previous.apis
+    incremental.changedLibraryClasses =
+      if !LibraryAncestors.invalidates(options) then Set.empty
+      else LibraryAncestors.classesOf(initialChanges.libraryDeps, previous.relations, converter)
     val (initialInvClasses, initialInvSources0) =
       incremental.invalidateInitial(previous.relations, initialChanges)
 
@@ -1028,6 +1031,9 @@ private final class AnalysisCallback(
 
   override def useOptimizedSealed(): Boolean = options.useOptimizedSealed()
 
+  override def materialiseLibraryMembers(binaryClassName: String): Boolean =
+    !LibraryAncestors.coarse(options)
+
   override def api(sourceFile: VirtualFileRef, thinClass: ClassLike, hashes: ClassHashes): Unit =
     storeApi(sourceFile, thinClass, hashes)
 
@@ -1283,14 +1289,42 @@ private final class AnalysisCallback(
       case (None, Some(nm)) => nm
       case (None, None)     => sys.error("Failed to find name hashes for " + className)
 
+  private val libraryFiles = new TrieMap[String, Option[VirtualFileRef]]
+
+  /** The classpath entry defining a library class, if `name` (as rendered) is one. */
+  private def libraryFile(name: String): Option[VirtualFileRef] =
+    libraryFiles.getOrElseUpdate(
+      name,
+      LibraryAncestors.binaryNameCandidates(name).iterator
+        .filterNot(n =>
+          classApis.contains(n) || objectApis.contains(n) ||
+            internalBinaryToSourceClassName(n).isDefined || isSubprojectClass(n)
+        )
+        .flatMap(lookup.lookupOnClasspath(_))
+        .nextOption()
+    )
+
+  /** The stamps of the libraries defining a class's library ancestors. See [[LibraryAncestors]]. */
+  private def libraryFingerprint(sides: List[ClassLike]): Option[Int] =
+    if !LibraryAncestors.invalidates(options) then None
+    else
+      val files = LibraryAncestors.ancestorNames(sides).flatMap(libraryFile).distinct
+      if files.isEmpty then None
+      else Some(files.map(f => stampReader.library(f).toString).sorted.hashCode)
+
   private def analyzeClass(
       name: String,
       bytecodeHash: Int,
       extraHashes: ExtraHashes
   ): AnalyzedClass =
     val hasMacro: Boolean = macroClasses.contains(name)
-    val (companions, apiHash, extraHash) = companionsWithHash(name, extraHashes)
-    val nameHashes = nameHashesForCompanions(name)
+    val (companions, apiHash0, extraHash) = companionsWithHash(name, extraHashes)
+    val nameHashes0 = nameHashesForCompanions(name)
+    val sides = List(companions.classApi, companions.objectApi)
+    val (apiHash, nameHashes) = libraryFingerprint(sides) match
+      case Some(fingerprint) =>
+        LibraryAncestors.withFingerprint(apiHash0, nameHashes0, name, sides, fingerprint)
+      case None => (apiHash0, nameHashes0)
     val safeCompanions = SafeLazyProxy(companions)
     AnalyzedClass.of(
       compileStartTime,

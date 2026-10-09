@@ -70,6 +70,8 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
     private val apiMode: xsbti.AnalysisCallback5.ApiMode =
       callback5.fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
     private val optimizedSealed: Boolean = callback5.exists(_.useOptimizedSealed())
+    private val materialiseLibraryMembers: String => Boolean =
+      callback5.fold((_: String) => true)(cb => cb.materialiseLibraryMembers(_))
 
     private def processScalaUnit(unit: CompilationUnit): Unit = {
       val sourceFile: VirtualFile = unit.source.file match { case AbstractZincFile(vf) => vf }
@@ -82,6 +84,7 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
           sourceFile,
           global.outputDirs,
           isSubprojectClass,
+          materialiseLibraryMembers,
           buildTree = apiMode != ApiMode.HASHES,
           buildHashes = apiMode != ApiMode.TREE,
           optimizedSealed = optimizedSealed

@@ -59,6 +59,7 @@ class ExtractAPI[GlobalType <: Global](
     sourceFile: VirtualFile,
     outputDirs: Iterable[java.nio.file.Path] = Nil,
     isSubprojectClass: String => Boolean = _ => false,
+    materialiseLibraryMembers: String => Boolean = _ => true,
     buildTree: Boolean = true,
     buildHashes: Boolean = false,
     optimizedSealed: Boolean = false
@@ -527,7 +528,7 @@ class ExtractAPI[GlobalType <: Global](
     val (inherited, platform) =
       info.nonPrivateMembers.toList
         .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
-        .partition(m => !isPlatform(m.owner) || discoveryReads(m))
+        .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     mkStructure(
       s,
       ancestorTypes,
@@ -560,6 +561,20 @@ class ExtractAPI[GlobalType <: Global](
     platformCache.getOrElseUpdate(owner, isPlatform0(owner))
 
   private[this] val platformCache = perRunCaches.newMap[Symbol, Boolean]()
+
+  /**
+   * Are members inherited from `owner` recorded as stubs (name, access, modifiers) rather than in
+   * full? Always for the platform. For other libraries, unless Zinc asks for their members: it
+   * otherwise treats a library ancestor coarsely, invalidating by the names a class inherits from
+   * it when its jar changes, rather than copying its signatures into every descendant.
+   */
+  private def isStubbedOwner(owner: Symbol): Boolean =
+    stubbedOwnerCache.getOrElseUpdate(
+      owner,
+      isPlatform(owner) || !materialiseLibraryMembers(flatname(owner, '.') + owner.moduleSuffix)
+    )
+
+  private[this] val stubbedOwnerCache = perRunCaches.newMap[Symbol, Boolean]()
 
   private def isPlatform0(owner: Symbol): Boolean =
     owner == definitions.AnyClass || owner == definitions.AnyRefClass ||
@@ -641,15 +656,18 @@ class ExtractAPI[GlobalType <: Global](
   private def discoveryReads(m: Symbol): Boolean = m.annotations.nonEmpty || m.name == nme.main
 
   /**
-   * A platform member as a name with its access and modifiers, but no types: descendant
+   * A library member as a name with its access and modifiers, but no types: descendant
    * invalidation still sees which names a class inherits, and which are abstract, without
-   * paying for their signatures.
+   * paying for their signatures. Type members and classes count too, except the platform's.
    */
   private def stub(m: Symbol): Option[xsbti.api.ClassDefinition] =
     stubCache.getOrElseUpdate(m, stub0(m))
   private[this] val stubCache = perRunCaches.newMap[Symbol, Option[xsbti.api.ClassDefinition]]()
   private def stub0(m: Symbol): Option[xsbti.api.ClassDefinition] =
-    if (isClass(m) || m.isNonClassType || (m.isMethod && (!m.isSourceMethod || m.isSetter))) None
+    if (
+      ((isClass(m) || m.isNonClassType) && isPlatform(m.owner)) ||
+      (m.isMethod && (!m.isSourceMethod || m.isSetter))
+    ) None
     else {
       val name = if (m.isMethod) simpleNameForMethod(m) else simpleName(m)
       Some(
@@ -1462,7 +1480,7 @@ class ExtractAPI[GlobalType <: Global](
     private val (inherited0, platform) =
       info.nonPrivateMembers.toList
         .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
-        .partition(m => !isPlatform(m.owner) || discoveryReads(m))
+        .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     val inherited: List[Symbol] = sort(inherited0.toArray).toList
     val stubbed: List[Symbol] =
       platform ++ overriddenLibraryDecls(info, declSet, inherited0 ++ platform)
