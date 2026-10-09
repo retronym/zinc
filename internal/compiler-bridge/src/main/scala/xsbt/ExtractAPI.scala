@@ -948,6 +948,6 @@ class ExtractAPI[GlobalType <: Global](
 object ExtractAPI {
   private val emptyAnnotationArray = new Array[xsbti.api.Annotation](0)
   private val erasedSignatureMarker: xsbti.api.Type =
-    xsbti.api.Projection.of(xsbti.api.EmptyType.of(), "<erased-signature>")
+    xsbti.api.Singleton.of(xsbti.api.Path.of(Array(xsbti.api.Id.of("<erased-signature>"))))
   private val ConstructorWithDefaultArgument = "<init>\\$default\\$(\\d+)".r
 }
