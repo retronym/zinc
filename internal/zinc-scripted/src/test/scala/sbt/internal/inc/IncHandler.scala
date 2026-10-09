@@ -385,6 +385,11 @@ case class ProjectStructure(
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
   val (incOptions, scalacOptions) =
     val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
@@ -798,7 +803,7 @@ case class ProjectStructure(
       if exportPipelining then Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       compileOrder,

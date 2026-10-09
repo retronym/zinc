@@ -11,6 +11,7 @@
 
 package sbt.internal.inc
 
+import java.io.File
 import java.nio.file.Path
 import sbt.inc.{ ScalaBridge, ConstantBridgeProvider }
 import sbt.util.Logger
@@ -63,7 +64,23 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit:
       scalaJars3Bin.toList.filterNot(_.getName.startsWith("compiler-interface")),
       Right(compilerBridge3Bin)
     ),
-  )
+  ) ++ localScala213.map(Label213Local -> _)
+
+  /**
+   * `2.13.local`: this checkout's 2.13 bridge on a locally built Scala 2.13, whose library,
+   * reflect and compiler jars `ZINC_SCRIPTED_SCALA213_JARS` lists (separated by the path
+   * separator), with the version `ZINC_SCRIPTED_SCALA213_VERSION`. Absent unless both are set.
+   */
+  final val Label213Local = "2.13.local"
+  private lazy val localScala213: Option[ScalaBridge] =
+    for
+      jars <- sys.env.get("ZINC_SCRIPTED_SCALA213_JARS")
+      version <- sys.env.get("ZINC_SCRIPTED_SCALA213_VERSION")
+    yield ScalaBridge(
+      version,
+      jars.split(java.io.File.pathSeparator).toList.map(new File(_)),
+      Left(classDirectory213 +: resourceDirectories213)
+    )
 
   private val bridgeLabels = List(Label210, Label211, Label212, Label213, Label213Bin, Label3Bin)
 
