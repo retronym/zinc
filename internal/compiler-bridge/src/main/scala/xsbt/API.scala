@@ -71,21 +71,22 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       callback5.fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
     private val optimizedSealed: Boolean = callback5.exists(_.useOptimizedSealed())
 
+    import xsbti.AnalysisCallback5.ApiMode
+    private val extractApi =
+      new ExtractAPI[global.type](
+        global,
+        global.outputDirs,
+        isSubprojectClass,
+        buildTree = apiMode != ApiMode.HASHES,
+        buildHashes = apiMode != ApiMode.TREE,
+        optimizedSealed = optimizedSealed
+      )
+
     private def processScalaUnit(unit: CompilationUnit): Unit = {
       val sourceFile: VirtualFile = unit.source.file match { case AbstractZincFile(vf) => vf }
       debuglog("Traversing " + sourceFile)
       callback.startSource(sourceFile)
-      import xsbti.AnalysisCallback5.ApiMode
-      val extractApi =
-        new ExtractAPI[global.type](
-          global,
-          sourceFile,
-          global.outputDirs,
-          isSubprojectClass,
-          buildTree = apiMode != ApiMode.HASHES,
-          buildHashes = apiMode != ApiMode.TREE,
-          optimizedSealed = optimizedSealed
-        )
+      extractApi.startUnit()
       val traverser = new TopLevelHandler(extractApi)
       traverser.apply(unit.body)
 
