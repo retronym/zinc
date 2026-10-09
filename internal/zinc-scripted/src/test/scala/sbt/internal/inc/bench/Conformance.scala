@@ -486,7 +486,7 @@ object Conformance:
       }.toSet
 
     /**
-     * The class names in the constant pool of the classfile `name` (a path under a subproject's
+     * The names in the constant pool of the classfile `name` (a path under a subproject's
      * classes, without `.class`): what a compiled reference resolved to.
      */
     def probe(name: String): Seq[String] =
@@ -510,7 +510,7 @@ object Conformance:
     def finish(): Unit = if handler != null then handler.finish(state)
   end Build
 
-  /** The UTF-8 constants of a classfile that look like internal class names. */
+  /** The UTF-8 constants of a classfile: the names of what its references resolved to. */
   def constantNames(b: Array[Byte]): Seq[String] =
     val in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(b))
     in.skipBytes(8)
@@ -521,7 +521,7 @@ object Conformance:
       in.readUnsignedByte() match
         case 1 =>
           val s = in.readUTF()
-          if s.contains('/') then out += s
+          out += s
         case 7 | 8 | 16 | 19 | 20 => in.skipBytes(2)
         case 15                   => in.skipBytes(3)
         case 5 | 6                => in.skipBytes(8); i += 1
