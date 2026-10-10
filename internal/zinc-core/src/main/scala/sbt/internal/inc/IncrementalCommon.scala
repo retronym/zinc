@@ -482,7 +482,10 @@ private[inc] abstract class IncrementalCommon(
       val incrementalExternalChanges =
         val previousAPIs = previousAnalysis.apis
         val externalFinder = lookupAnalyzedClass(_: String, None).getOrElse(APIs.emptyAnalyzedClass)
-        detectAPIChanges(previousAPIs.allExternals, previousAPIs.externalAPI, externalFinder)
+        // A class of this subproject is tracked internally. An analysis may still list it as
+        // external, from Java compiled apart with pipelining (see `AnalysisCallback.Builder`).
+        val externals = previousAPIs.allExternals.filter(previousRelations.definesClass(_).isEmpty)
+        detectAPIChanges(externals, previousAPIs.externalAPI, externalFinder)
 
       val changedExternalClassNames = incrementalExternalChanges.allModified.toSet
       if !lookup.shouldDoIncrementalCompilation(changedExternalClassNames, previousAnalysis) then
