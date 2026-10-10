@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, resolves Option to scala.Option. The chained clause puts the members of
+# package a, and of its package object, in Client's scope.
+> p/compile
+# The package object of a gains Option, which shadows scala.Option, and its apply returns a Some of String: a clean
+# build fails. Client is not in package a, but records the chained clause as a._, so Zinc recompiles it.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile
