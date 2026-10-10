@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, finds the given a.T of package a.b; package a has another.
+> p/compile
+# Deleting Outer.scala removes a given from package a, so the classes of package a recompile in a second cycle.
+# The first cycle compiles no source, so it never reaches the phase that writes early output with pipelining;
+# early output must still be written once, by the last cycle.
+$ delete p/Outer.scala
+> p/compile

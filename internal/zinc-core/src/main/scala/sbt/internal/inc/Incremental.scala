@@ -1116,16 +1116,8 @@ private final class AnalysisCallback(
       val incHandler = incHandlerOpt.getOrElse(sys.error("incHandler was expected"))
       outputJarContent.scalacRunCompleted()
       phaseListener.runCompleted()
-      if earlyOutput.isDefined then
-        val early = incHandler.previousAnalysisPruned
-        // Scala 3 skips `dependencyPhaseCompleted`, and may skip TASTy files, if its early TASTy is
-        // still being written when the run ends (scala/scala3#27139). The early output of this run
-        // is then incomplete.
-        if invalidationResults.isEmpty && !phaseListener.dependencyPhaseCompletedMissing &&
-          lookup.shouldDoEarlyOutput(early)
-        then writeEarlyArtifacts(early)
-        if !writtenEarlyArtifacts then // writing implies the updates merge has happened
-          mergeUpdates() // must merge updates each cycle or else scalac will clobber it
+      if earlyOutput.isDefined && !writtenEarlyArtifacts then
+        mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
       val partialAnalysis = incHandler.timings.time("analysis")(getAnalysis)
       // Scala 3 calls `apiPhaseCompleted` only when pipelining, so report here as well.
@@ -1137,11 +1129,20 @@ private final class AnalysisCallback(
 
       val result =
         incHandler.completeCycle(invalidationResults, partialAnalysis, shouldRegisterCycle)
-      // Only the last cycle announces that there is no early output. The empty early analysis
-      // marks the early output on disk as stale, see `Builder.lastCompileWroteEarlyOutput`.
+      // A run that did not reach the phase that sends dependencies (one that compiles no Scala
+      // source) writes its early output here, once it is known to be the last cycle. Scala 3 skips
+      // `dependencyPhaseCompleted`, and may skip TASTy files, if its early TASTy is still being
+      // written when the run ends (scala/scala3#27139); the early output is then incomplete. Only
+      // the last cycle announces that there is no early output. The empty early analysis marks the
+      // early output on disk as stale, see `Builder.lastCompileWroteEarlyOutput`.
       if earlyOutput.isDefined && !result.continue && !writtenEarlyArtifacts then
-        earlyAnalysisStore.foreach(_.set(AnalysisContents.create(Analysis.empty, earlySetup)))
-        progress.foreach(_.afterEarlyOutput(false))
+        val early = incHandler.previousAnalysisPruned
+        if invalidationResults.isEmpty && !phaseListener.dependencyPhaseCompletedMissing &&
+          lookup.shouldDoEarlyOutput(early)
+        then writeEarlyArtifacts(early)
+        else
+          earlyAnalysisStore.foreach(_.set(AnalysisContents.create(Analysis.empty, earlySetup)))
+          progress.foreach(_.afterEarlyOutput(false))
       result
     else
       throw new IllegalStateException(
