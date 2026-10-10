@@ -101,6 +101,8 @@ object Incremental:
      * @return true when the compilation cycle is compiling all the sources; false, otherwise.
      */
     def isFullCompilation: Boolean
+
+    def timings: PhaseTimings = new PhaseTimings
   end IncrementalCallback
 
   sealed trait CompileCycle:
@@ -345,8 +347,10 @@ object Incremental:
     log.debug("IncrementalCompile.incrementalCompile")
     val previous = previous0 match
       case a: Analysis => a
-    val initialChanges =
+    val timings = incremental.timings
+    val initialChanges = timings.time("initialChanges") {
       incremental.detectInitialChanges(sources, previous, current, lookup, converter, output)
+    }
     val binaryChanges = new DependencyChanges:
       override def modifiedBinaries: Array[File] =
         modifiedLibraries.map(converter.toPath(_).toFile)
@@ -357,8 +361,9 @@ object Incremental:
     incremental.changedLibraryClasses =
       if !LibraryAncestors.invalidates(options) then Set.empty
       else LibraryAncestors.classesOf(initialChanges.libraryDeps, previous.relations, converter)
-    val (initialInvClasses, initialInvSources0) =
+    val (initialInvClasses, initialInvSources0) = timings.time("invalidateInitial") {
       incremental.invalidateInitial(previous.relations, initialChanges)
+    }
 
     // During early output, if there's any compilation at all, invalidate all Java sources too, so the downstream Scala subprojects would have type information via early output (pickle jar).
     val javaSources: Set[VirtualFileRef] = sources.collect {
@@ -458,6 +463,7 @@ object Incremental:
             writeEarlyOut(progress, earlyOutput, available, new java.util.HashSet, log)
           analysis
     }
+    timings.report(log)
     (hasModified || hasSubprojectChange, analysis)
   end incrementalCompile
 
@@ -483,7 +489,7 @@ object Incremental:
       // in order to rollback entirely if transaction fails. `AnalysisCallback` is used by each cycle
       // to report its own analysis individually.
       val callback = callbackBuilder.build(incHandler)
-      compile(srcs, changes, callback, classFileManager)
+      incHandler.timings.time("compile")(compile(srcs, changes, callback, classFileManager))
       callback.getCycleResultOnce
 
   // the name of system property that was meant to enable debugging mode of incremental compiler but
@@ -1121,7 +1127,7 @@ private final class AnalysisCallback(
         if !writtenEarlyArtifacts then // writing implies the updates merge has happened
           mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
-      val partialAnalysis = getAnalysis
+      val partialAnalysis = incHandler.timings.time("analysis")(getAnalysis)
       val hasScala = Analysis.sources(partialAnalysis).scala.nonEmpty
       // If we had early output and scala sources, then the cycle has already been registered
       val shouldRegisterCycle = earlyOutput.isEmpty || !hasScala
