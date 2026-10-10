@@ -76,6 +76,7 @@ object Conformance:
       incOptions: Map[String, String] = Map.empty,
       out: Option[Path] = None,
       logLevel: Option[Level.Value] = None,
+      keysAt: String = "base",
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
@@ -95,9 +96,12 @@ object Conformance:
     case "--out" :: v :: rest     => parse(rest, o.copy(out = Some(Paths.get(v))))
     case "--edits" :: v :: rest   =>
       parse(rest, o.copy(edits = v.split(",").map(_.replace("_", " ")).toSet))
-    case "--pause" :: v :: rest       => parse(rest, o.copy(pause = v.toLong))
-    case "--stop" :: rest             => parse(rest, o.copy(stop = true))
-    case "--debug" :: rest            => parse(rest, o.copy(logLevel = Some(Level.Debug)))
+    case "--pause" :: v :: rest   => parse(rest, o.copy(pause = v.toLong))
+    case "--stop" :: rest         => parse(rest, o.copy(stop = true))
+    case "--debug" :: rest        => parse(rest, o.copy(logLevel = Some(Level.Debug)))
+    case "--keys-at" :: v :: rest =>
+      require(v == "base" || v == "inc", s"--keys-at base|inc, not $v")
+      parse(rest, o.copy(keysAt = v))
     case "--inc-option" :: kv :: rest =>
       val Array(k, v) = kv.split("=", 2)
       parse(rest, o.copy(incOptions = o.incOptions + (k -> v)))
@@ -125,7 +129,9 @@ object Conformance:
 
   /**
    * An edit: either a whole program (`prog`, from the Lean model) or the files it changes
-   * (`files`, a file's new source or `None` to delete it).
+   * (`files`, a file's new source or `None` to delete it). `keys`, when the dump has them, are
+   * the keys the model expects each observed class to have recorded, which cover the queries the
+   * edit changes (see [[KeyCheck]]).
    */
   final case class EditCase(
       cls: String,
@@ -134,6 +140,7 @@ object Conformance:
       prog: Prog,
       model: String,
       files: Map[String, Option[String]] = Map.empty,
+      keys: Map[String, Seq[String]] = Map.empty,
   )
 
   /**
@@ -259,6 +266,11 @@ object Conformance:
             g.get("prog").fold(Nil)(prog),
             rest(g),
             files(g),
+            g.get("keys") match
+              case Some(JObject(ks)) => ks.toSeq.map(k => k.field -> arr(k.value).map(str)).toMap
+              case _                 =>
+                Map.empty
+            ,
           )
         },
         files(f).collect { case (k, Some(v)) => k -> v },
@@ -480,6 +492,13 @@ object Conformance:
       )
     end compile
 
+    /** The expected keys that the current Analysis lacks (see [[KeyCheck]]). */
+    def missingKeys(expected: Map[String, Seq[String]]): Seq[String] =
+      val analyses = projects.flatMap(p =>
+        handler.lookupProject(p).prev().analysis.toScala.map(_.asInstanceOf[Analysis])
+      )
+      KeyCheck(analyses).missing(expected)
+
     private def recompiled(since: Long): Set[String] =
       projects.flatMap { p =>
         handler.lookupProject(p).prev().analysis.toScala.toSeq.flatMap { a0 =>
@@ -544,7 +563,9 @@ object Conformance:
     val all = readCases(o.cases)
     val bases = all
       .filter(b => o.only.isEmpty || o.only(b.id))
-      .map(b => b.copy(edits = b.edits.filter(e => o.edits.isEmpty || o.edits(e.cfg))))
+      .map(b =>
+        b.copy(edits = b.edits.filter(e => o.edits.isEmpty || o.edits(e.cfg)))
+      )
     val ordered = ConformanceOrder.order(bases, o.layouts, o.order, o.seed, o.shard)
     val items = o.sample.fold(ordered)(ordered.take)
     o.printOrder match
@@ -567,7 +588,7 @@ object Conformance:
         )
       )
     o.out.foreach(Files.deleteIfExists)
-    var cases, diverged, baseFailed = 0
+    var cases, diverged, baseFailed, uncovered = 0
     final class Layout(name: String):
       val work = new Build(dir.resolve(s"$name-work"), name, o)
       val clean = new Build(dir.resolve(s"$name-clean"), name, o)
@@ -611,8 +632,12 @@ object Conformance:
       else
         cases += 1
         val files = b.sources(Some(e))
+        def missing() = if e.keys.isEmpty then Nil else l.work.missingKeys(e.keys)
+        val missingAtBase = if o.keysAt == "base" then missing() else Nil
         l.work.write(files)
         val inc = l.work.compile()
+        val missingKeys = if o.keysAt == "inc" then missing() else missingAtBase
+        if missingKeys.nonEmpty then uncovered += 1
         val cl = l.cleanBuild(files, b)
         val verdict = compare(inc, cl)
         if o.stop && !agrees(verdict) then
@@ -629,6 +654,10 @@ object Conformance:
             s""""revertRecompiled":${json(back.recompiled.toSeq.sorted)},${
                 if e.model.isEmpty then "" else e.model + ","
               }""" +
+            (if e.keys.isEmpty then ""
+             else
+               s""""coverage":"${if missingKeys.isEmpty then "covered" else "uncovered"}",""" +
+                 s""""uncoveredKeys":${json(missingKeys)},""") +
             s""""cleanOk":${cl.ok},"diff":${json(diff(inc, cl))},""" +
             (if b.probe.isEmpty then ""
              else s""""baseProbe":${json(r0.probe)},"cleanProbe":${json(cl.probe)},""") +
@@ -644,7 +673,9 @@ object Conformance:
         )
     end for
     layouts.values.foreach(_.finish())
-    Console.err.println(s"done: $cases cases, $diverged diverged, $baseFailed bases failed")
+    Console.err.println(
+      s"done: $cases cases, $diverged diverged, $uncovered uncovered, $baseFailed bases failed"
+    )
   end run
 
   def agrees(verdict: String): Boolean = verdict == "same" || verdict == "same-fail"
