@@ -286,6 +286,10 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkProductsExists") {
       case (p, src :: Nil, i) => p.checkProductsExist(i, src)
     },
+    onArgs("checkExternalDependencies") {
+      case (p, cls :: dependencies, i) =>
+        p.checkExternalDependencies(i, dropRightColon(cls), dependencies)
+    },
     onArgs("checkDependencies") {
       case (p, cls :: dependencies, i) => p.checkDependencies(i, dropRightColon(cls), dependencies)
     },
@@ -606,6 +610,19 @@ case class ProjectStructure(
         assert(expected == actual, s"Expected $expected dependencies, got $actual")
 
       assertDependencies(expected.toSet, classDeps(className))
+      ()
+    }
+
+  /** The classes of other subprojects that `className` depends on. */
+  def checkExternalDependencies(
+      i: IncState,
+      className: String,
+      expected: List[String]
+  ): Future[Unit] =
+    compile(i).map { analysis =>
+      val actual = analysis.relations.memberRef.external.forward(className) ++
+        analysis.relations.inheritance.external.forward(className)
+      assert(expected.toSet == actual, s"Expected external dependencies $expected, got $actual")
       ()
     }
 
