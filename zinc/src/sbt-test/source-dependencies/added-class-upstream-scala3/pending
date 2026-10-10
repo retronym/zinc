@@ -1,0 +1,5 @@
+# Scala 3 variant of added-class-upstream.
+> app/compile
+
+$ copy-file lib/changes/Inner.scala lib/Inner.scala
+-> app/compile
