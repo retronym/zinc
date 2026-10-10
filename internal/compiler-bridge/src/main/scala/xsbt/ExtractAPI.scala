@@ -1043,6 +1043,9 @@ class ExtractAPI[GlobalType <: Global](
    */
   final class Extracted(val full: ClassLike, val thin: ClassLike, val hashes: xsbti.ClassHashes)
 
+  private def isModuleDefType(d: DefinitionType): Boolean =
+    d == DefinitionType.Module || d == DefinitionType.PackageModule
+
   private final class PendingClass(
       val in: Symbol,
       val c: Symbol,
@@ -1057,11 +1060,17 @@ class ExtractAPI[GlobalType <: Global](
       val childrenOfSealedClass: Array[xsbti.api.Type],
       val topLevel: Boolean,
       val tParams: Array[xsbti.api.TypeParameter]
-  )
+  ) {
+    def isModule: Boolean = isModuleDefType(defType)
+  }
 
-  private[this] val fullClasses = perRunCaches.newMap[String, ClassLike]()
+  /**
+   * Keyed by name and whether the class is a module: a class and its companion object share the
+   * name, and Zinc needs both (keyed by name alone, the one extracted last replaced the other).
+   */
+  private[this] val fullClasses = perRunCaches.newMap[(String, Boolean), ClassLike]()
   private[this] val pendingHashes = collection.mutable.ArrayBuffer[PendingClass]()
-  private[this] val extracted = collection.mutable.LinkedHashMap[String, Extracted]()
+  private[this] val extracted = collection.mutable.LinkedHashMap[(String, Boolean), Extracted]()
 
   /** The classes extracted from this unit, each with its thin API and hashes (`buildHashes`). */
   def allExtracted: List[Extracted] = {
@@ -1074,7 +1083,7 @@ class ExtractAPI[GlobalType <: Global](
     if (pendingHashes.nonEmpty) {
       val todo = pendingHashes.toList
       pendingHashes.clear()
-      todo.foreach(p => extracted(p.name) = hashClass(p))
+      todo.foreach(p => extracted((p.name, p.isModule)) = hashClass(p))
       forceAll()
     }
   }
@@ -1848,7 +1857,11 @@ class ExtractAPI[GlobalType <: Global](
 
     val hasMacro = p.modifiers.isMacro || declared.exists(_.isMacro)
     val hashes = new xsbti.ClassHashes(apiHash, extraHash, nameHashes, hasMacro)
-    new Extracted(fullClasses.getOrElse(p.name, null), thinClass(p, members, isModule), hashes)
+    new Extracted(
+      fullClasses.getOrElse((p.name, isModule), null),
+      thinClass(p, members, isModule),
+      hashes
+    )
   }
 
   /** What `APIUtil.minimize` keeps of the class `mkClassLike` builds. */
@@ -1998,7 +2011,7 @@ class ExtractAPI[GlobalType <: Global](
         tParams
       ) // use original symbol (which is a term symbol when `c.isModule`) for `name` and other non-classy stuff
       allNonLocalClassesInSrc += classWithMembers
-      fullClasses(name) = classWithMembers
+      fullClasses((name, isModuleDefType(defType))) = classWithMembers
     }
     if (buildHashes)
       pendingHashes += new PendingClass(
