@@ -417,7 +417,7 @@ object Incremental {
 
     val hasSubprojectChange = initialChanges.external.apiChanges.nonEmpty
 
-    /**
+    /*
      * Records the current API of every upstream class whose change this run has processed. A
      * recompiled class records the upstream APIs it depends on, but a descendant that the rules
      * skip records nothing, and a stale record would hide the next change to that class.
