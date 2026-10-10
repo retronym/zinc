@@ -176,7 +176,12 @@ object Incremental:
 
     val profiler = options.externalHooks.getInvalidationProfiler
     val runProfiler = new AdaptedRunProfiler(profiler.profileRun)
-    val incremental: IncrementalCommon = new IncrementalNameHashing(log, options, runProfiler)
+    val incremental: IncrementalCommon = new IncrementalNameHashing(
+      log,
+      options,
+      runProfiler,
+      IncrementalCommon.packagePrefixImplicits(currentSetup)
+    )
     try
       incrementalCompile(
         sources,

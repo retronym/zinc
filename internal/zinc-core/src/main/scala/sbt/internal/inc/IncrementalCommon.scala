@@ -18,7 +18,7 @@ import xsbti.{ FileConverter, VirtualFile, VirtualFileRef }
 import xsbt.api.APIUtil
 import xsbti.UseScope
 import xsbti.api.{ AnalyzedClass, NameHash }
-import xsbti.compile.{ Changes, DependencyChanges, IncOptions, Output }
+import xsbti.compile.{ Changes, DependencyChanges, IncOptions, MiniSetup, Output }
 import xsbti.compile.ClassFileManager as XClassFileManager
 import xsbti.compile.analysis.{ ReadStamps, Stamp as XStamp }
 import scala.collection.Iterator
@@ -36,11 +36,15 @@ import Incremental.{ CompileCycle, CompileCycleResult, IncrementalCallback, Pref
  *
  * @param log An instance of a logger.
  * @param options An instance of incremental compiler options.
+ * @param packagePrefixImplicits Whether the compiler puts the package objects of a type's prefix
+ *                               packages in its implicit scope (Scala 2, see
+ *                               [[IncrementalCommon.packagePrefixImplicits]]).
  */
 private[inc] abstract class IncrementalCommon(
     val log: Logger,
     options: IncOptions,
-    profiler: RunProfiler
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
 ) extends InvalidationProfilerUtils:
   // Work around bugs in classpath handling such as the "currently" problematic -javabootclasspath
   private def enableShallowLookup: Boolean =
@@ -798,9 +802,9 @@ private[inc] abstract class IncrementalCommon(
    * package object, nor implicits.
    *
    * An implicit of a package object is also in the implicit scope of a type whose prefix is the
-   * package or a nested one, in Scala 2 (not in Scala 3, nor with `-Xsource:3`). A class can only
-   * search such a type if it refers to a class of the package or a nested one, so
-   * [[implicitSeers]] adds those classes.
+   * package or a nested one, in Scala 2 unless `package-prefix-implicits` is enabled (not in
+   * Scala 3). A class can only search such a type if it refers to a class of the package or a
+   * nested one, so [[implicitSeers]] adds those classes when `packagePrefixImplicits`.
    *
    * With `packageScope=global` every class sees every package, for a build whose bridge does not
    * record the reserved names.
@@ -843,13 +847,17 @@ private[inc] abstract class IncrementalCommon(
       seesMembers(pkg)(className) || isJava(className)
 
     def implicitSeers(pkg: String): Set[String] =
+      val seers = relations.classes._2s.filter(seesMembers(pkg)).toSet
+      if packagePrefixImplicits then seers ++ referrers(pkg) else seers
+
+    private def referrers(pkg: String): Set[String] =
       def under(target: String) = pkg.isEmpty || target.startsWith(pkg + ".")
       val referrers = relations.classes._2s.filter { className =>
         relations.memberRef.internal.forward(className).exists(under) ||
         relations.inheritance.internal.forward(className).exists(under)
       }
-      relations.classes._2s.filter(seesMembers(pkg)).toSet ++ referrers
-    end implicitSeers
+      referrers.toSet
+    end referrers
 
     /** The classes that use one of `names` and see the classes of `pkg`. */
     def usersOf(pkg: String, names: Set[String]): Set[String] = users(names, sees(pkg))
@@ -1145,6 +1153,25 @@ object IncrementalCommon:
    * The package whose scope a package object's members are in: `a.b` for the Scala 2 or 3
    * package object `a.b.package` and for Scala 3's top-level definitions `a.b.F$package`.
    */
+  /**
+   * Whether the compiler of `setup` puts the package objects of a type's prefix packages in its
+   * implicit scope: Scala 2, unless `-Xsource:3-cross` or `-Xsource-features` (`_`,
+   * `package-prefix-implicits`, or a `v2.13.13` or later group) drops them. Scala 3 does not
+   * (only under `-source:3.0-migration`, which it treats as an anchor for packages).
+   */
+  def packagePrefixImplicits(setup: MiniSetup): Boolean =
+    packagePrefixImplicits(setup.compilerVersion, setup.options.scalacOptions.toSeq)
+
+  def packagePrefixImplicits(compilerVersion: String, scalacOptions: Seq[String]): Boolean =
+    def drops(option: String) =
+      option == "-Xsource:3-cross" || option.startsWith("-Xsource-features:") &&
+        option.stripPrefix("-Xsource-features:").split(',').exists { f =>
+          f == "_" || f == "package-prefix-implicits" || f.startsWith("v2.13.")
+        }
+    compilerVersion.startsWith("2.") && !scalacOptions.exists(drops) ||
+    compilerVersion.startsWith("3.") && scalacOptions.exists(_.contains("3.0-migration"))
+  end packagePrefixImplicits
+
   def packageOfPackageObject(className: String): Option[String] =
     if className == "package" then Some("")
     else if className.endsWith(".package") then Some(className.stripSuffix(".package"))
