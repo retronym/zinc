@@ -1,0 +1,7 @@
+# Client expands the transparent L.inl in typer, into a call of L.h(): Int.
+> p/run
+# h's type changes. L's API moves on h only (inl's body hash covers the name h, not its type),
+# and Client recorded only the call of inl: a transparent expansion's references are not
+# collected, unlike those of a plain inline call. Client keeps calling h()I.
+$ copy-file changes/L.scala p/L.scala
+> p/run
