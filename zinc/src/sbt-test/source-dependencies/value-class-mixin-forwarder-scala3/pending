@@ -1,0 +1,7 @@
+# K's mixin forwarder for T.m erases the value class V to its underlying type.
+> p/run int
+# V's underlying type becomes Long. V's name hash covers it, so T (which names V) recompiles, but
+# T's API renders V by name and does not move; K records nothing of V and keeps m(I)I. A clean
+# build has m(J)I.
+$ copy-file changes/V.scala p/V.scala
+> p/run long
