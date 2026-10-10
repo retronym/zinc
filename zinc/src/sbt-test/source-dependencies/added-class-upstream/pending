@@ -1,0 +1,9 @@
+# added-class-inner-package across subprojects: Client, downstream in `package a; package b`,
+# resolves `Foo` to the upstream `a.Foo`.
+> app/compile
+
+# Adding `a.b.Foo` upstream shadows `a.Foo` for Client, and its `v` is a String: a clean build
+# fails. The downstream compares only the upstream classes it depends on, and `a.b.Foo` is new;
+# invalidating the users of an added class's name inside the upstream reaches no one.
+$ copy-file lib/changes/Inner.scala lib/Inner.scala
+-> app/compile
