@@ -164,7 +164,8 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
   ): Option[Name] =
     if (
       qualifier != null && qualifier.hasPackageFlag && !qualifier.isRoot &&
-      !qualifier.isEmptyPackage && selectors.exists(_.name == nme.WILDCARD)
+      !qualifier.isRootPackage && !qualifier.isEmptyPackage && !qualifier.isEmptyPackageClass &&
+      selectors.exists(_.name == nme.WILDCARD)
     ) Some(newTermName(qualifier.fullName + "._"))
     else None
 

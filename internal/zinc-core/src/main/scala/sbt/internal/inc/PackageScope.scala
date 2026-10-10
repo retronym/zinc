@@ -76,7 +76,7 @@ private[inc] object PackageScope:
   private def ignored(name: String): Boolean =
     ignoredNames(name) || name.contains(';') || name.endsWith("$package")
 
-  val Key = "packageScope"
+  val Key = "nameResolutionInvalidation"
 
   /**
    * Whether a change to a package's members reaches the classes of every package. By default it
@@ -85,7 +85,7 @@ private[inc] object PackageScope:
    * does not record the import needs `global`.
    */
   def global(options: IncOptions): Boolean =
-    options.extra().getOrDefault(Key, "packages").trim == "global"
+    options.extra().getOrDefault(Key, "").trim == "global"
 
   /** The used name a class records for a wildcard import of `pkg`. */
   def wildcardImport(pkg: String): String = pkg + "._"
