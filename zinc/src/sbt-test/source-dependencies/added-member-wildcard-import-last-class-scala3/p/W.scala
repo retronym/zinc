@@ -1,0 +1,3 @@
+package w
+
+object W

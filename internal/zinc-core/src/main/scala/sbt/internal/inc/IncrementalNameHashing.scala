@@ -34,7 +34,8 @@ import scala.util.Try
 private[inc] class IncrementalNameHashingCommon(
     log: Logger,
     options: IncOptions,
-    profiler: RunProfiler
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
 ) extends IncrementalCommon(log, options, profiler):
   import IncrementalCommon.transitiveDeps
 
@@ -66,6 +67,51 @@ private[inc] class IncrementalNameHashingCommon(
   override protected def libraryDescendants(relations: Relations): Set[String] =
     if !LibraryAncestors.invalidates(options) then Set.empty
     else LibraryAncestors.descendants(changedLibraryClasses, previousAPIs)
+
+  private def sameSource(relations: Relations)(className: String): Set[String] =
+    relations.definesClass(className).flatMap(relations.classNames)
+
+  private def addedNames(className: String): Set[String] =
+    ancestorChanges.get(className).fold(Set.empty[String]) { c =>
+      c.after.nameHashes.iterator.map(_.name).toSet -- c.before.nameHashes.iterator.map(_.name)
+    }
+
+  override protected def invalidateByPackageScope(
+      relations: Relations,
+      compiled: Set[String]
+  ): Set[String] =
+    if ancestorChanges.isEmpty then Set.empty
+    else
+      val api =
+        if compiled.isEmpty then
+          (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
+        else currentAPI
+      val packageObjects = relations.classes._2s.filter(PackageScope.isPackageObject)
+      val changes = PackageScope.changes(ancestorChanges, api, packageObjects)
+      val reach = PackageScope.Reach(
+        relations,
+        IncrementalCommon.comesFromScalaSource(relations),
+        PackageScope.global(options)
+      )
+      val reached =
+        PackageScope.invalidated(changes, relations, reach, packagePrefixImplicits) -- compiled
+      val clashes = PackageScope.clashes(changes, relations, compiled) ++
+        PackageScope.addedClassClashes(ancestorChanges, api, packageObjects, relations, compiled)
+      val invalidated = reached ++ clashes
+      if changes.nonEmpty || clashes.nonEmpty then
+        invalidationLog.debug(
+          InvalidationLog.section(
+            "Package members",
+            Seq(
+              "added names" ->
+                changes.map(c => s"${c.packageObject}: ${c.added.toList.sorted.mkString(", ")}"),
+              "changed implicits" -> changes.filter(_.implicitsChanged).map(_.packageObject),
+              "invalidated classes" -> reached,
+              "clashing classes, with their package objects" -> clashes
+            )
+          )
+        )
+      invalidated
 
   /** @inheritdoc */
   protected def invalidatedPackageObjects(
@@ -139,7 +185,14 @@ private[inc] class IncrementalNameHashingCommon(
     invalidationLog.detail(
       "All member reference dependencies will be considered within this context."
     )
-    val memberRefInv = memberRefInvalidator.get(_, relations.names, externalAPIChange, isScalaClass)
+    val memberRefInv = memberRefInvalidator.get(
+      _,
+      relations.names,
+      externalAPIChange,
+      isScalaClass,
+      sameSource(relations),
+      addedNames(modifiedBinaryClassName)
+    )
 
     // Propagate inheritance dependencies transitively.
     // This differs from normal because we need the initial crossing from externals to classes in this project.
@@ -250,7 +303,14 @@ private[inc] class IncrementalNameHashingCommon(
       isScalaClass: String => Boolean
   ): Set[String] =
     val modifiedClass = change.modifiedClass
-    val memberRefInv = memberRefInvalidator.get(_, relations.names, change, isScalaClass)
+    val memberRefInv = memberRefInvalidator.get(
+      _,
+      relations.names,
+      change,
+      isScalaClass,
+      sameSource(relations),
+      addedNames(modifiedClass)
+    )
 
     val descendants = invalidateByInheritance(relations, modifiedClass)
     val ancestorChange = ancestorChanges.get(modifiedClass)
@@ -347,5 +407,9 @@ private[inc] class IncrementalNameHashingCommon(
   ): Set[String] = relations.memberRef.internal.reverse(className)
 end IncrementalNameHashingCommon
 
-private final class IncrementalNameHashing(log: Logger, options: IncOptions, profiler: RunProfiler)
-    extends IncrementalNameHashingCommon(log, options, profiler)
+private final class IncrementalNameHashing(
+    log: Logger,
+    options: IncOptions,
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
+) extends IncrementalNameHashingCommon(log, options, profiler, packagePrefixImplicits)

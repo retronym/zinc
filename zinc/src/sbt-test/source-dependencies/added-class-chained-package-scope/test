@@ -1,0 +1,8 @@
+# Chained (`package a; package b`) and Single (`package a.b`) both resolve Foo to a.b.Foo; q.Foo is unrelated.
+> p/compile
+# Adding a.Foo: Chained sees package a's members through its outer clause, Single does not. Neither resolution
+# changes (a.b.Foo is nearer), but only Chained can be affected, so only it recompiles.
+$ copy-file changes/Added.scala p/Added.scala
+> p/compile
+> p/checkRecompilations 1 a.Foo
+> p/checkRecompilations 2 a.b.Chained

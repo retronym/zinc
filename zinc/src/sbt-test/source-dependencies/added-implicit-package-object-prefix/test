@@ -1,0 +1,7 @@
+# c.User finds a Show of a.b.T in the implicit scope of a.b.T: its companion.
+> p/compile
+# Scala 2 also puts the package objects of a type's prefix packages in its implicit scope: `package object b` gains a
+# Show of T, and the search is ambiguous, so a clean build fails. User neither is in package a.b nor imports it, but
+# it depends on a.b.T.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile

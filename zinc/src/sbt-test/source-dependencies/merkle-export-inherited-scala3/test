@@ -1,0 +1,6 @@
+# Client, in `package a; package b`, resolves Foo to a.Foo; package a.b exports the members of a.U, which extends q.Base.
+> p/compile
+# Base gains Foo, which U inherits and a.b exports: its forwarder shadows a.Foo, and its v is a String, so a clean build
+# fails. Neither U nor Client declares or uses a name of Base.
+$ copy-file changes/Base.scala p/Base.scala
+-> p/compile

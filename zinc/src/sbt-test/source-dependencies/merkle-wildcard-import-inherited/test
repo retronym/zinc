@@ -1,0 +1,7 @@
+# Client, in package a with `import w.W._`, resolves Foo to a.Foo (another file).
+> p/compile
+# Base gains Foo, which W inherits and the wildcard import now supplies over a.Foo, and its v is a String: a clean
+# build fails. The import is charged to First, which does not use the name Foo, and W's stored API lists its
+# declarations only: Client is reached through W, a descendant of Base, and the used names of First's source.
+$ copy-file changes/Base.scala p/Base.scala
+-> p/compile

@@ -1,0 +1,6 @@
+# Client, in `package a; package b`, finds the implicit a.T through `import w.W._`.
+> p/compile
+# Base gains an implicit a.T, which `package object b` inherits: two in the lexical scope are ambiguous, so a clean
+# build fails. The package object's stored API lists its declarations only, and it need not recompile.
+$ copy-file changes/Base.scala p/Base.scala
+-> p/compile
