@@ -278,7 +278,7 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       reporter: Reporter,
       log0: XLogger
   ): Boolean =
-    runWithConstantDeps(sources, options, output, incToolOptions, reporter, log0)._1
+    runWithListeners(sources, options, output, incToolOptions, reporter, log0)._1
 
   /**
    * Like [[run]], but also returns the Java->Java dependencies on inlined `static final` constants
@@ -295,6 +295,41 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       reporter: Reporter,
       log0: XLogger
   ): (Boolean, Map[String, Set[String]]) =
+    val (ok, deps, _, _) =
+      runWithListeners(sources, options, output, incToolOptions, reporter, log0)
+    (ok, deps)
+
+  /**
+   * Like [[runWithConstantDeps]], with the edges from static imports added to the dependencies,
+   * and the simple names each class looks up (see [[UsedNameListener]]).
+   */
+  private[sbt] def runWithTreeFacts(
+      sources: Array[VirtualFile],
+      options: Array[String],
+      output: Output,
+      incToolOptions: IncToolOptions,
+      reporter: Reporter,
+      log0: XLogger
+  ): (Boolean, Map[String, Set[String]], Map[String, Set[String]]) =
+    val (ok, deps, imports, names) =
+      runWithListeners(sources, options, output, incToolOptions, reporter, log0)
+    val all = (deps.keySet ++ imports.keySet).iterator.map { k =>
+      k -> (deps.getOrElse(k, Set.empty) ++ imports.getOrElse(k, Set.empty))
+    }.toMap
+    (ok, all, names)
+
+  /**
+   * Runs javac with the listeners that read its attributed AST, and returns the constant
+   * dependencies, the static-import dependencies and the used names, keyed by binary class name.
+   */
+  private def runWithListeners(
+      sources: Array[VirtualFile],
+      options: Array[String],
+      output: Output,
+      incToolOptions: IncToolOptions,
+      reporter: Reporter,
+      log0: XLogger
+  ): (Boolean, Map[String, Set[String]], Map[String, Set[String]], Map[String, Set[String]]) =
     val log: Logger = log0
     val logger = new LoggerWriter(log)
     val logWriter = new PrintWriter(logger)
@@ -334,10 +369,14 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
 
     var compileSuccess = false
     var constantDeps: Map[String, Set[String]] = Map.empty
+    var importDeps: Map[String, Set[String]] = Map.empty
+    var usedNames: Map[String, Set[String]] = Map.empty
     try
       // sbt/zinc#145: collect Java->Java dependencies on inlined `static final` constants from
       // javac's attributed AST, which retains the reference that the emitted bytecode erases.
       val deps = new JavaConstantDeps
+      val imports = new JavaConstantDeps
+      val names = new JavaConstantDeps
       val task = compiler.getTask(
         logWriter,
         customizedFileManager,
@@ -348,12 +387,16 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       )
       try
         task match
-          case jt: JavacTask => jt.addTaskListener(new ConstantDepListener(jt, deps))
-          case _             => () // not the system javac; constant deps are simply not tracked
+          case jt: JavacTask =>
+            jt.addTaskListener(new ConstantDepListener(jt, deps))
+            jt.addTaskListener(new UsedNameListener(jt, imports, names))
+          case _ => () // not the system javac; constant deps are simply not tracked
       catch
         case NonFatal(e) => log.debug("Could not install constant-dependency listener: " + e)
       val success = task.call()
       constantDeps = deps.result
+      importDeps = imports.result
+      usedNames = names.result
 
       /* Double check success variables for the Java compiler.
        * The local compiler may report successful compilations even though
@@ -364,8 +407,8 @@ final class LocalJavaCompiler(compiler: javax.tools.JavaCompiler) extends XJavaC
       customizedFileManager.close()
       logger.flushLines(if compileSuccess then Level.Warn else Level.Error)
     end try
-    (compileSuccess, constantDeps)
-  end runWithConstantDeps
+    (compileSuccess, constantDeps, importDeps, usedNames)
+  end runWithListeners
 
   /**
    * Rewrite of [[javax.tools.JavaCompiler.getStandardFileManager]] method that also sets
@@ -538,6 +581,66 @@ private[sbt] final class ConstantDepScanner(
     record(Some(node.getExpression))
     super.visitMemberSelect(node, p)
 end ConstantDepScanner
+
+/**
+ * Records, once each top-level class has been attributed, the simple names its classes look up
+ * (`usedNames`, keyed by binary class name) and an edge from it to the class of each static import
+ * of its compilation unit (`deps`). javac's classfiles keep neither: a name resolved to one class
+ * shows only that class, and an import leaves nothing. With them, a class added under a name a
+ * Java class uses invalidates it, as it does a Scala class, and so does a member added to a class
+ * it imports statically.
+ */
+private[sbt] final class UsedNameListener(
+    task: JavacTask,
+    deps: JavaConstantDeps,
+    names: JavaConstantDeps
+) extends TaskListener:
+  private val trees = Trees.instance(task)
+  private val elements = task.getElements
+
+  override def started(e: TaskEvent): Unit = ()
+
+  override def finished(e: TaskEvent): Unit =
+    if e.getKind == TaskEvent.Kind.ANALYZE then
+      val te = e.getTypeElement
+      if te != null then
+        try
+          val path = trees.getPath(te)
+          if path != null then
+            val from = elements.getBinaryName(te).toString
+            val cu = path.getCompilationUnit
+            val cuPath = new TreePath(cu)
+            for imp <- cu.getImports.asScala if imp.isStatic do
+              imp.getQualifiedIdentifier match
+                case ms: MemberSelectTree =>
+                  val q =
+                    new TreePath(new TreePath(new TreePath(cuPath, imp), ms), ms.getExpression)
+                  trees.getElement(q) match
+                    case owner: TypeElement =>
+                      val on = elements.getBinaryName(owner).toString
+                      if on != from then deps.add(from, on)
+                    case _ => ()
+                case _ => ()
+            new UsedNameScanner(trees, elements, names).scan(path, null)
+        catch case NonFatal(_) => ()
+end UsedNameListener
+
+private[sbt] final class UsedNameScanner(trees: Trees, elements: Elements, names: JavaConstantDeps)
+    extends TreePathScanner[Void, Void]:
+  private var owner: String = null
+
+  override def visitClass(node: ClassTree, p: Void): Void =
+    val saved = owner
+    trees.getElement(getCurrentPath) match
+      case te: TypeElement => owner = elements.getBinaryName(te).toString
+      case _               => ()
+    try super.visitClass(node, p)
+    finally owner = saved
+
+  override def visitIdentifier(node: IdentifierTree, p: Void): Void =
+    if owner != null then names.add(owner, node.getName.toString)
+    super.visitIdentifier(node, p)
+end UsedNameScanner
 
 /**
  * Track write calls through customized file manager.
