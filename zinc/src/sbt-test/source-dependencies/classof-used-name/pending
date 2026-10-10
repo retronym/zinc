@@ -1,0 +1,8 @@
+# Client names W.Foo only through a classOf literal.
+> compile
+
+# W loses Foo: a clean build fails. The bridge records the dependency on W.Foo, and the name
+# Foo of W changes, but ExtractUsedNames registers no name for the type of a classOf literal, so
+# the name filter skips Client.
+$ copy-file changes/W.scala W.scala
+-> compile
