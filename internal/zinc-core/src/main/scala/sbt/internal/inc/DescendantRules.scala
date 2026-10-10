@@ -14,7 +14,7 @@ package internal
 package inc
 
 import xsbt.api.{ Discovery, HashAPI }
-import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType }
+import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType, Parameterized, Projection, Type }
 import xsbti.compile.IncOptions
 
 /**
@@ -291,12 +291,20 @@ private[inc] object DescendantRules:
    * dependency on the exported class, because the exporting class has a forwarder for each of its
    * members, new ones included. The other rules reason about inherited members, which such a class
    * does not have, so it always recompiles. Its stored parents do not name the changed class.
+   * A parent nested in a class is stored as a projection with only its simple name, so a parent
+   * with the changed class's simple name counts as naming it.
    */
   val exports: DescendantRule = rule("exports") { (view, d, change) =>
+    def simple(name: String) = name.stripSuffix("$").split('.').last.split('$').last
+    def parentNames(t: Type): Iterator[String] = t match
+      case p: Parameterized => parentNames(p.baseType)
+      case p: Projection    => Iterator(p.id) ++ MerkleHashes.typeName(p).iterator
+      case t                => MerkleHashes.typeName(t).iterator
     val stored =
-      view.classLikes(d).flatMap(_.structure.parents.iterator.flatMap(MerkleHashes.typeName))
-    if view.api(d).isDefined && !stored.contains(change.className) then
-      Some(s"forwards the members of ${change.className}")
+      view.classLikes(d).iterator.flatMap(_.structure.parents.iterator.flatMap(parentNames)).toSet
+    val p = change.className
+    if view.api(d).isDefined && !stored.contains(p) && !stored.contains(simple(p)) then
+      Some(s"forwards the members of $p")
     else None
   }
 
