@@ -46,20 +46,26 @@ class JavaUsedNamesSpec extends UnitSpec:
     assert(deps.getOrElse("p.b.Client", Set.empty).contains("p.W"))
   }
 
-  it should "record no edge for a type import" in facts { (deps, _) =>
-    assert(!deps.getOrElse("p.b.Client", Set.empty).exists(_.startsWith("p.q")))
+  it should "record an edge to the class of a single-type import" in facts { (deps, _) =>
+    assert(deps.getOrElse("p.b.Client", Set.empty).contains("p.q.Qux"))
+  }
+
+  it should "record no edge for an on-demand package import" in facts { (deps, _) =>
+    assert(!deps.getOrElse("p.b.Client", Set.empty).contains("p.q.Baz"))
   }
 
   private val fixtures: Seq[(String, String)] = Seq(
     "p/X.java" -> "package p; public class X { public static void Foo() {} }",
     "p/W.java" -> "package p; public class W { public static class Bar {} }",
     "p/q/Baz.java" -> "package p.q; public class Baz {}",
+    "p/q/Qux.java" -> "package p.q; public class Qux {}",
     "p/b/Foo.java" -> "package p.b; public class Foo {}",
     "p/b/Client.java" ->
       """package p.b;
         |import static p.X.Foo;
         |import static p.W.*;
         |import p.q.*;
+        |import p.q.Qux;
         |public class Client {
         |  static Object foo() { return Foo.class; }
         |  static Object bar() { return new Bar(); }
