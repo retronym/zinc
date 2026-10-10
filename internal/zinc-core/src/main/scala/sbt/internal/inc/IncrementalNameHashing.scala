@@ -31,8 +31,9 @@ import xsbt.api.SameAPI
 private[inc] class IncrementalNameHashingCommon(
     log: Logger,
     options: IncOptions,
-    profiler: RunProfiler
-) extends IncrementalCommon(log, options, profiler):
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
+) extends IncrementalCommon(log, options, profiler, packagePrefixImplicits):
   import IncrementalCommon.transitiveDeps
 
   private val memberRefInvalidator =
@@ -240,5 +241,9 @@ private[inc] class IncrementalNameHashingCommon(
   ): Set[String] = relations.memberRef.internal.reverse(className)
 end IncrementalNameHashingCommon
 
-private final class IncrementalNameHashing(log: Logger, options: IncOptions, profiler: RunProfiler)
-    extends IncrementalNameHashingCommon(log, options, profiler)
+private final class IncrementalNameHashing(
+    log: Logger,
+    options: IncOptions,
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
+) extends IncrementalNameHashingCommon(log, options, profiler, packagePrefixImplicits)
