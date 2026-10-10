@@ -273,6 +273,9 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkAnnotated") {
       case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
     },
+    onArgs("checkNotAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkNotAnnotated(i, cls, annotation)
+    },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
         p.checkMainClasses(i, javaV, dropRightColon(src), products)
@@ -524,6 +527,15 @@ case class ProjectStructure(
       val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
         c.savedAnnotations.filter(_ == annotation)
       assert(found.nonEmpty, s"$cls has no method annotated $annotation")
+    }
+
+  /** Test discovery, as sbt does it: does no public method of `cls` look annotated `annotation`? */
+  def checkNotAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.isEmpty, s"$cls has a method annotated $annotation")
     }
 
   def checkMainClasses(

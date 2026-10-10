@@ -1,0 +1,4 @@
+# Test discovery must not see the erased-signature witness that each member's hash includes
+> checkAnnotated FooTest Test
+> checkNotAnnotated FooTest <erased-signature>
+> checkNotAnnotated Base <erased-signature>
