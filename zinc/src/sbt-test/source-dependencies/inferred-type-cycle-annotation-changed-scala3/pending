@@ -1,0 +1,7 @@
+# A.x is written `Long`; B.y infers Long from it.
+> p/compile
+
+# A.x is now written `Int`, and a clean build infers B.y: Int. Zinc compiles A alone against
+# B.y: Long from B's classfile and reports a type mismatch.
+$ copy-file changes/A.scala p/A.scala
+> p/compile
