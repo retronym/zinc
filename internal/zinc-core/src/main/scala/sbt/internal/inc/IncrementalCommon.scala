@@ -70,7 +70,6 @@ private[inc] abstract class IncrementalCommon(
       output: Output,
       cycleNum: Int,
       pipelinedJavaSources: Set[VirtualFileRef],
-      runStart: Analysis,
   ):
     def toVf(ref: VirtualFileRef): VirtualFile = converter.toVirtualFile(ref)
     def sourceRefs: Set[VirtualFileRef] = allSources.asInstanceOf[Set[VirtualFileRef]]
@@ -215,9 +214,9 @@ private[inc] abstract class IncrementalCommon(
             ) ++
               ((invalidateByAddedClasses(compiledClasses, previous, analysis) ++
                 invalidateCoDefinedByAddedNames(newApiChanges, previous, analysis) ++
-                invalidateByPackageObjectChanges(compiledClasses, runStart, analysis)) --
+                invalidateByPackageObjectChanges(compiledClasses, previous, analysis)) --
                 recompiledClasses -- compiledClasses) ++
-              invalidateByPackageObjectClashes(compiledClasses, runStart, analysis)
+              invalidateByPackageObjectClashes(compiledClasses, previous, analysis)
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -296,7 +295,6 @@ private[inc] abstract class IncrementalCommon(
       output,
       cycleNum,
       pipelinedJavaSources,
-      previous,
     )
     val it = iterations(s)
     while it.hasNext do
@@ -575,12 +573,14 @@ private[inc] abstract class IncrementalCommon(
   end invalidateAfterInternalCompilation
 
   /**
-   * Invalidates the classes that use the simple name of a top-level class added by this cycle.
+   * Invalidates the classes that use the simple name of a top-level class added by this cycle and
+   * can see the class's package.
    *
    * An added class can change how an existing class resolves a name, although neither depends on
    * the other: `a.b.Foo` shadows `a.Foo` in a client in `package a; package b`, and `q.Foo`
    * shadows `a.Foo` or `scala.Foo` in a client in package `a` that imports `q._`. Zinc does not
-   * record the scopes that a lookup searched, so this invalidates every class that uses the name.
+   * record the scopes that a lookup searched, so this invalidates the classes that use the name and
+   * see package `q` (see [[PackageScope]]).
    *
    * @param compiledClasses The classes defined by the sources compiled in this cycle.
    * @param previous The analysis before this cycle.
@@ -591,18 +591,19 @@ private[inc] abstract class IncrementalCommon(
       previous: Analysis,
       current: Analysis
   ): Set[String] =
-    def isTopLevel(className: String): Boolean =
-      // A class without a companion has an empty, top-level placeholder for it.
-      val api = current.apis.internalAPI(className).api()
-      api.classApi.topLevel && api.objectApi.topLevel
-    val added =
-      compiledClasses.filter(c => previous.relations.definesClass(c).isEmpty && isTopLevel(c))
+    val added = compiledClasses.filter(c =>
+      previous.relations.definesClass(c).isEmpty && IncrementalCommon.isTopLevel(current, c)
+    )
     if added.isEmpty then Set.empty
     else
+      val scope = new PackageScope(current.relations)
       // No reference resolves to a package object by its name, `package`.
-      val names = added.map(c => c.substring(c.lastIndexOf('.') + 1)) - "package"
-      val invalidated = current.relations.names.iterator.collect {
-        case (className, used) if used.exists(u => names(u.name)) => className
+      val namesByPackage = added.toList
+        .map(IncrementalCommon.splitClassName)
+        .filter(_._2 != "package")
+        .groupMap(_._1)(_._2)
+      val invalidated = namesByPackage.iterator.flatMap { (pkg, names) =>
+        scope.usersOf(pkg, names.toSet)
       }.toSet
       invalidationLog.debug(
         InvalidationLog.section(
@@ -635,13 +636,11 @@ private[inc] abstract class IncrementalCommon(
   ): Set[String] =
     val relations = current.relations
     val usedNames = relations.names.toMultiMap
-    def names(analysis: Analysis, className: String): Set[String] =
-      if analysis.relations.definesClass(className).isEmpty then Set.empty
-      else analysis.apis.internalAPI(className).nameHashes.iterator.map(_.name).toSet
     val invalidated =
       for
         case NamesChange(className, _) <- changes.apiChanges.toSet
-        added = names(current, className) -- names(previous, className)
+        added = IncrementalCommon.names(current, className) --
+          IncrementalCommon.names(previous, className)
         if added.nonEmpty
         dependent <- relations.memberRef.internal.reverse(className)
         coDefined <- relations.definesClass(dependent).flatMap(relations.classNames)
@@ -664,40 +663,35 @@ private[inc] abstract class IncrementalCommon(
    * A package object's members (and, in Scala 3, the top-level definitions and exports of a
    * file, in its `F$package` class) are in scope in their package and its nested packages, and
    * `import a.b._` brings in those of `a.b`, without a dependency on the package object. A member
-   * added to it can shadow what a client resolved a name to, so this invalidates every class that
-   * uses its name. An implicit added to or removed from it can change an implicit search in the
-   * package without the name appearing in the client, so this invalidates the classes of the
-   * package and its nested packages.
+   * added to it can shadow what a client resolved a name to, so this invalidates the classes that
+   * use its name and see the package. An implicit added to or removed from it can change an
+   * implicit search without the name appearing in the client, so this invalidates every class that
+   * sees the package.
    *
    * @param compiledClasses The classes defined by the sources compiled in this cycle.
-   * @param runStart The analysis before the incremental run.
+   * @param previous The analysis before this cycle.
    * @param current The analysis after this cycle.
    */
   def invalidateByPackageObjectChanges(
       compiledClasses: Set[String],
-      runStart: Analysis,
+      previous: Analysis,
       current: Analysis
   ): Set[String] =
-    val changes = packageObjectChanges(compiledClasses, runStart, current)
+    val changes = packageObjectChanges(compiledClasses, previous, current)
     if changes.isEmpty then Set.empty
     else
-      val names = changes.flatMap(_.added).toSet
-      val byName = current.relations.names.iterator.collect {
-        case (className, used) if used.exists(u => names(u.name)) => className
-      }.toSet
-      val packages = changes.filter(_.implicitsChanged).map(_.pkg)
-      val byImplicits = current.relations.classes._2s.filter { className =>
-        packages.exists(pkg => pkg.isEmpty || className.startsWith(pkg + "."))
-      }.toSet
+      val scope = new PackageScope(current.relations)
+      val byName = changes.flatMap(c => scope.usersOf(c.pkg, c.added)).toSet
+      val byImplicits = changes.filter(_.implicitsChanged).flatMap(c => scope.seers(c.pkg)).toSet
       invalidationLog.debug(
         InvalidationLog.section(
           "Package object changes",
           Seq(
             "with added names" -> changes.filter(_.added.nonEmpty).map(_.packageObject),
             "with changed implicits" -> changes.filter(_.implicitsChanged).map(_.packageObject),
-            "added names" -> names,
+            "added names" -> changes.flatMap(_.added),
             "classes using the added names" -> byName,
-            "classes in packages whose implicits changed" -> byImplicits
+            "classes seeing a package whose implicits changed" -> byImplicits
           )
         )
       )
@@ -713,28 +707,27 @@ private[inc] abstract class IncrementalCommon(
    * recompiles them in one cycle, unless this cycle already compiled them together.
    *
    * @param compiledClasses The classes defined by the sources compiled in this cycle.
-   * @param runStart The analysis before the incremental run.
+   * @param previous The analysis before this cycle.
    * @param current The analysis after this cycle.
    */
   def invalidateByPackageObjectClashes(
       compiledClasses: Set[String],
-      runStart: Analysis,
+      previous: Analysis,
       current: Analysis
   ): Set[String] =
     def qualified(pkg: String, name: String) = if pkg.isEmpty then name else s"$pkg.$name"
     val byAddedMember =
       for
-        change <- packageObjectChanges(compiledClasses, runStart, current)
+        change <- packageObjectChanges(compiledClasses, previous, current)
         name <- change.added
         className = qualified(change.pkg, name)
         if !compiledClasses(className) && current.relations.definesClass(className).nonEmpty
         invalidated <- List(change.packageObject, className)
       yield invalidated
     val addedClasses = compiledClasses.filter { className =>
-      val api = current.apis.internalAPI(className).api()
-      runStart.relations.definesClass(className).isEmpty &&
+      previous.relations.definesClass(className).isEmpty &&
       IncrementalCommon.packageOfPackageObject(className).isEmpty &&
-      api.classApi.topLevel && api.objectApi.topLevel
+      IncrementalCommon.isTopLevel(current, className)
     }
     val byAddedClass =
       if addedClasses.isEmpty then Nil
@@ -744,8 +737,9 @@ private[inc] abstract class IncrementalCommon(
         }
         for
           (packageObject, pkg) <- packageObjects
-          names = current.apis.internalAPI(packageObject).nameHashes.iterator.map(_.name).toSet
-          name <- names.filterNot(IncrementalCommon.isNotInPackageScope)
+          name <- IncrementalCommon
+            .names(current, packageObject)
+            .filterNot(IncrementalCommon.isNotInPackageScope)
           className = qualified(pkg, name)
           if addedClasses(className)
           invalidated <- List(packageObject, className)
@@ -766,13 +760,13 @@ private[inc] abstract class IncrementalCommon(
   )
 
   /**
-   * The package objects compiled in this cycle whose names hashes differ from the analysis before
-   * the incremental run, not the previous cycle: a package object that inherits a member gains it
-   * in the cycle after its parent changed. A new package object adds all its names.
+   * The package objects compiled in this cycle whose name hashes changed. A package object that
+   * inherits a new member is recompiled after its parent, so its previous API lacks the member.
+   * A new package object adds all its names.
    */
   private def packageObjectChanges(
       compiledClasses: Set[String],
-      runStart: Analysis,
+      previous: Analysis,
       current: Analysis
   ): List[PackageObjectChange] =
     def nameHashes(analysis: Analysis, className: String): Set[NameHash] =
@@ -780,7 +774,7 @@ private[inc] abstract class IncrementalCommon(
       else analysis.apis.internalAPI(className).nameHashes.toSet
     compiledClasses.toList.flatMap { packageObject =>
       IncrementalCommon.packageOfPackageObject(packageObject).flatMap { pkg =>
-        val before = nameHashes(runStart, packageObject)
+        val before = nameHashes(previous, packageObject)
         val after = nameHashes(current, packageObject)
         val added = (after -- before).map(_.name).filterNot(IncrementalCommon.isNotInPackageScope)
         val implicitsChanged = ((after -- before) ++ (before -- after)).exists(_.scope ==
@@ -791,6 +785,41 @@ private[inc] abstract class IncrementalCommon(
       }
     }
   end packageObjectChanges
+
+  /**
+   * The classes that can see the definitions of a package without naming it: those of the package
+   * and its nested packages, and those of a source in which a class records a wildcard import of
+   * the package (the reserved used name `<pkg>._`, charged to one class of the source for a
+   * top-level import). With `nameResolutionInvalidation=global` every class sees every package,
+   * for builds whose bridge does not record the import.
+   */
+  private class PackageScope(relations: Relations):
+    private val global = IncrementalCommon.isGlobalNameResolution(options)
+    private val usedNames = relations.names.toMultiMap
+    private lazy val importers: Map[String, Set[String]] =
+      val bySource =
+        for
+          (className, used) <- usedNames.iterator
+          u <- used.iterator
+          if u.name.endsWith(IncrementalCommon.PackageWildcardSuffix)
+          source <- relations.definesClass(className).iterator
+        yield u.name.stripSuffix(IncrementalCommon.PackageWildcardSuffix) -> source
+      bySource.toList.groupMap(_._1)(
+        _._2
+      ).view.mapValues(_.toSet.flatMap(relations.classNames)).toMap
+
+    def sees(pkg: String)(className: String): Boolean =
+      global || pkg.isEmpty || className.startsWith(pkg + ".") ||
+        importers.get(pkg).exists(_(className))
+
+    def seers(pkg: String): Set[String] = relations.classes._2s.filter(sees(pkg)).toSet
+
+    def usersOf(pkg: String, names: Set[String]): Set[String] =
+      usedNames.iterator.collect {
+        case (className, used) if used.exists(u => names(u.name)) && sees(pkg)(className) =>
+          className
+      }.toSet
+  end PackageScope
 
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
   def invalidateInitial(
@@ -1018,6 +1047,28 @@ object IncrementalCommon:
    * A name that a package object's API has but does not put in its package's scope: a member of
    * `Any` or `AnyRef`, a constructor, a trait initialiser, or the name of the class itself.
    */
+  /** The incOption that widens the name-resolution rules to every class, when `global`. */
+  val NameResolutionInvalidationKey = "nameResolutionInvalidation"
+
+  def isGlobalNameResolution(options: IncOptions): Boolean =
+    options.extra.get(NameResolutionInvalidationKey) == "global"
+
+  /** The suffix of the used name that a bridge records for a wildcard import of a package. */
+  val PackageWildcardSuffix = "._"
+
+  private[inc] def isTopLevel(analysis: Analysis, className: String): Boolean =
+    // A class without a companion has an empty, top-level placeholder for it.
+    val api = analysis.apis.internalAPI(className).api()
+    api.classApi.topLevel && api.objectApi.topLevel
+
+  private[inc] def splitClassName(className: String): (String, String) =
+    val i = className.lastIndexOf('.')
+    if i < 0 then ("", className) else (className.substring(0, i), className.substring(i + 1))
+
+  private[inc] def names(analysis: Analysis, className: String): Set[String] =
+    if analysis.relations.definesClass(className).isEmpty then Set.empty
+    else analysis.apis.internalAPI(className).nameHashes.iterator.map(_.name).toSet
+
   def isNotInPackageScope(name: String): Boolean =
     universalMemberNames(name) || name.contains(';') || name == "$init$" ||
       name.endsWith("$package")

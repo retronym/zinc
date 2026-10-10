@@ -1,0 +1,6 @@
+# Client, in package c, imports a.b._ and w.W._, and finds the implicit a.T in W.
+> p/compile
+# The package object of a.b gains an implicit a.T: the two wildcard imports make the search ambiguous, so a
+# clean build fails. Client records the import of a.b._, so Zinc recompiles it and the incremental build fails too.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile

@@ -43,6 +43,7 @@ public class IncOptionsUtil {
     public static final String TRANSACTIONAL_MANAGER_BASE_DIRECTORY = "transactionalManagerBaseDirectory";
     public static final String DELETE_IMMEDIATELY_MANAGER_TYPE = "deleteImmediatelyManagerType";
     public static final String STORE_APIS = "storeApis";
+    public static final String NAME_RESOLUTION_INVALIDATION_KEY = "nameResolutionInvalidation";
     public static final String ALLOW_MACHINE_PATH = "allowMachinePath";
     public static final String PIPELINING = "pipelining";
     private static final String XSBTI_NOTHING = "NOTHING";
@@ -160,6 +161,13 @@ public class IncOptionsUtil {
         if (values.containsKey(IGNORED_SCALAC_OPTIONS_KEY)) {
             logger.debug(f0("IGNORED_SCALAC_OPTIONS_KEY value was read."));
             base = base.withIgnoredScalacOptions(values.get(IGNORED_SCALAC_OPTIONS_KEY).split(" +"));
+        }
+
+        if (values.containsKey(NAME_RESOLUTION_INVALIDATION_KEY)) {
+            logger.debug(f0("NAME_RESOLUTION_INVALIDATION_KEY value was read."));
+            Map<String, String> extra = new java.util.HashMap<>(base.extra());
+            extra.put(NAME_RESOLUTION_INVALIDATION_KEY, values.get(NAME_RESOLUTION_INVALIDATION_KEY));
+            base = base.withExtra(extra);
         }
 
         if (values.containsKey(STORE_APIS)) {
