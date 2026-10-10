@@ -76,27 +76,29 @@ private[inc] object PackageScope:
   private def ignored(name: String): Boolean =
     ignoredNames(name) || name.contains(';') || name.endsWith("$package")
 
-  val Key = "nameResolutionInvalidation"
+  val Key = "packageScope"
 
   /**
    * Whether a change to a package's members reaches the classes of every package. By default it
-   * reaches the classes of the package and its nested packages, and those that import the
-   * package with a wildcard, which the bridge records as the used name `a.b._`. A bridge that
-   * does not record the import needs `global`.
+   * reaches the classes that see the package (see [[Reach]]), which needs a bridge that records
+   * wildcard imports of packages and chained package clauses as the used name `a.b._`; `global`
+   * is for one that does not.
    */
   def global(options: IncOptions): Boolean =
     options.extra().getOrDefault(Key, "").trim == "global"
 
-  /** The used name a class records for a wildcard import of `pkg`. */
+  /** The used name a class records for a wildcard import of `pkg`, or an outer clause `package pkg`. */
   def wildcardImport(pkg: String): String = pkg + "._"
 
   /**
-   * The classes that can see the members of a package: those in it or a nested package, and
-   * those in a source that imports it with a wildcard (an import at the top of a source is
-   * recorded on one class of it). Java classes see every package, since their imports are not
-   * recorded.
+   * The classes that see the members of a package: its own classes (not those of a nested package,
+   * which see it only through a chained clause), those in a source that records `pkg._` (a
+   * wildcard import of it, or `package pkg; package sub`; names at the top of a source are
+   * recorded on one class of it), and Java classes, whose imports are not recorded.
    */
   final class Reach(relations: Relations, isScalaClass: String => Boolean, global: Boolean):
+    private lazy val allClasses: Set[String] = relations.classes._2s.toSet
+
     private lazy val importers: Map[String, Set[String]] =
       relations.names.iterator
         .flatMap { (className, used) =>
@@ -110,10 +112,38 @@ private[inc] object PackageScope:
         ))
         .toMap
 
+    /** The package of a class: its name without the enclosing classes and the simple name. */
+    def packageOfClass(className: String): String =
+      var p = parent(className)
+      while p.nonEmpty && allClasses(p) do p = parent(p)
+      p
+
+    private def parent(name: String): String =
+      name.lastIndexOf('.') match
+        case -1 => ""
+        case i  => name.substring(0, i)
+
     /** Whether `className`, a Scala class unless `java`, sees the members of `pkg`. */
     def apply(pkg: String, java: Boolean = true)(className: String): Boolean =
-      global || pkg.isEmpty || inPackage(className, pkg) ||
+      global || pkg.isEmpty || packageOfClass(className) == pkg ||
         importers.get(pkg).exists(_(className)) || (java && !isScalaClass(className))
+
+    /**
+     * The classes whose implicit searches may involve a type under `pkg`: Scala 2 adds the package
+     * objects of a type's prefix packages to its implicit scope. Approximated by the classes with a
+     * member-reference or inheritance dependency on a class in `pkg` or a nested package.
+     */
+    def implicitSeers(pkg: String): Set[String] =
+      if global then allClasses
+      else
+        def under(c: String) = pkg.isEmpty || c.startsWith(pkg + ".")
+        val rels = List(
+          relations.memberRef.internal,
+          relations.memberRef.external,
+          relations.inheritance.internal,
+          relations.inheritance.external
+        )
+        rels.iterator.flatMap(_.all.collect { case (from, to) if under(to) => from }).toSet
   end Reach
 
   final case class Change(packageObject: String, added: Set[String], implicitsChanged: Boolean)
@@ -155,7 +185,7 @@ private[inc] object PackageScope:
 
   /**
    * The classes that the changes reach: the users of an added name that see the package, and for
-   * a changed implicit every Scala class that sees the package.
+   * a changed implicit every Scala class that sees the package, or depends on a class under it.
    */
   def invalidated(changes: List[Change], relations: Relations, reach: Reach): Set[String] =
     if changes.isEmpty then Set.empty
@@ -168,7 +198,9 @@ private[inc] object PackageScope:
       val packages = changes.filter(_.implicitsChanged).map(c => packageOf(c.packageObject))
       val byImplicit =
         if packages.isEmpty then Set.empty
-        else relations.classes._2s.filter(c => packages.exists(reach(_, java = false)(c))).toSet
+        else
+          relations.classes._2s.filter(c => packages.exists(reach(_, java = false)(c))).toSet ++
+            packages.flatMap(reach.implicitSeers)
       byName ++ byImplicit
 
   /** The users of each name that see the package it is added to. */

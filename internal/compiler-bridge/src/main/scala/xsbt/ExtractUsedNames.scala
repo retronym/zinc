@@ -162,12 +162,18 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       qualifier: Symbol,
       selectors: List[ImportSelector]
   ): Option[Name] =
-    if (
-      qualifier != null && qualifier.hasPackageFlag && !qualifier.isRoot &&
-      !qualifier.isRootPackage && !qualifier.isEmptyPackage && !qualifier.isEmptyPackageClass &&
-      selectors.exists(_.name == nme.WILDCARD)
-    ) Some(newTermName(qualifier.fullName + "._"))
+    if (isNamedPackage(qualifier) && selectors.exists(_.name == nme.WILDCARD))
+      Some(newTermName(qualifier.fullName + "._"))
     else None
+
+  /**
+   * A package other than the root and empty packages. The outer clause of a chained package
+   * clause, `package a; package b`, is recorded like an import of `a._`: the classes in `a.b` see
+   * the members of `a`, which those of a single clause `package a.b` do not.
+   */
+  private def isNamedPackage(sym: Symbol): Boolean =
+    sym != null && sym.hasPackageFlag && !sym.isRoot && !sym.isRootPackage &&
+      !sym.isEmptyPackage && !sym.isEmptyPackageClass
 
   private def firstClassOrModuleDef(tree: Tree): Option[Tree] = {
     tree find {
@@ -271,6 +277,12 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case ValDef(mods, _, tpt, _) if mods.isCase && mods.isSynthetic =>
         updateCurrentOwner()
         PatMatDependencyTraverser.traverse(tpt.tpe)
+      case PackageDef(pid, stats) =>
+        val outer = pid.symbol
+        if (stats.exists(_.isInstanceOf[PackageDef]) && isNamedPackage(outer)) {
+          getNamesOfEnclosingScope.add(newTermName(outer.fullName + "._"))
+          ()
+        }
       case _: DefTree | _: Template                      => ()
       case Import(expr, selectors: List[ImportSelector]) =>
         val names = getNamesOfEnclosingScope

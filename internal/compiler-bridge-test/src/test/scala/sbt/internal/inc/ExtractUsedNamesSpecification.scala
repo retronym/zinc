@@ -38,6 +38,18 @@ class ExtractUsedNamesSpecification
     assert(usedNames("d.D4").filter(_.endsWith("._")) === Set("a.b._"))
   }
 
+  it should "record the outer clause of a chained package clause as <pkg>._" in {
+    val srcA = "package a.b { class X }"
+    val srcB = """|package a
+                  |package b
+                  |class Chained""".stripMargin
+    val srcC = """|package a.b
+                  |class Single""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    assert(usedNames("a.b.Chained").contains("a._"))
+    assert(!usedNames("a.b.Single").exists(_.endsWith("._")))
+  }
+
   it should "charge a top-level wildcard import of a package to the first class" in {
     val srcA = "package a.b { class X }"
     val srcB = """|package d
