@@ -1,0 +1,7 @@
+# Client inlines L.inl, which reads the alias D.N at the type level.
+> p/run 1
+# D.N changes. L uses N, so it recompiles, but its API does not move: the inline body hash
+# does not hash types (a TypeTree hashes as its node kind). The expansion is a literal, so
+# Client recorded no name for N. A clean build inlines 2.
+$ copy-file changes/D.scala p/D.scala
+> p/run 2
