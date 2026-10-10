@@ -1,0 +1,8 @@
+# Client (in a.b), Imp (importing a.b._) and Far (in c, neither) all use the name Foo.
+> p/compile
+# The package object of a.b gains Foo. Only the classes that can see a.b are recompiled: those of a.b
+# and its nested packages, and those that import a.b._. Far and a.Foo use the name but cannot see a.b.
+$ copy-file changes/PObj.scala p/PObj.scala
+> p/compile
+> p/checkRecompilations 0 a.Foo c.Far c.Foo
+> p/checkRecompilations 2 a.b.Client c.Imp
