@@ -93,9 +93,10 @@ private[inc] class IncrementalNameHashingCommon(
         PackageScope.global(options)
       )
       val reached = PackageScope.invalidated(changes, relations, reach) -- compiled
-      val clashes = PackageScope.clashes(changes, relations, compiled)
+      val clashes = PackageScope.clashes(changes, relations, compiled) ++
+        PackageScope.addedClassClashes(ancestorChanges, api, packageObjects, relations, compiled)
       val invalidated = reached ++ clashes
-      if changes.nonEmpty then
+      if changes.nonEmpty || clashes.nonEmpty then
         invalidationLog.debug(
           InvalidationLog.section(
             "Package members",

@@ -197,6 +197,42 @@ private[inc] object PackageScope:
         .flatMap(n => List(n, c.packageObject))
     }.toSet
 
+  /**
+   * A top-level class added to a package whose package objects already have a member of its name,
+   * with those package objects: the converse of [[clashes]]. The members are composed, so an
+   * inherited member counts.
+   */
+  def addedClassClashes(
+      changes: collection.Map[String, AncestorChange],
+      api: String => Option[AnalyzedClass],
+      packageObjects: Iterable[String],
+      relations: Relations,
+      compiled: Set[String]
+  ): Set[String] =
+    val added = changes.valuesIterator.collect {
+      case c
+          if (c.before eq APIs.emptyAnalyzedClass) && (c.after ne APIs.emptyAnalyzedClass) &&
+            !isPackageObject(c.className) && c.after.api().classApi().topLevel &&
+            relations.definesClass(c.className).nonEmpty =>
+        c.className
+    }.toList
+    if added.isEmpty then Set.empty
+    else
+      val after = (name: String) =>
+        changes.get(name) match
+          case Some(c) => Some(c.after).filter(_ ne APIs.emptyAnalyzedClass)
+          case None    => api(name)
+      val byPackage = packageObjects.groupBy(packageOf)
+      added.iterator.flatMap { cls =>
+        val name = cls.substring(cls.lastIndexOf('.') + 1)
+        byPackage
+          .getOrElse(packageOf(cls), Nil)
+          .filter(p => members(p, after)._1(name))
+          .filterNot(p => compiled(p) && compiled(cls))
+          .flatMap(p => List(cls, p))
+      }.toSet
+  end addedClassClashes
+
   private def inPackage(className: String, pkg: String): Boolean =
     pkg.isEmpty || className.startsWith(pkg + ".")
 
