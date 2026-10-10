@@ -1,0 +1,7 @@
+# Client, in package c, finds the implicit a.b.T in T's companion, part of the implicit scope of a.b.T.
+> p/compile
+# In Scala 2 the package object of a.b, the prefix of a.b.T, is part of that implicit scope too. It gains an
+# implicit a.b.T: ambiguous, so a clean build fails. Client neither is in a.b nor imports it, but it refers to
+# a class of a.b, so Zinc recompiles it.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile

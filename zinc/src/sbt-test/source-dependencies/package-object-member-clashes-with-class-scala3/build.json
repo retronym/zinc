@@ -1,0 +1,1 @@
+{ "projects": [ { "name": "p", "scalaVersion": "3.x" } ] }

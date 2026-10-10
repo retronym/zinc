@@ -256,8 +256,10 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case ValDef(mods, _, tpt, _) if mods.isCase && mods.isSynthetic =>
         updateCurrentOwner()
         PatMatDependencyTraverser.traverse(tpt.tpe)
-      case _: DefTree | _: Template                   => ()
-      case Import(_, selectors: List[ImportSelector]) =>
+      case PackageDef(pid, stats) if stats.exists(_.isInstanceOf[PackageDef]) =>
+        addVisiblePackage(getNamesOfEnclosingScope, pid.symbol)
+      case _: DefTree | _: Template                      => ()
+      case Import(expr, selectors: List[ImportSelector]) =>
         val names = getNamesOfEnclosingScope
         def usedNameInImportSelector(name: Name): Unit = {
           if (!isEmptyName(name) && (name != nme.WILDCARD) && !names.contains(name)) {
@@ -266,6 +268,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
           }
         }
         selectors foreach { selector =>
+          if (selector.name == nme.WILDCARD) addVisiblePackage(names, expr.symbol)
           usedNameInImportSelector(selector.name)
           usedNameInImportSelector(selector.rename)
         }
@@ -296,6 +299,23 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case l: Literal =>
         processOriginalTreeAttachment(l)(traverse)
       case _ =>
+    }
+
+    /**
+     * Records that the definitions of a package other than the enclosing one are in scope, as the
+     * reserved name `<pkg>._`: for a wildcard import (`a.b._` for `import a.b._`), and for the outer
+     * clause of a chained package clause (`a._` for `package a; package b`). A definition added to
+     * the package later can change what the class resolves, and a package has no API or class
+     * dependency to record instead. Scala 3's bridge records the same names.
+     */
+    private def addVisiblePackage(names: JavaSet[Name], pkg: Symbol): Unit = {
+      if (
+        pkg != null && pkg.hasPackageFlag && !pkg.isRootPackage && !pkg.isEmptyPackage &&
+        !pkg.isEffectiveRoot
+      ) {
+        names.add(newTermName(pkg.fullName + "._"))
+        ()
+      }
     }
 
     private var _currentOwner: Symbol = _
