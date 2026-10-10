@@ -1,0 +1,7 @@
+# C's d.foo is d.selectDynamic("foo"): the tree names selectDynamic, and "foo" is a literal.
+> compile
+
+# D gains a member foo: String, which d.foo now selects, and a clean build rejects C. D's API
+# changes in the name foo, which C does not record as used.
+$ copy-file changes/D.scala D.scala
+-> compile
