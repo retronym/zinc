@@ -1,8 +1,10 @@
-# Client (in a.b), Imp (importing a.b._) and Far (in c, neither) all use the name Foo.
+# Client (in a.b), Imp (importing a.b._), Chained (in `package a.b; package d`), Single (in `package a.b.c`)
+# and Far (in c) all use the name Foo.
 > p/compile
-# The package object of a.b gains Foo. Only the classes that can see a.b are recompiled: those of a.b
-# and its nested packages, and those that import a.b._. Far and a.Foo use the name but cannot see a.b.
+# The package object of a.b gains Foo. Only the classes that can see a.b are recompiled: those of a.b,
+# those of a source that imports a.b._ or has a chained clause `package a.b`. Single is in a package nested
+# in a.b but declared with one clause, so a.b's members are not in its scope; Far and a.Foo cannot see a.b.
 $ copy-file changes/PObj.scala p/PObj.scala
 > p/compile
-> p/checkRecompilations 0 a.Foo c.Far c.Foo
-> p/checkRecompilations 2 a.b.Client c.Imp
+> p/checkRecompilations 0 a.Foo c.Far c.Foo a.b.c.Single a.b.c.Foo
+> p/checkRecompilations 2 a.b.Client c.Imp a.b.d.Chained
