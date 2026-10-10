@@ -138,8 +138,9 @@ object Conformance:
 
   /**
    * A base program, as a `prog` or as source `files`. A file's tier places it: 0 in a `macros`
-   * subproject upstream of everything, 1 upstream in the `split` layout, 2 downstream.
-   * `scalacOptions` apply to every subproject.
+   * subproject upstream of everything, 1 upstream in the `split` layout, 2 downstream. A base of
+   * source `files` lists in `tiers` every file an edit can create too, or the file goes by the
+   * flat space's names. `scalacOptions` apply to every subproject.
    */
   final case class Base(
       space: String,
