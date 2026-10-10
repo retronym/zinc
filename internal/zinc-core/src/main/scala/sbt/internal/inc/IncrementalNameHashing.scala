@@ -87,7 +87,12 @@ private[inc] class IncrementalNameHashingCommon(
         else currentAPI
       val packageObjects = relations.classes._2s.filter(PackageScope.isPackageObject)
       val changes = PackageScope.changes(ancestorChanges, api, packageObjects)
-      val reached = PackageScope.invalidated(changes, relations) -- compiled
+      val reach = PackageScope.Reach(
+        relations,
+        IncrementalCommon.comesFromScalaSource(relations),
+        PackageScope.global(options)
+      )
+      val reached = PackageScope.invalidated(changes, relations, reach) -- compiled
       val clashes = PackageScope.clashes(changes, relations, compiled)
       val invalidated = reached ++ clashes
       if changes.nonEmpty then

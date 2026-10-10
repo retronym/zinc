@@ -600,7 +600,8 @@ private[inc] abstract class IncrementalCommon(
    * An added class can change how an existing class resolves a name, although neither depends on
    * the other: `a.b.Foo` shadows `a.Foo` in a client in `package a; package b`, and `q.Foo`
    * shadows `a.Foo` or `scala.Foo` in a client in package `a` that imports `q._`. Zinc does not
-   * record the scopes that a lookup searched, so this invalidates every class that uses the name.
+   * record the scopes that a lookup searched, so this invalidates the classes that use the name
+   * and see the added class's package (see [[PackageScope.Reach]]).
    *
    * @param compiledClasses The classes defined by the sources compiled in this cycle.
    * @param previous The analysis before this cycle.
@@ -619,11 +620,17 @@ private[inc] abstract class IncrementalCommon(
       compiledClasses.filter(c => previous.relations.definesClass(c).isEmpty && isTopLevel(c))
     if added.isEmpty then Set.empty
     else
+      val reach = PackageScope.Reach(
+        current.relations,
+        IncrementalCommon.comesFromScalaSource(previous.relations, Some(current.relations)),
+        PackageScope.global(options)
+      )
       // No reference resolves to a package object by its name, `package`.
-      val names = added.map(c => c.substring(c.lastIndexOf('.') + 1)) - "package"
-      val invalidated = current.relations.names.iterator.collect {
-        case (className, used) if used.exists(u => names(u.name)) => className
-      }.toSet
+      val names = added.iterator
+        .map(c => c.substring(c.lastIndexOf('.') + 1) -> PackageScope.packageOf(c))
+        .filter(_._1 != "package")
+        .toList
+      val invalidated = PackageScope.usersOf(names, current.relations, reach)
       invalidationLog.debug(
         InvalidationLog.section(
           "Added classes",

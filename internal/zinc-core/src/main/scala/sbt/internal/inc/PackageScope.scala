@@ -15,6 +15,7 @@ package inc
 
 import xsbti.UseScope
 import xsbti.api.AnalyzedClass
+import xsbti.compile.IncOptions
 
 /**
  * Changes to the members of a package that reach classes with no edge to the package object.
@@ -43,8 +44,77 @@ private[inc] object PackageScope:
       case -1 => ""
       case i  => packageObject.substring(0, i)
 
-  /** Names that no reference resolves through a package's scope. */
-  private val ignoredNames = Set("<init>", "$init$", "package")
+  /**
+   * Names that no reference resolves through a package's scope to a member that a package object
+   * adds: constructors, the members of `Any` and `AnyRef`, which every package object has.
+   */
+  private val ignoredNames = Set(
+    "<init>",
+    "$init$",
+    "package",
+    "==",
+    "!=",
+    "##",
+    "equals",
+    "hashCode",
+    "toString",
+    "getClass",
+    "isInstanceOf",
+    "asInstanceOf",
+    "$isInstanceOf",
+    "$asInstanceOf",
+    "eq",
+    "ne",
+    "synchronized",
+    "wait",
+    "notify",
+    "notifyAll",
+    "clone",
+    "finalize"
+  )
+
+  private def ignored(name: String): Boolean =
+    ignoredNames(name) || name.contains(';') || name.endsWith("$package")
+
+  val Key = "packageScope"
+
+  /**
+   * Whether a change to a package's members reaches the classes of every package. By default it
+   * reaches the classes of the package and its nested packages, and those that import the
+   * package with a wildcard, which the bridge records as the used name `a.b._`. A bridge that
+   * does not record the import needs `global`.
+   */
+  def global(options: IncOptions): Boolean =
+    options.extra().getOrDefault(Key, "packages").trim == "global"
+
+  /** The used name a class records for a wildcard import of `pkg`. */
+  def wildcardImport(pkg: String): String = pkg + "._"
+
+  /**
+   * The classes that can see the members of a package: those in it or a nested package, and
+   * those in a source that imports it with a wildcard (an import at the top of a source is
+   * recorded on one class of it). Java classes see every package, since their imports are not
+   * recorded.
+   */
+  final class Reach(relations: Relations, isScalaClass: String => Boolean, global: Boolean):
+    private lazy val importers: Map[String, Set[String]] =
+      relations.names.iterator
+        .flatMap { (className, used) =>
+          used.iterator.map(_.name).filter(_.endsWith("._")).map(n => n.dropRight(2) -> className)
+        }
+        .toList
+        .groupMap(_._1)(_._2)
+        .view
+        .mapValues(_.toSet.flatMap(c =>
+          relations.definesClass(c).flatMap(relations.classNames) + c
+        ))
+        .toMap
+
+    /** Whether `className`, a Scala class unless `java`, sees the members of `pkg`. */
+    def apply(pkg: String, java: Boolean = true)(className: String): Boolean =
+      global || pkg.isEmpty || inPackage(className, pkg) ||
+        importers.get(pkg).exists(_(className)) || (java && !isScalaClass(className))
+  end Reach
 
   final case class Change(packageObject: String, added: Set[String], implicitsChanged: Boolean)
 
@@ -76,7 +146,7 @@ private[inc] object PackageScope:
       .flatMap { p =>
         val (namesBefore, implicitsBefore) = members(p, before)
         val (namesAfter, implicitsAfter) = members(p, after)
-        val added = namesAfter -- namesBefore -- ignoredNames
+        val added = (namesAfter -- namesBefore).filterNot(ignored)
         val implicitsChanged = implicitsBefore != implicitsAfter
         if added.isEmpty && !implicitsChanged then None
         else Some(Change(p, added, implicitsChanged))
@@ -84,24 +154,33 @@ private[inc] object PackageScope:
   end changes
 
   /**
-   * The classes that the changes reach: the users of an added name, and for a changed implicit
-   * the classes of the package and nested packages.
+   * The classes that the changes reach: the users of an added name that see the package, and for
+   * a changed implicit every Scala class that sees the package.
    */
-  def invalidated(changes: List[Change], relations: Relations): Set[String] =
+  def invalidated(changes: List[Change], relations: Relations, reach: Reach): Set[String] =
     if changes.isEmpty then Set.empty
     else
-      val added = changes.flatMap(_.added).toSet
-      val byName =
-        if added.isEmpty then Set.empty
-        else
-          relations.names.iterator.collect {
-            case (className, used) if used.exists(u => added(u.name)) => className
-          }.toSet
+      val byName = usersOf(
+        changes.flatMap(c => c.added.map(_ -> packageOf(c.packageObject))),
+        relations,
+        reach
+      )
       val packages = changes.filter(_.implicitsChanged).map(c => packageOf(c.packageObject))
       val byImplicit =
         if packages.isEmpty then Set.empty
-        else relations.classes._2s.filter(c => packages.exists(inPackage(c, _))).toSet
+        else relations.classes._2s.filter(c => packages.exists(reach(_, java = false)(c))).toSet
       byName ++ byImplicit
+
+  /** The users of each name that see the package it is added to. */
+  def usersOf(added: Iterable[(String, String)], relations: Relations, reach: Reach): Set[String] =
+    val packagesOf = added.groupMap(_._1)(_._2)
+    if packagesOf.isEmpty then Set.empty
+    else
+      relations.names.iterator.collect {
+        case (className, used)
+            if used.exists(u => packagesOf.get(u.name).exists(_.exists(reach(_)(className)))) =>
+          className
+      }.toSet
 
   /**
    * A class of the package named like an added member, with the package object. The two clash,

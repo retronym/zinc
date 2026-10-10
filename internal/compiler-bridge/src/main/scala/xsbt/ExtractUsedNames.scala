@@ -154,6 +154,20 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
     }
   }
 
+  /**
+   * `a.b._` for a wildcard import of package `a.b`. A member added to the package can shadow what
+   * an importing class resolved a name to, and the import records no dependency on a class.
+   */
+  private def packageWildcardName(
+      qualifier: Symbol,
+      selectors: List[ImportSelector]
+  ): Option[Name] =
+    if (
+      qualifier != null && qualifier.hasPackageFlag && !qualifier.isRoot &&
+      !qualifier.isEmptyPackage && selectors.exists(_.name == nme.WILDCARD)
+    ) Some(newTermName(qualifier.fullName + "._"))
+    else None
+
   private def firstClassOrModuleDef(tree: Tree): Option[Tree] = {
     tree find {
       case ((_: ClassDef) | (_: ModuleDef)) => true
@@ -256,8 +270,8 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case ValDef(mods, _, tpt, _) if mods.isCase && mods.isSynthetic =>
         updateCurrentOwner()
         PatMatDependencyTraverser.traverse(tpt.tpe)
-      case _: DefTree | _: Template                   => ()
-      case Import(_, selectors: List[ImportSelector]) =>
+      case _: DefTree | _: Template                      => ()
+      case Import(expr, selectors: List[ImportSelector]) =>
         val names = getNamesOfEnclosingScope
         def usedNameInImportSelector(name: Name): Unit = {
           if (!isEmptyName(name) && (name != nme.WILDCARD) && !names.contains(name)) {
@@ -269,6 +283,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
           usedNameInImportSelector(selector.name)
           usedNameInImportSelector(selector.rename)
         }
+        packageWildcardName(expr.symbol, selectors).foreach(names.add)
       /* Original type trees have to be traversed because typer is very
        * aggressive when expanding explicit user-defined types. For instance,
        * `Foo#B` will be expanded to `C` and the dependency on `Foo` will be

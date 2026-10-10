@@ -33,7 +33,8 @@ public class IncOptionsUtil {
     public static final String RELATIONS_DEBUG_KEY = "relationsDebug";
     public static final String DESCENDANT_RULES_KEY = "descendantRules";
     private static final String[] EXTRA_KEYS = {
-        DESCENDANT_RULES_KEY, "apiCheck", "apiCheckReport", "bridgeHashing", "libraryAncestors"
+        DESCENDANT_RULES_KEY, "apiCheck", "apiCheckReport", "bridgeHashing", "libraryAncestors",
+        "packageScope"
     };
     public static final String API_DEBUG_KEY = "apiDebug";
     public static final String API_DIFF_CONTEXT_SIZE_KEY = "apiDiffContextSize";
