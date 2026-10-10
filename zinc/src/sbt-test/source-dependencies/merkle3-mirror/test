@@ -1,0 +1,5 @@
+> p/run 0
+
+# O's mirror class has a static forwarder for the inherited m
+$ copy-file changes/A.scala p/A.scala
+> p/run s

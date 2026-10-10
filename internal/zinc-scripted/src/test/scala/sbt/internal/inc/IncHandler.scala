@@ -914,11 +914,15 @@ case class ProjectStructure(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
     )
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if scalaVersion.startsWith("3") then
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions =
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)

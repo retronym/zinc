@@ -1,0 +1,5 @@
+> p/compile
+
+# the enum's cases must implement P's new abstract member
+$ copy-file changes/P.scala p/P.scala
+-> p/compile
