@@ -46,6 +46,7 @@ private[inc] abstract class IncrementalCommon(
     java.lang.Boolean.getBoolean("xsbt.skip.cp.lookup")
 
   private[inc] final val invalidationLog = new InvalidationLog(log, options.relationsDebug)
+  private[inc] final val timings = new PhaseTimings
   def debug(s: => String): Unit = invalidationLog.detail(s)
 
   final def iterations(state0: CycleState): Iterator[CycleState] =
@@ -102,8 +103,10 @@ private[inc] abstract class IncrementalCommon(
         )
       )
 
-      val pruned = IncrementalCommon
-        .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      val pruned = timings.time("prune") {
+        IncrementalCommon
+          .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      }
 
       invalidationLog.detail(s"Cycle $cycleNum pruned relations:\n${pruned.relations}")
 
@@ -167,15 +170,17 @@ private[inc] abstract class IncrementalCommon(
       override val isFullCompilation: Boolean = allSources.subsetOf(invalidatedSources)
       override val previousAnalysis: Analysis = previous
       override val previousAnalysisPruned: Analysis = pruned
+      override def timings: PhaseTimings = IncrementalCommon.this.timings
 
       override def mergeAndInvalidate(
           partialAnalysis: Analysis,
           shouldRegisterCycle: Boolean,
       ): CompileCycleResult = {
-        val analysis =
+        val analysis = timings.time("merge") {
           if (isFullCompilation)
             partialAnalysis.copy(compilations = pruned.compilations ++ partialAnalysis.compilations)
           else pruned ++ partialAnalysis
+        }
 
         // Represents all classes that were compiled as a result of external and internal invalidation (by a previous cycle)
         // Maps the changed sources by the user to class names we can count as invalidated
@@ -188,12 +193,13 @@ private[inc] abstract class IncrementalCommon(
         // stored API was read from the compiled classes and never equals the one from scalac.
         val unchangedJavaClasses =
           pipelinedJavaSources.flatMap(previous.relations.classNames) -- classesToRecompile
-        val newApiChanges =
+        val newApiChanges = timings.time("detectAPIChanges") {
           detectAPIChanges(
             recompiledClasses -- unchangedJavaClasses,
             previous.apis.internalAPI,
             analysis.apis.internalAPI
           )
+        }
         if (!isFullCompilation && newApiChanges.apiChanges.nonEmpty)
           invalidationLog.debug(
             InvalidationLog.section(
@@ -205,13 +211,18 @@ private[inc] abstract class IncrementalCommon(
         val nextInvalidations =
           if (isFullCompilation) Set.empty[String]
           else
-            invalidateAfterInternalCompilation(
-              analysis,
-              newApiChanges,
-              recompiledClasses,
-              cycleNum >= options.transitiveStep,
-              IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations)) _
-            )
+            timings.time("invalidate") {
+              invalidateAfterInternalCompilation(
+                analysis,
+                newApiChanges,
+                recompiledClasses,
+                cycleNum >= options.transitiveStep,
+                IncrementalCommon.comesFromScalaSource(
+                  previous.relations,
+                  Some(analysis.relations)
+                ) _
+              )
+            }
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -235,7 +246,7 @@ private[inc] abstract class IncrementalCommon(
       ): CompileCycleResult = {
         classFileManager.generated(partialAnalysis.relations.allProducts.map(toVf).toArray)
         prev match {
-          case Some(prev) => prev.copy(analysis = pruned ++ partialAnalysis)
+          case Some(prev) => prev.copy(analysis = timings.time("merge")(pruned ++ partialAnalysis))
           case _          => mergeAndInvalidate(partialAnalysis, shouldRegisterCycle)
         }
       }
@@ -335,6 +346,12 @@ private[inc] abstract class IncrementalCommon(
    * @param newAPI A function that returns the current class associated with a given class name.
    * @return A list of API changes of the given two analyzed classes.
    */
+  /** The classes to recompile because a library ancestor changed. See [[LibraryAncestors]]. */
+  protected def libraryDescendants(relations: Relations): Set[String] = Set.empty
+
+  /** The classes of the libraries that changed since the previous compile, set before it. */
+  private[inc] var changedLibraryClasses: Set[String] = Set.empty
+
   def detectAPIChanges(
       recompiledClasses: collection.Set[String],
       oldAPI: String => AnalyzedClass,
@@ -576,6 +593,9 @@ private[inc] abstract class IncrementalCommon(
   }
 
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
+  /** The previous analysis's APIs, which external invalidation reads for unrecompiled classes. */
+  private[inc] var previousAPIs: APIs = APIs.empty
+
   def invalidateInitial(
       previous: Relations,
       changes: InitialChanges
@@ -607,7 +627,8 @@ private[inc] abstract class IncrementalCommon(
       }.toSet
     }
 
-    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep
+    val byLibraryAncestor = libraryDescendants(previous)
+    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor
     val allInvalidatedSourcefiles = addedSrcs ++ modifiedSrcs ++ byProduct ++ byLibraryDep
 
     if (previous.allSources.isEmpty)
@@ -633,6 +654,7 @@ private[inc] abstract class IncrementalCommon(
             "sources invalidated by products" -> byProduct.map(_.id),
             "sources invalidated by binary dependencies" -> byLibraryDep.map(_.id),
             "classes invalidated by external sources" -> byExtSrcDep,
+            "classes with a changed library ancestor" -> byLibraryAncestor,
           )
         )
       )

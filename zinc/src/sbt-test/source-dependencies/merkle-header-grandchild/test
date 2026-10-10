@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/A.scala A.scala
+# C does not mention A, but must now implement X.y
+-> compile

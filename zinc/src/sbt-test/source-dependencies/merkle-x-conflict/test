@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# A.m no longer implements M.m in C
+-> app/compile

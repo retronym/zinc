@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# C overrides m with an incompatible type
+-> app/compile

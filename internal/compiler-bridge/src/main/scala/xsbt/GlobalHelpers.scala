@@ -131,25 +131,33 @@ trait GlobalHelpers { self: Compat =>
 
   /** Returns true if given tree contains macro attchment. In such case calls func on tree from attachment. */
   def processMacroExpansion(in: Tree)(func: Tree => Unit): Boolean = {
-    import analyzer._ // this is where MEA lives in 2.11.x
-    // Hotspot
-    var seen = false
-    in.attachments.all.foreach {
-      case _ if seen =>
-      case macroAttachment: MacroExpansionAttachment =>
-        func(macroAttachment.expandee)
-        seen = true
-      case _ =>
+    val expandee = macroExpandee(in)
+    if (expandee eq null) false
+    else {
+      func(expandee)
+      true
     }
-    seen
+  }
+
+  /** The expandee of the first macro expansion attachment of `in`, or null. Allocation-free when `in` has no attachments. */
+  private def macroExpandee(in: Tree): Tree = {
+    import analyzer._ // this is where MEA lives in 2.11.x
+    val all = in.attachments.all
+    if (all.isEmpty) null
+    else {
+      var result: Tree = null
+      all.foreach {
+        case att: MacroExpansionAttachment if result eq null => result = att.expandee
+        case _                                               =>
+      }
+      result
+    }
   }
 
   object MacroExpansionOf {
     def unapply(tree: Tree): Option[Tree] = {
-      import analyzer._ // this is where MEA lives in 2.11.x
-      tree.attachments.all.collect {
-        case att: MacroExpansionAttachment => att.expandee
-      }.headOption
+      val expandee = macroExpandee(tree)
+      if (expandee eq null) None else Some(expandee)
     }
   }
 

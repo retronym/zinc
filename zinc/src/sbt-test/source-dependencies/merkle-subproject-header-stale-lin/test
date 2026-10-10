@@ -1,0 +1,9 @@
+> app/run none
+
+# a header change of P: D's stored linearization must gain X0
+$ copy-file lib/changes/P.scala lib/P.scala
+> app/run Int
+
+# a later edit to X0, which only D's refreshed linearization lists
+$ copy-file lib/changes/X0.scala lib/X0.scala
+> app/run String

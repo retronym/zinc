@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/A.scala A.scala
+# B's body selects the inherited m
+-> compile

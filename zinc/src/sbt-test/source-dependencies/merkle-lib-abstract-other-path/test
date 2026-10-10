@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/P.scala P.scala
+# P implemented the library trait Product's canEqual for D; D is now unimplemented
+-> compile

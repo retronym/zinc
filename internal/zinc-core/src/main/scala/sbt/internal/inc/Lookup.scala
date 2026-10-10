@@ -54,9 +54,17 @@ trait Lookup extends ExternalLookup {
       analysis0 <- lookupAnalysis(binaryClassName)
       analysis = analysis0 match { case a: Analysis => a }
       className <- analysis.relations.productClassName.reverse(binaryClassName).headOption
-      analyzedClass <- analysis.apis.internal.get(className)
+      analyzedClass <- MerkleHashes.composed(analysis, className, ownAnalyzedClass)
     } yield analyzedClass
   }
+
+  /** A class's own stored API, from whichever analysis on the classpath defines it. */
+  private def ownAnalyzedClass(className: String): Option[AnalyzedClass] =
+    for {
+      analysis0 <- lookupAnalysis(className)
+      analysis = analysis0 match { case a: Analysis => a }
+      own <- analysis.apis.internal.get(className)
+    } yield own
 }
 
 /**
