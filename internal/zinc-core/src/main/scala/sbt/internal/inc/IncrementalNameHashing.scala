@@ -77,17 +77,19 @@ private[inc] class IncrementalNameHashingCommon(
 
   override protected def invalidateByPackageScope(
       relations: Relations,
-      external: Boolean
+      compiled: Set[String]
   ): Set[String] =
     if ancestorChanges.isEmpty then Set.empty
     else
       val api =
-        if external then
+        if compiled.isEmpty then
           (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
         else currentAPI
       val packageObjects = relations.classes._2s.filter(PackageScope.isPackageObject)
       val changes = PackageScope.changes(ancestorChanges, api, packageObjects)
-      val invalidated = PackageScope.invalidated(changes, relations)
+      val reached = PackageScope.invalidated(changes, relations) -- compiled
+      val clashes = PackageScope.clashes(changes, relations, compiled)
+      val invalidated = reached ++ clashes
       if changes.nonEmpty then
         invalidationLog.debug(
           InvalidationLog.section(
@@ -96,7 +98,8 @@ private[inc] class IncrementalNameHashingCommon(
               "added names" ->
                 changes.map(c => s"${c.packageObject}: ${c.added.toList.sorted.mkString(", ")}"),
               "changed implicits" -> changes.filter(_.implicitsChanged).map(_.packageObject),
-              "invalidated classes" -> invalidated
+              "invalidated classes" -> reached,
+              "clashing classes, with their package objects" -> clashes
             )
           )
         )

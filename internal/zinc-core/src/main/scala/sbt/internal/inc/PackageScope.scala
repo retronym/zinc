@@ -103,6 +103,21 @@ private[inc] object PackageScope:
         else relations.classes._2s.filter(c => packages.exists(inPackage(c, _))).toSet
       byName ++ byImplicit
 
+  /**
+   * A class of the package named like an added member, with the package object. The two clash,
+   * but Scala 3 reports it only when it compiles both, so they recompile together unless the last
+   * cycle compiled them together.
+   */
+  def clashes(changes: List[Change], relations: Relations, compiled: Set[String]): Set[String] =
+    changes.iterator.filter(c => relations.definesClass(c.packageObject).nonEmpty).flatMap { c =>
+      val pkg = packageOf(c.packageObject)
+      c.added.iterator
+        .map(n => if pkg.isEmpty then n else s"$pkg.$n")
+        .filter(n => relations.definesClass(n).nonEmpty)
+        .filterNot(n => compiled(n) && compiled(c.packageObject))
+        .flatMap(n => List(n, c.packageObject))
+    }.toSet
+
   private def inPackage(className: String, pkg: String): Boolean =
     pkg.isEmpty || className.startsWith(pkg + ".")
 

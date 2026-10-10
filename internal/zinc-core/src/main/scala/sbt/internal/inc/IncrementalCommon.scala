@@ -218,9 +218,9 @@ private[inc] abstract class IncrementalCommon(
                 cycleNum >= options.transitiveStep,
                 IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
               ) ++
-                ((invalidateByAddedClasses(compiledClasses, previous, analysis) ++
-                  invalidateByPackageScope(analysis.relations, external = false)) --
-                  recompiledClasses -- compiledClasses)
+                (invalidateByAddedClasses(compiledClasses, previous, analysis) --
+                  recompiledClasses -- compiledClasses) ++
+                invalidateByPackageScope(analysis.relations, recompiledClasses ++ compiledClasses)
             }
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
@@ -346,8 +346,11 @@ private[inc] abstract class IncrementalCommon(
    * The classes that a change to a package's members reaches without an edge to its package
    * object, for the API changes last detected: those of upstream classes, or of this subproject's
    * classes in the last cycle. See [[PackageScope]].
+   *
+   * @param compiled The classes compiled in the last cycle, which saw the new members; empty for
+   *                 upstream changes.
    */
-  protected def invalidateByPackageScope(relations: Relations, external: Boolean): Set[String] =
+  protected def invalidateByPackageScope(relations: Relations, compiled: Set[String]): Set[String] =
     Set.empty
 
   /** The classes of the libraries that changed since the previous compile, set before it. */
@@ -666,7 +669,7 @@ private[inc] abstract class IncrementalCommon(
     val byLibraryAncestor = libraryDescendants(previous)
     val byPackageScope =
       if changes.external.apiChanges.isEmpty then Set.empty[String]
-      else invalidateByPackageScope(previous, external = true)
+      else invalidateByPackageScope(previous, Set.empty)
     val allInvalidatedClasses =
       invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor ++ byPackageScope
     val allInvalidatedSourcefiles = addedSrcs ++ modifiedSrcs ++ byProduct ++ byLibraryDep
