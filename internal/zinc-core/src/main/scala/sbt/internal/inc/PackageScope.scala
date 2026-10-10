@@ -15,7 +15,7 @@ package inc
 
 import xsbti.UseScope
 import xsbti.api.AnalyzedClass
-import xsbti.compile.IncOptions
+import xsbti.compile.{ IncOptions, MiniSetup }
 
 /**
  * Changes to the members of a package that reach classes with no edge to the package object.
@@ -86,6 +86,25 @@ private[inc] object PackageScope:
    */
   def global(options: IncOptions): Boolean =
     options.extra().getOrDefault(Key, "").trim == "global"
+
+  /**
+   * Whether the compiler of `setup` puts the package objects of a type's prefix packages in its
+   * implicit scope: Scala 2, unless `-Xsource:3-cross` or `-Xsource-features` (`_`,
+   * `package-prefix-implicits`, or a `v2.13.13` or later group) drops them. Scala 3 does not
+   * (only under `-source:3.0-migration`). As on develop (retronym/zinc#47).
+   */
+  def packagePrefixImplicits(setup: MiniSetup): Boolean =
+    packagePrefixImplicits(setup.compilerVersion, setup.options.scalacOptions.toSeq)
+
+  def packagePrefixImplicits(compilerVersion: String, scalacOptions: Seq[String]): Boolean =
+    def drops(option: String) =
+      option == "-Xsource:3-cross" || option.startsWith("-Xsource-features:") &&
+        option.stripPrefix("-Xsource-features:").split(',').exists { f =>
+          f == "_" || f == "package-prefix-implicits" || f.startsWith("v2.13.")
+        }
+    compilerVersion.startsWith("2.") && !scalacOptions.exists(drops) ||
+    compilerVersion.startsWith("3.") && scalacOptions.exists(_.contains("3.0-migration"))
+  end packagePrefixImplicits
 
   /** The used name a class records for a wildcard import of `pkg`, or an outer clause `package pkg`. */
   def wildcardImport(pkg: String): String = pkg + "._"
@@ -187,7 +206,12 @@ private[inc] object PackageScope:
    * The classes that the changes reach: the users of an added name that see the package, and for
    * a changed implicit every Scala class that sees the package, or depends on a class under it.
    */
-  def invalidated(changes: List[Change], relations: Relations, reach: Reach): Set[String] =
+  def invalidated(
+      changes: List[Change],
+      relations: Relations,
+      reach: Reach,
+      packagePrefixImplicits: Boolean = true
+  ): Set[String] =
     if changes.isEmpty then Set.empty
     else
       val byName = usersOf(
@@ -200,7 +224,7 @@ private[inc] object PackageScope:
         if packages.isEmpty then Set.empty
         else
           relations.classes._2s.filter(c => packages.exists(reach(_, java = false)(c))).toSet ++
-            packages.flatMap(reach.implicitSeers)
+            (if packagePrefixImplicits then packages.flatMap(reach.implicitSeers) else Set.empty)
       byName ++ byImplicit
 
   /** The users of each name that see the package it is added to. */

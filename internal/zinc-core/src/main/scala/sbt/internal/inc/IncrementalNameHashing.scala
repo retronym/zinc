@@ -34,7 +34,8 @@ import scala.util.Try
 private[inc] class IncrementalNameHashingCommon(
     log: Logger,
     options: IncOptions,
-    profiler: RunProfiler
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
 ) extends IncrementalCommon(log, options, profiler):
   import IncrementalCommon.transitiveDeps
 
@@ -92,7 +93,8 @@ private[inc] class IncrementalNameHashingCommon(
         IncrementalCommon.comesFromScalaSource(relations),
         PackageScope.global(options)
       )
-      val reached = PackageScope.invalidated(changes, relations, reach) -- compiled
+      val reached =
+        PackageScope.invalidated(changes, relations, reach, packagePrefixImplicits) -- compiled
       val clashes = PackageScope.clashes(changes, relations, compiled) ++
         PackageScope.addedClassClashes(ancestorChanges, api, packageObjects, relations, compiled)
       val invalidated = reached ++ clashes
@@ -405,5 +407,9 @@ private[inc] class IncrementalNameHashingCommon(
   ): Set[String] = relations.memberRef.internal.reverse(className)
 end IncrementalNameHashingCommon
 
-private final class IncrementalNameHashing(log: Logger, options: IncOptions, profiler: RunProfiler)
-    extends IncrementalNameHashingCommon(log, options, profiler)
+private final class IncrementalNameHashing(
+    log: Logger,
+    options: IncOptions,
+    profiler: RunProfiler,
+    packagePrefixImplicits: Boolean = true,
+) extends IncrementalNameHashingCommon(log, options, profiler, packagePrefixImplicits)
