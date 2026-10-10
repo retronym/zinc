@@ -585,10 +585,11 @@ end ConstantDepScanner
 /**
  * Records, once each top-level class has been attributed, the simple names its classes look up
  * (`usedNames`, keyed by binary class name) and an edge from it to the class of each static import
- * of its compilation unit (`deps`). javac's classfiles keep neither: a name resolved to one class
- * shows only that class, and an import leaves nothing. With them, a class added under a name a
- * Java class uses invalidates it, as it does a Scala class, and so does a member added to a class
- * it imports statically.
+ * and single-type import of its compilation unit (`deps`). javac's classfiles keep neither: a name
+ * resolved to one class shows only that class, and an import leaves nothing. With them, a class
+ * added under a name a Java class uses invalidates it, as it does a Scala class; so does a member
+ * added to a class it imports statically, and the deletion of a class it imports but does not use,
+ * which javac rejects.
  */
 private[sbt] final class UsedNameListener(
     task: JavacTask,
@@ -610,11 +611,11 @@ private[sbt] final class UsedNameListener(
             val from = elements.getBinaryName(te).toString
             val cu = path.getCompilationUnit
             val cuPath = new TreePath(cu)
-            for imp <- cu.getImports.asScala if imp.isStatic do
+            for imp <- cu.getImports.asScala do
               imp.getQualifiedIdentifier match
-                case ms: MemberSelectTree =>
-                  val q =
-                    new TreePath(new TreePath(new TreePath(cuPath, imp), ms), ms.getExpression)
+                case ms: MemberSelectTree if imp.isStatic || !ms.getIdentifier.contentEquals("*") =>
+                  val msPath = new TreePath(new TreePath(cuPath, imp), ms)
+                  val q = if imp.isStatic then new TreePath(msPath, ms.getExpression) else msPath
                   trees.getElement(q) match
                     case owner: TypeElement =>
                       val on = elements.getBinaryName(owner).toString
