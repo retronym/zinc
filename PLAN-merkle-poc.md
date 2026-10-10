@@ -2,7 +2,7 @@
 
 Context: talk §7–11 (Zinc Incrementality). Today `ExtractAPI.mkStructureWithInherited` materialises every inherited member into each class's `Structure`, so editing an ancestor changes every descendant's name hashes, and Zinc recompiles the whole hierarchy just to refresh them. The Merkle alternative stores decls only and composes a descendant's per-name hash from its ancestors', so an ancestor edit recompiles clients, not the hierarchy.
 
-Ground rules: Scala 2 with the in-repo compiler bridge (scripted's default `2.12.x` label). No compat: this worktree *is* the B side, based on sbt/zinc `develop`; the A side is `claude/merkle-baseline` (`develop` plus the IncBench commits only, worktree `merkle-baseline`). The `descendantRules` incOption also gives an in-build A/B (`all` = previous behaviour). Java (`ClassToAPI`) and Scala 3 are out of scope.
+Ground rules: Scala 2 with the in-repo compiler bridge (scripted's default `2.12.x` label). No compat: this worktree *is* the B side, based on sbt/zinc `develop`; the A side is `claude/merkle-baseline` (`develop` plus the IncBench commits only, worktree `merkle-baseline`). The `descendantRules` incOption also gives an in-build A/B (`all` = previous behaviour). Java (`ClassToAPI`) is out of scope; Scala 3 has its own section below.
 
 ## Status
 
@@ -156,6 +156,43 @@ Goal: one performance package, Merkle plus in-bridge hashing, measured as A = de
 - Zinc time outside the compiler;
 - analysis size, and load and save time;
 - IncBench edit timings on catalyst, the cross-module build and the synthetic tree.
+
+## Scala 3 (2026-10-10)
+
+Branches: retronym/zinc `claude/merkle-scala3-bridge` (this file), retronym/scala3 `claude/merkle-sbt-bridge` (on the 3.9.0 tag; `claude/merkle-sbt-bridge-3.8.3` carries the same two commits for joern).
+
+**Port.** The Scala 3 equivalent of decision 4 lives in the compiler, not in `sbt-bridge`: `dotty.tools.dotc.sbt.ExtractAPI.apiClassStructure`. Members inherited from internal ancestors (defined in this run, under the output directory, or `isSubprojectClass`) are no longer materialised, except those discovery reads (annotated members, `main`); platform members (`Any`, `Object`, `Matchable`, the standard library) become typeless stubs; other library members stay in full. Scala 3 already selected *all* decls of each base class, overridden ones included, so the Scala 2 bridge's `overriddenLibraryDecls` has no counterpart, except for Scala 2-compiled ancestors, which Scala 3 skipped entirely and which now contribute stubs (the `abstract` and `conflicts` rules need them). `isSubprojectClass` reaches the compiler through a new default method on its `IncrementalCallback`; the bridge calls `AnalysisCallback4.isSubprojectClass` reflectively, since scala3 builds against compiler-interface 1.12. Hashing stays in Zinc (tree mode); no `AnalysisCallback5` yet.
+
+Trying it means swapping the compiler, not only the bridge jar. For corpora: publish the patched compiler under a version no other part of the build uses (sbt 2's own meta-build is on 3.9.0, so a patched `3.9.0` leaks into it), e.g. `3.9.1` for builds on 3.9.0, or `3.8.3` for joern, whose `scala-repl-pp` is cross-published per full Scala version.
+
+**Soundness findings.**
+
+- *Upstream Scala 3 bug, independent of Merkle.* `apiModifiers` tests `sym.isOneOf(Trait | Abstract | Deferred)`; `Trait` is a type-only flag, so the union is a type-only `FlagSet` and deferred terms are never marked abstract. Removing (or adding) a method body is not an API change, so with stock sbt 2.0.10 and Scala 3.9.0 a concrete subclass is not recompiled and fails at runtime with `AbstractMethodError`. Fixed on the scala3 branch (`sym.isOneOf(Trait | Abstract) || sym.is(Deferred)`); upstream PR scala/scala3#27271.
+- *Wildcard `export`.* Scala 3 records `export x.*` as an inheritance dependency on `x`'s class, so that new members reach the forwarders. The descendant rules took the exporting class for a subclass that reads nothing and dropped it. New rule `exports` (in `default`): keep an inheritance edge whose source does not name the changed class among its stored parents (by full or simple name, since a nested parent is stored as a projection). It also keeps Java descendants more than one level down, whose stored parents are direct supertypes only (overcompilation only).
+- *Merkle Zinc with today's Scala 3 compiler is unsound*, so dogfooding needs the patched compiler: besides the two above, `merkle-lib-conflict` undercompiles (a conflict with a member inherited from a standard-library trait is invisible without stubs).
+- Not found: holes for inline (bodies are hashed into the API, and a descendant or client that inlines is a `memberRef` client of the owner), transparent inline, givens, opaque types, enums, trait parameters, or a quotes macro reading inherited members (Scala 3 records the type arguments of inline calls as macro-expansion dependencies, which Zinc already follows over descendants).
+
+**Tests.** `merkle3-*` scripted tests (exports added/changed, inline and transparent inline read by descendants and clients, ambiguous givens, opaque types, enum cases implementing a new abstract member, trait parameters, mirror forwarders, a quotes macro). With `descendantRules = none`, `enum-abstract`, `mirror` and `export-add` fail; the others pass by `memberRef`/macro edges and are regression tests. The existing `merkle-*` tests run under Scala 3 with `ZINC_SCRIPTED_DEFAULT_LABEL=3.x` (see `03_scripted_tests.md`): all pass on the patched compiler; on stock 3.9.0 the `abstract` tests fail (the upstream bug), `merkle-lib-conflict` undercompiles, and three `checkRecompilations` precision checks fail because stock APIs are full. `merkle-mirror` needs a package under Scala 3 (`merkle3-mirror`): Scala 3 reports a Java main class in the empty package twice (`<empty>.J` and `J`). The scripted harness now registers `TastyFiles` for Scala 3, as sbt does; without it a deleted source's `.tasty` stayed in the output and later compiles read the stale class.
+
+**Measurements** (`sbt2-try-zinc`-style harness: edit, incremental compile, clean build, bytecode comparison; sbt 2's disk cache disabled, since it restores another run's outputs through symlinks into its CAS). Configurations: A = stock sbt, B = Merkle Zinc with the stock compiler, C = Merkle Zinc with the patched compiler. Each edit adds an unused concrete member; recompiled classfiles:
+
+| corpus, edit | A | B | C |
+|---|---|---|---|
+| zinc, `APIChange` (zinc-core) | 15 | 15 | 15 |
+| zinc, `StampBase` | 23 | 23 | 23 |
+| sbt/sbt, `Def.Initialize` | 1,326 | 1,168 | 1,168 |
+| sbt/sbt, `Scoped` | 1,123 | 1,123 | 1,123 |
+| sbt/sbt, `AutoPlugin` | 1,201 | 1,201 | 1,201 |
+| joern, `AstCreatorBase` (x2cpg; 15 frontends extend it) | 73 (19 sources) | – | 1 (1 source) |
+| joern, `LayerCreator` (semanticcpg) | 65 (21 sources) | – | 8 (2 sources) |
+| joern, trait `X2CpgFrontend` (x2cpg) | 131 (29 sources) | – | 51 (15 sources: each frontend's main object mixes it in, `traitDirect`) |
+
+No differences from a clean build in a class the incremental compile did not recompile, in any run. Raw comparison is noisy: TASTy, and occasionally bytecode (trait `$init$` order in sbt's `package$`), differs between joint and separate compilation of the *same* source (scala/scala3#26551), so the check compares `javap` output and flags only classes not recompiled.
+
+- *joern* (Scala 3.8.3, which its `scala-repl-pp` dependency pins, so C uses the two compiler commits on the 3.8.3 tag): the case Merkle targets, a base class extended across modules. Incremental compiles take 2–5 s either way, since joern's frontends compile in parallel and each recompiles only a few sources; the gain is in what is recompiled, not yet in wall time. B was not run on joern. SemanticDB was disabled for these runs: sbt 2.0.10 rematerialises joern's `meta/` output read-only, so the next compile fails to overwrite a `.semanticdb` file.
+- *zinc*: hierarchies are shallow; nothing to gain.
+- *sbt/sbt*: the cascade is macros, not hierarchy. Adding a member to trait `Scoped` legitimately recompiles `SettingKey`/`TaskKey`/`InputKey` (`traitDirect`); they define Scala 3 macros, and Zinc treats every recompile of a macro-defining source as an API change (`APIChangeDueToMacroDefinition`), invalidating all of `main`'s clients and crossing the 50% recompile-all threshold. In Scala 3 an inline method's body is in its API hash, so the rule is only needed for macro implementations; narrowing it is future work.
+- *Timing* (`[zinc-timing]` debug line per incremental compile, plus `-Yprofile-enabled`): on zinc's clean build, Zinc's `analysis` step (hashing and minimising the trees the Scala 3 bridge sends) takes 220–270 ms against 60–100 ms for the compiler's `sbt-api` phase; on sbt/sbt 1.6–4.3 s against 1.2–3.3 s. That is the case for `AnalysisCallback5` in the Scala 3 bridge (step 4, not done).
 
 ## Key decisions
 
