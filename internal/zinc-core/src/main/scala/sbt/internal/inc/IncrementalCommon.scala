@@ -16,7 +16,8 @@ package inc
 import sbt.util.Logger
 import xsbti.{ FileConverter, VirtualFile, VirtualFileRef }
 import xsbt.api.APIUtil
-import xsbti.api.AnalyzedClass
+import xsbti.UseScope
+import xsbti.api.{ AnalyzedClass, NameHash }
 import xsbti.compile.{ Changes, DependencyChanges, IncOptions, Output }
 import xsbti.compile.ClassFileManager as XClassFileManager
 import xsbti.compile.analysis.{ ReadStamps, Stamp as XStamp }
@@ -69,6 +70,7 @@ private[inc] abstract class IncrementalCommon(
       output: Output,
       cycleNum: Int,
       pipelinedJavaSources: Set[VirtualFileRef],
+      runStart: Analysis,
   ):
     def toVf(ref: VirtualFileRef): VirtualFile = converter.toVirtualFile(ref)
     def sourceRefs: Set[VirtualFileRef] = allSources.asInstanceOf[Set[VirtualFileRef]]
@@ -212,8 +214,10 @@ private[inc] abstract class IncrementalCommon(
               IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
             ) ++
               ((invalidateByAddedClasses(compiledClasses, previous, analysis) ++
-                invalidateCoDefinedByAddedNames(newApiChanges, previous, analysis)) --
-                recompiledClasses -- compiledClasses)
+                invalidateCoDefinedByAddedNames(newApiChanges, previous, analysis) ++
+                invalidateByPackageObjectChanges(compiledClasses, runStart, analysis)) --
+                recompiledClasses -- compiledClasses) ++
+              invalidateByPackageObjectClashes(compiledClasses, runStart, analysis)
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -292,6 +296,7 @@ private[inc] abstract class IncrementalCommon(
       output,
       cycleNum,
       pipelinedJavaSources,
+      previous,
     )
     val it = iterations(s)
     while it.hasNext do
@@ -652,6 +657,119 @@ private[inc] abstract class IncrementalCommon(
     invalidated
   end invalidateCoDefinedByAddedNames
 
+  /**
+   * Invalidates the classes that a member added to a package object, or a change to its implicits,
+   * can make resolve a name differently.
+   *
+   * A package object's members (and, in Scala 3, the top-level definitions and exports of a
+   * file, in its `F$package` class) are in scope in their package and its nested packages, and
+   * `import a.b._` brings in those of `a.b`, without a dependency on the package object. A member
+   * added to it can shadow what a client resolved a name to, so this invalidates every class that
+   * uses its name. An implicit added to or removed from it can change an implicit search in the
+   * package without the name appearing in the client, so this invalidates the classes of the
+   * package and its nested packages.
+   *
+   * @param compiledClasses The classes defined by the sources compiled in this cycle.
+   * @param runStart The analysis before the incremental run.
+   * @param current The analysis after this cycle.
+   */
+  def invalidateByPackageObjectChanges(
+      compiledClasses: Set[String],
+      runStart: Analysis,
+      current: Analysis
+  ): Set[String] =
+    val changes = packageObjectChanges(compiledClasses, runStart, current)
+    if changes.isEmpty then Set.empty
+    else
+      val names = changes.flatMap(_.added).toSet
+      val byName = current.relations.names.iterator.collect {
+        case (className, used) if used.exists(u => names(u.name)) => className
+      }.toSet
+      val packages = changes.filter(_.implicitsChanged).map(_.pkg)
+      val byImplicits = current.relations.classes._2s.filter { className =>
+        packages.exists(pkg => pkg.isEmpty || className.startsWith(pkg + "."))
+      }.toSet
+      invalidationLog.debug(
+        InvalidationLog.section(
+          "Package object changes",
+          Seq(
+            "with added names" -> changes.filter(_.added.nonEmpty).map(_.packageObject),
+            "with changed implicits" -> changes.filter(_.implicitsChanged).map(_.packageObject),
+            "added names" -> names,
+            "classes using the added names" -> byName,
+            "classes in packages whose implicits changed" -> byImplicits
+          )
+        )
+      )
+      byName ++ byImplicits
+    end if
+  end invalidateByPackageObjectChanges
+
+  /**
+   * Invalidates a package object together with a class of its package that has the name of a
+   * member added to it.
+   *
+   * The two definitions clash, but Scala 3 reports it only when it compiles both, so this
+   * recompiles them in one cycle, unless this cycle already compiled them together.
+   *
+   * @param compiledClasses The classes defined by the sources compiled in this cycle.
+   * @param runStart The analysis before the incremental run.
+   * @param current The analysis after this cycle.
+   */
+  def invalidateByPackageObjectClashes(
+      compiledClasses: Set[String],
+      runStart: Analysis,
+      current: Analysis
+  ): Set[String] =
+    val clashes =
+      for
+        change <- packageObjectChanges(compiledClasses, runStart, current)
+        name <- change.added
+        className = if change.pkg.isEmpty then name else s"${change.pkg}.$name"
+        if !compiledClasses(className) && current.relations.definesClass(className).nonEmpty
+        invalidated <- List(change.packageObject, className)
+      yield invalidated
+    if clashes.nonEmpty then
+      invalidationLog.debug(
+        InvalidationLog.section("Package object clashes", Seq("invalidated classes" -> clashes))
+      )
+    clashes.toSet
+  end invalidateByPackageObjectClashes
+
+  private case class PackageObjectChange(
+      packageObject: String,
+      pkg: String,
+      added: Set[String],
+      implicitsChanged: Boolean
+  )
+
+  /**
+   * The package objects compiled in this cycle whose names hashes differ from the analysis before
+   * the incremental run, not the previous cycle: a package object that inherits a member gains it
+   * in the cycle after its parent changed. A new package object adds all its names.
+   */
+  private def packageObjectChanges(
+      compiledClasses: Set[String],
+      runStart: Analysis,
+      current: Analysis
+  ): List[PackageObjectChange] =
+    def nameHashes(analysis: Analysis, className: String): Set[NameHash] =
+      if analysis.relations.definesClass(className).isEmpty then Set.empty
+      else analysis.apis.internalAPI(className).nameHashes.toSet
+    compiledClasses.toList.flatMap { packageObject =>
+      IncrementalCommon.packageOfPackageObject(packageObject).flatMap { pkg =>
+        val before = nameHashes(runStart, packageObject)
+        val after = nameHashes(current, packageObject)
+        val added = (after -- before).map(_.name).filterNot(IncrementalCommon.isNotInPackageScope)
+        val implicitsChanged = ((after -- before) ++ (before -- after)).exists(_.scope ==
+          UseScope.Implicit)
+        Option.when(added.nonEmpty || implicitsChanged)(
+          PackageObjectChange(packageObject, pkg, added, implicitsChanged)
+        )
+      }
+    }
+  end packageObjectChanges
+
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
   def invalidateInitial(
       previous: Relations,
@@ -873,6 +991,47 @@ private[inc] abstract class IncrementalCommon(
 end IncrementalCommon
 
 object IncrementalCommon:
+
+  /**
+   * A name that a package object's API has but does not put in its package's scope: a member of
+   * `Any` or `AnyRef`, a constructor, a trait initialiser, or the name of the class itself.
+   */
+  def isNotInPackageScope(name: String): Boolean =
+    universalMemberNames(name) || name.contains(';') || name == "$init$" ||
+      name.endsWith("$package")
+
+  private val universalMemberNames: Set[String] = Set(
+    "==",
+    "!=",
+    "##",
+    "eq",
+    "ne",
+    "equals",
+    "hashCode",
+    "toString",
+    "getClass",
+    "clone",
+    "finalize",
+    "notify",
+    "notifyAll",
+    "wait",
+    "synchronized",
+    "asInstanceOf",
+    "isInstanceOf",
+    "$asInstanceOf",
+    "$isInstanceOf",
+  )
+
+  /**
+   * The package whose scope a package object's members are in: `a.b` for the Scala 2 or 3
+   * package object `a.b.package` and for Scala 3's top-level definitions `a.b.F$package`.
+   */
+  def packageOfPackageObject(className: String): Option[String] =
+    if className == "package" then Some("")
+    else if className.endsWith(".package") then Some(className.stripSuffix(".package"))
+    else if className.endsWith("$package") then
+      Some(className.substring(0, math.max(className.lastIndexOf('.'), 0)))
+    else None
 
   /** Tell if given class names comes from a Scala source file or not by inspecting relations. */
   def comesFromScalaSource(
