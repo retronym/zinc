@@ -256,8 +256,8 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case ValDef(mods, _, tpt, _) if mods.isCase && mods.isSynthetic =>
         updateCurrentOwner()
         PatMatDependencyTraverser.traverse(tpt.tpe)
-      case _: DefTree | _: Template                   => ()
-      case Import(_, selectors: List[ImportSelector]) =>
+      case _: DefTree | _: Template                      => ()
+      case Import(expr, selectors: List[ImportSelector]) =>
         val names = getNamesOfEnclosingScope
         def usedNameInImportSelector(name: Name): Unit = {
           if (!isEmptyName(name) && (name != nme.WILDCARD) && !names.contains(name)) {
@@ -266,6 +266,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
           }
         }
         selectors foreach { selector =>
+          if (selector.name == nme.WILDCARD) addPackageWildcardImport(names, expr.symbol)
           usedNameInImportSelector(selector.name)
           usedNameInImportSelector(selector.rename)
         }
@@ -296,6 +297,22 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
       case l: Literal =>
         processOriginalTreeAttachment(l)(traverse)
       case _ =>
+    }
+
+    /**
+     * Records a wildcard import of a package as the reserved name `<pkg>._`, e.g. `a.b._` for
+     * `import a.b._`. A definition added to the package later can change what the importing class
+     * resolves, and a package has no API or class dependency to record instead. Scala 3's bridge
+     * records the same name.
+     */
+    private def addPackageWildcardImport(names: JavaSet[Name], pkg: Symbol): Unit = {
+      if (
+        pkg != null && pkg.hasPackageFlag && !pkg.isRootPackage && !pkg.isEmptyPackage &&
+        !pkg.isEffectiveRoot
+      ) {
+        names.add(newTermName(pkg.fullName + "._"))
+        ()
+      }
     }
 
     private var _currentOwner: Symbol = _
