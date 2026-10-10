@@ -681,7 +681,7 @@ private[inc] abstract class IncrementalCommon(
     if changes.isEmpty then Set.empty
     else
       val scope = new PackageScope(current.relations)
-      val byName = changes.flatMap(c => scope.usersOf(c.pkg, c.added)).toSet
+      val byName = changes.flatMap(c => scope.memberUsersOf(c.pkg, c.added)).toSet
       val byImplicits =
         changes.filter(_.implicitsChanged).flatMap(c => scope.implicitSeers(c.pkg)).toSet
       invalidationLog.debug(
@@ -794,11 +794,13 @@ private[inc] abstract class IncrementalCommon(
    * records the reserved used name `p._`, which the bridges record for a wildcard import of `p` and
    * for the outer clause of a chained package clause (`package p; package q`). A top-level import
    * is charged to one class of the source, so the whole source counts. A Java class records
-   * neither, so it is taken to see every package.
+   * neither, so it is taken to see the classes of every package, though not the members of a
+   * package object, nor implicits.
    *
    * An implicit of a package object is also in the implicit scope of a type whose prefix is the
-   * package, in Scala 2 (not in Scala 3). A class can only search such a type if it refers to a
-   * class of the package or a nested one, so [[implicitSeers]] adds those classes.
+   * package or a nested one, in Scala 2 (not in Scala 3, nor with `-Xsource:3`). A class can only
+   * search such a type if it refers to a class of the package or a nested one, so
+   * [[implicitSeers]] adds those classes.
    *
    * With `packageScope=global` every class sees every package, for a build whose bridge does not
    * record the reserved names.
@@ -834,11 +836,11 @@ private[inc] abstract class IncrementalCommon(
         top == rest || relations.definesClass(if pkg.isEmpty then top else s"$pkg.$top").nonEmpty
       }
 
-    def sees(pkg: String)(className: String): Boolean =
-      global || isIn(pkg)(className) || importers.get(pkg).exists(_(className)) ||
-        isJava(className)
+    private def seesMembers(pkg: String)(className: String): Boolean =
+      global || isIn(pkg)(className) || importers.get(pkg).exists(_(className))
 
-    def seers(pkg: String): Set[String] = relations.classes._2s.filter(sees(pkg)).toSet
+    def sees(pkg: String)(className: String): Boolean =
+      seesMembers(pkg)(className) || isJava(className)
 
     def implicitSeers(pkg: String): Set[String] =
       def under(target: String) = pkg.isEmpty || target.startsWith(pkg + ".")
@@ -846,13 +848,19 @@ private[inc] abstract class IncrementalCommon(
         relations.memberRef.internal.forward(className).exists(under) ||
         relations.inheritance.internal.forward(className).exists(under)
       }
-      seers(pkg) ++ referrers
+      relations.classes._2s.filter(seesMembers(pkg)).toSet ++ referrers
     end implicitSeers
 
-    def usersOf(pkg: String, names: Set[String]): Set[String] =
+    /** The classes that use one of `names` and see the classes of `pkg`. */
+    def usersOf(pkg: String, names: Set[String]): Set[String] = users(names, sees(pkg))
+
+    /** The classes that use one of `names` and see the package object members of `pkg`. */
+    def memberUsersOf(pkg: String, names: Set[String]): Set[String] =
+      users(names, seesMembers(pkg))
+
+    private def users(names: Set[String], sees: String => Boolean): Set[String] =
       usedNames.iterator.collect {
-        case (className, used) if used.exists(u => names(u.name)) && sees(pkg)(className) =>
-          className
+        case (className, used) if used.exists(u => names(u.name)) && sees(className) => className
       }.toSet
   end PackageScope
 
