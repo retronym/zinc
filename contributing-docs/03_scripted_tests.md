@@ -49,6 +49,8 @@ project without `scalaVersion` as `2.12.x`. `> checkBridge scala2-sbt-bridge` (o
 `scala3-sbt-bridge`) asserts which bridge that is, from the package of `CompilerBridge` in the
 bridge jar; the `general/bridge-*` tests do this for each label.
 
+To run tests against a locally built Scala 3 (for example a modified `ExtractAPI`), publish it into a private Ivy repository and start sbt with `-Dzinc.scala3ForBridge=<version> -Dzinc.scala3Repo=<repo>/local`; the `3.x` label then uses that compiler and its bridge. `ZINC_SCRIPTED_DEFAULT_LABEL=3.x` in sbt's environment makes projects without a `scalaVersion` use `3.x` instead of `2.12.x`, which runs the existing tests under Scala 3.
+
 The `test` script is one step per line:
 
 - `> compile` runs a task on the root project, `> use/compile` on the `use` project.
