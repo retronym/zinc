@@ -18,6 +18,9 @@ import xsbti.compile.IncOptions
 import xsbti.api.{ AnalyzedClass, DefinitionType }
 import xsbt.api.SameAPI
 
+import scala.collection.mutable
+import scala.util.Try
+
 /**
  * Implement the name hashing heuristics to invalidate classes.
  *
@@ -35,7 +38,36 @@ private[inc] class IncrementalNameHashingCommon(
 ) extends IncrementalCommon(log, options, profiler) {
   import IncrementalCommon.transitiveDeps
 
-  private val memberRefInvalidator = new MemberRefInvalidator(log, options.logRecompileOnMacro())
+  private val memberRefInvalidator =
+    new MemberRefInvalidator(log, invalidationLog, options.logRecompileOnMacro())
+
+  private val descendantRules = DescendantRules.fromOptions(options)
+
+  /**
+   * The APIs a [[DescendantRule]] reads: this subproject's current ones, then those of upstream
+   * classes as last recorded. Members inherited from upstream subprojects are no longer
+   * materialised, so an upstream ancestor's declarations are only visible here.
+   */
+  private var currentAPI: String => Option[AnalyzedClass] = (_: String) => None
+  private val ancestorChanges = mutable.HashMap.empty[String, AncestorChange]
+
+  override def detectAPIChanges(
+      recompiledClasses: collection.Set[String],
+      oldAPI: String => AnalyzedClass,
+      newAPI: String => AnalyzedClass
+  ): APIChanges = {
+    currentAPI = name => {
+      Try(newAPI(name)).toOption
+        .filter(_ ne APIs.emptyAnalyzedClass)
+        .orElse(previousAPIs.external.get(name))
+    }
+    ancestorChanges.clear()
+    super.detectAPIChanges(recompiledClasses, oldAPI, newAPI)
+  }
+
+  override protected def libraryDescendants(relations: Relations): Set[String] =
+    if (!LibraryAncestors.invalidates(options)) Set.empty
+    else LibraryAncestors.descendants(changedLibraryClasses, previousAPIs)
 
   /** @inheritdoc */
   protected def invalidatedPackageObjects(
@@ -50,11 +82,18 @@ private[inc] class IncrementalNameHashingCommon(
       cls1 <- relations.classNames(file)
     } yield cls1
 
-    debug("Invalidate package objects by inheritance only...")
     val invalidatedPackageObjects =
-      transitiveDeps(invalidatedClassesAndCodefinedClasses.toSet, log)(findSubclasses)
+      transitiveDeps(invalidatedClassesAndCodefinedClasses.toSet, invalidationLog.detailLogger)(
+        findSubclasses
+      )
         .filter(_.endsWith(".package"))
-    debug(s"Package object invalidations: ${invalidatedPackageObjects.mkString(", ")}")
+    debug(
+      InvalidationLog.section(
+        "Package-object invalidations",
+        Seq("classes" -> invalidatedPackageObjects),
+        Some("no classes")
+      )
+    )
     invalidatedPackageObjects
   }
 
@@ -64,7 +103,8 @@ private[inc] class IncrementalNameHashingCommon(
       a: AnalyzedClass,
       b: AnalyzedClass
   ): Option[APIChange] = {
-    if (SameAPI(a, b)) {
+    val headerChanged = AncestorChange(className, a, b, ModifiedNames(Set.empty)).headerChanged
+    if (SameAPI(a, b) && !headerChanged) {
       if (SameAPI.hasSameExtraHash(a, b)) None
       else {
         val isATrait = a.api().classApi().definitionType() == DefinitionType.Trait
@@ -85,6 +125,7 @@ private[inc] class IncrementalNameHashingCommon(
       val aNameHashes = a.nameHashes
       val bNameHashes = b.nameHashes
       val modifiedNames = ModifiedNames.compareTwoNameHashes(aNameHashes, bNameHashes)
+      ancestorChanges(className) = AncestorChange(className, a, b, modifiedNames)
       val apiChange = NamesChange(className, modifiedNames)
       Some(apiChange)
     }
@@ -97,54 +138,115 @@ private[inc] class IncrementalNameHashingCommon(
       isScalaClass: String => Boolean
   ): Set[String] = {
     val modifiedBinaryClassName = externalAPIChange.modifiedClass
-    log.debug(memberRefInvalidator.invalidationReason(externalAPIChange))
-    log.debug("All member reference dependencies will be considered within this context.")
+    invalidationLog.detail(memberRefInvalidator.invalidationReason(externalAPIChange))
+    invalidationLog.detail(
+      "All member reference dependencies will be considered within this context."
+    )
     val memberRefInv = memberRefInvalidator.get(_, relations.names, externalAPIChange, isScalaClass)
 
     // Propagate inheritance dependencies transitively.
     // This differs from normal because we need the initial crossing from externals to classes in this project.
     val byExternalInheritance = relations.inheritance.external.reverse(modifiedBinaryClassName)
-    log.debug(
-      s"Files invalidated by inheriting from (external) $modifiedBinaryClassName: $byExternalInheritance"
+    invalidationLog.detail(
+      InvalidationLog.section(
+        s"Direct inheritance from external class $modifiedBinaryClassName",
+        Seq("invalidated classes" -> byExternalInheritance),
+        Some("no classes")
+      )
     )
-    log.debug("Now invalidating by inheritance (internally).")
-    val transitiveInheritance = byExternalInheritance.flatMap(invalidateByInheritance(relations, _))
+    invalidationLog.detail("Now invalidating by inheritance (internally).")
+    val descendants = byExternalInheritance.flatMap(invalidateByInheritance(relations, _))
+    val ancestorChange = ancestorChanges.get(modifiedBinaryClassName)
+    val transitiveInheritance =
+      filterExternalDescendants(
+        relations,
+        modifiedBinaryClassName,
+        ancestorChange,
+        descendants,
+        isScalaClass
+      )
 
-    val localInheritance = relations.localInheritance.external.reverse(modifiedBinaryClassName)
+    val localInheritance = relations.localInheritance.external.reverse(modifiedBinaryClassName) ++
+      descendants.flatMap(invalidateByLocalInheritance(relations, _))
 
     // Get the member reference dependencies of all classes transitively invalidated by inheritance
-    log.debug("Getting direct dependencies of all classes transitively invalidated by inheritance.")
-    val memberRefA = transitiveInheritance.flatMap(memberRefInv(relations.memberRef.internal))
+    invalidationLog.detail(
+      "Getting direct dependencies of all classes transitively invalidated by inheritance."
+    )
+    val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
+    val memberRefA =
+      if (ancestorChange.exists(_.headerChanged))
+        byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
+      else byName
 
     // Get the classes that depend on externals by member reference.
     // This includes non-inheritance dependencies and is not transitive.
-    log.debug(s"Getting classes that directly depend on (external) $modifiedBinaryClassName.")
-    val memberRefB = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
+    invalidationLog.detail(
+      s"Getting classes that directly depend on (external) $modifiedBinaryClassName."
+    )
+    val memberRefB = {
+      val byName = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
+      if (ancestorChange.exists(_.headerChanged))
+        byName ++ relations.memberRef.external.reverse(modifiedBinaryClassName)
+      else byName
+    }
 
-    val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName)
+    val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName) ++
+      descendants.flatMap(invalidateByMacroExpansion(relations, _))
 
-    transitiveInheritance ++ localInheritance ++ memberRefA ++ memberRefB ++ macroExpansion
+    val invalidated =
+      transitiveInheritance ++ localInheritance ++ memberRefA ++ memberRefB ++ macroExpansion
+    invalidationLog.debug(
+      InvalidationLog.section(
+        s"External API change: ${InvalidationLog.formatApiChange(externalAPIChange)}",
+        Seq(
+          "transitive inheritance" -> transitiveInheritance,
+          "local inheritance" -> localInheritance,
+          "member reference" -> (memberRefA ++ memberRefB),
+          "macro expansion" -> macroExpansion,
+        ),
+        Some("no classes invalidated")
+      )
+    )
+    invalidated
   }
 
   private def invalidateByInheritance(relations: Relations, modified: String): Set[String] = {
     val inheritanceDeps = relations.inheritance.internal.reverse _
-    log.debug(s"Invalidating (transitively) by inheritance from $modified...")
-    val transitiveInheritance = transitiveDeps(Set(modified), log)(inheritanceDeps)
-    log.debug("Invalidated by transitive inheritance dependency: " + transitiveInheritance)
+    invalidationLog.detail(s"Invalidating transitively by inheritance from $modified.")
+    val transitiveInheritance =
+      transitiveDeps(Set(modified), invalidationLog.detailLogger)(inheritanceDeps)
+    invalidationLog.detail(
+      InvalidationLog.section(
+        s"Inheritance invalidation from $modified",
+        Seq("invalidated classes" -> transitiveInheritance),
+        Some("no classes")
+      )
+    )
     transitiveInheritance
   }
 
   private def invalidateByLocalInheritance(relations: Relations, modified: String): Set[String] = {
     val localInheritanceDeps = relations.localInheritance.internal.reverse(modified)
     if (localInheritanceDeps.nonEmpty)
-      log.debug(s"Invalidate by local inheritance: $modified -> $localInheritanceDeps")
+      invalidationLog.detail(
+        InvalidationLog.section(
+          s"Local-inheritance invalidation from $modified",
+          Seq("invalidated classes" -> localInheritanceDeps)
+        )
+      )
     localInheritanceDeps
   }
 
   private def invalidateByMacroExpansion(relations: Relations, modified: String): Set[String] = {
     val macroExpansionDeps = relations.macroExpansion.internal.reverse(modified)
     if (macroExpansionDeps.nonEmpty)
-      log.debug(s"Invalidate by macro expansion: $modified -> $macroExpansionDeps")
+      invalidationLog.detail(
+        InvalidationLog.section(
+          s"Macro-expansion invalidation from $modified",
+          Seq("invalidated classes" -> macroExpansionDeps)
+        )
+      )
     macroExpansionDeps
   }
 
@@ -157,38 +259,95 @@ private[inc] class IncrementalNameHashingCommon(
     val modifiedClass = change.modifiedClass
     val memberRefInv = memberRefInvalidator.get(_, relations.names, change, isScalaClass)
 
-    val transitiveInheritance = invalidateByInheritance(relations, modifiedClass)
+    val descendants = invalidateByInheritance(relations, modifiedClass)
+    val ancestorChange = ancestorChanges.get(modifiedClass)
+    val transitiveInheritance =
+      filterDescendants(relations, modifiedClass, ancestorChange, descendants, isScalaClass)
     val reason1 = s"The invalidated class names inherit directly or transitively on $modifiedClass."
     profiler.registerEvent(InheritanceKind, List(modifiedClass), transitiveInheritance, reason1)
 
-    val localInheritance = transitiveInheritance.flatMap(invalidateByLocalInheritance(relations, _))
+    val localInheritance = descendants.flatMap(invalidateByLocalInheritance(relations, _))
     val reason2 =
       s"The invalidated class names inherit (via local inheritance) directly or transitively on $modifiedClass."
-    profiler.registerEvent(LocalInheritanceKind, transitiveInheritance, localInheritance, reason2)
+    profiler.registerEvent(LocalInheritanceKind, descendants, localInheritance, reason2)
 
-    val memberRef = transitiveInheritance.flatMap(memberRefInv(relations.memberRef.internal))
+    val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
+    val memberRef =
+      if (ancestorChange.exists(_.headerChanged))
+        byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
+      else byName
     val reason3 = s"The invalidated class names refer directly or transitively to $modifiedClass."
     profiler.registerEvent(MemberReferenceKind, transitiveInheritance, memberRef, reason3)
 
-    val macroExpansion = invalidateByMacroExpansion(relations, modifiedClass)
+    val macroExpansion = descendants.flatMap(invalidateByMacroExpansion(relations, _))
     val reason4 = s"The invalidated class is touched by macro expansion in ${modifiedClass}"
-    profiler.registerEvent(MacroExpansionKind, List(modifiedClass), macroExpansion, reason4)
+    profiler.registerEvent(MacroExpansionKind, descendants, macroExpansion, reason4)
 
     val all = transitiveInheritance ++ localInheritance ++ memberRef ++ macroExpansion
-    log.debug {
-      if (all.isEmpty) s"Change $change does not affect any class."
-      else {
-        val reason = memberRefInvalidator.invalidationReason(change)
-        def ppxs(s: String, xs: Set[String]) = if (xs.isEmpty) "" else s"$s: $xs"
-        s"""Change $change invalidates ${all.size} classes due to $reason
-           |  > ${ppxs("by transitive inheritance", transitiveInheritance)}
-           |  > ${ppxs("by local inheritance", localInheritance)}
-           |  > ${ppxs("by member reference", memberRef)}
-           |  > ${ppxs("by macro expansion", macroExpansion)}
-        """.stripMargin
-      }
-    }
+    invalidationLog.debug(
+      InvalidationLog.section(
+        s"API change: ${InvalidationLog.formatApiChange(change)}",
+        Seq(
+          "transitive inheritance" -> transitiveInheritance,
+          "local inheritance" -> localInheritance,
+          "member reference" -> memberRef,
+          "macro expansion" -> macroExpansion,
+        ),
+        Some("no classes invalidated")
+      )
+    )
     all
+  }
+
+  /**
+   * The descendants of `modifiedClass` that must recompile. Without Merkle hashing every
+   * descendant had to, to refresh its materialised members; now only those whose own
+   * compilation reads the change do, as decided by the [[DescendantRule]]s.
+   */
+  private def filterDescendants(
+      relations: Relations,
+      modifiedClass: String,
+      change: Option[AncestorChange],
+      descendants: Set[String],
+      isScalaClass: String => Boolean,
+      api: String => Option[AnalyzedClass] = currentAPI,
+      external: Boolean = false
+  ): Set[String] =
+    (descendantRules, change) match {
+      case (Some(rules), Some(change)) if external || isScalaClass(modifiedClass) =>
+        val view = new HierarchyView(relations, api)
+        descendants.filter { d =>
+          d == modifiedClass || !isScalaClass(d) || {
+            val reasons = rules.flatMap(r => r(view, d, change).map(why => s"${r.name}: $why"))
+            if (reasons.isEmpty)
+              invalidationLog.debug(s"Descendant $d of $modifiedClass does not read the change.")
+            else
+              invalidationLog.debug(
+                s"Descendant $d of $modifiedClass recompiles (${reasons.mkString("; ")})."
+              )
+            reasons.nonEmpty
+          }
+        }
+      case _ => descendants
+    }
+
+  /**
+   * [[filterDescendants]] for an upstream class: the descendants are this subproject's classes,
+   * read from the previous analysis, and their ancestors may be in upstream subprojects.
+   */
+  private def filterExternalDescendants(
+      relations: Relations,
+      modifiedClass: String,
+      change: Option[AncestorChange],
+      descendants: Set[String],
+      isScalaClass: String => Boolean
+  ): Set[String] = {
+    val api = (name: String) => {
+      previousAPIs.internal.get(
+        name
+      ).orElse(currentAPI(name)).orElse(previousAPIs.external.get(name))
+    }
+    filterDescendants(relations, modifiedClass, change, descendants, isScalaClass, api, true)
   }
 
   /** @inheritdoc */

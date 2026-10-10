@@ -1,0 +1,9 @@
+> app/run Int
+
+$ delete lib/A.scala
+$ copy-file changes/A0.scala app/A.scala
+> app/run Int
+
+# the macro client names only B, which sees A as an internal ancestor now
+$ copy-file changes/A1.scala app/A.scala
+> app/run String

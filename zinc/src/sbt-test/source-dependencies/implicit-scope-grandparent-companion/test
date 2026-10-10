@@ -1,0 +1,7 @@
+> app/run A
+
+# B gains a companion with an implicit Show for its subclasses. B is a base class of C, so its
+# companion is in the implicit scope of Show of C, and B's implicit wins over A's (B derives from
+# A): X must now pick it, though it names neither B nor its companion.
+$ copy-file lib/changes/B.scala lib/B.scala
+> app/run B

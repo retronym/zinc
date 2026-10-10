@@ -1,0 +1,7 @@
+> compile
+
+# V's underlying type changes but its erasure, List, does not, so neither does any descriptor
+# mentioning V. A names V and recompiles; B only inherits m and must not.
+$ copy-file changes/V.scala V.scala
+> compile
+> checkRecompilations 0 p.B

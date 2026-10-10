@@ -2,7 +2,9 @@ package sbt
 package internal
 package inc
 
+import java.nio.file.Files
 import xsbti.api._
+import sbt.io.IO
 import xsbt.api.{ SameAPI, ShowAPI }
 
 class ExtractAPISpecification
@@ -115,16 +117,16 @@ class ExtractAPISpecification
   }
 
   /**
-   * Checks if representation of the inherited Namer class (with a declared self variable) in Global.Foo
-   * is stable between compiling from source and unpickling. We compare extracted APIs of Global when Global
-   * is compiled together with Namers or Namers is compiled first and then Global refers
-   * to Namers by unpickling types from class files.
+   * Checks if representation of the inherited Namer class (with a declared self variable)
+   * is stable between compiling from source and unpickling.
+   *
+   * Members inherited from classes of this compilation's output are not materialised (Zinc
+   * composes their hashes from the ancestor's own API), so `Global.Foo` must not depend on
+   * whether `Namers` was compiled together with it or unpickled from the output directory.
+   * Members inherited from a library are still materialised, from unpickled symbols, so there
+   * the inherited `Namer` must have the same empty self type as when it is extracted from source.
    */
   it should "make a stable representation of a self variable that has no self type" in {
-    def selectNamer(apis: Set[ClassLike]): ClassLike = {
-      // TODO: this doesn't work yet because inherited classes are not extracted
-      apis.find(_.name == "Global.Foo.Namer").get
-    }
     val src1 =
       """|class Namers {
         |  class Namer { thisNamer => }
@@ -135,24 +137,55 @@ class ExtractAPISpecification
         |  class Foo extends Namers
         |}
         |""".stripMargin
-    val apis =
-      extractApisFromSrcs(List(src1, src2), List(src2))
-    val _ :: src2Api1 :: src2Api2 :: Nil = apis.toList
-    val namerApi1 = selectNamer(src2Api1)
-    val namerApi2 = selectNamer(src2Api2)
-    assert(SameAPI(namerApi1, namerApi2))
+    def select(apis: Set[ClassLike], name: String): ClassLike = apis.find(_.name == name).get
+    def memberNames(c: ClassLike): Set[String] =
+      (c.structure.declared ++ c.structure.inherited).map(_.name).toSet
+
+    val src1Api :: src2Api1 :: src2Api2 :: Nil =
+      extractApisFromSrcs(List(src1, src2), List(src2)).toList: @unchecked
+    val foo1 = select(src2Api1, "Global.Foo")
+    val foo2 = select(src2Api2, "Global.Foo")
+    assert(!memberNames(foo1).contains("Global.Foo.Namer"))
+    assert(SameAPI(foo1, foo2))
+    assert(src2Api1.map(_.name) === Set("Global", "Global.Foo"))
+    assert(select(src1Api, "Namers.Namer").selfType.isInstanceOf[EmptyType])
+
+    IO.withTemporaryDirectory { tempDir =>
+      val mainDir = tempDir.toPath
+      val libDir = mainDir.resolve("lib")
+      Files.createDirectories(libDir)
+      compileSrcs(libDir, src1)
+      val (Seq(src2File), callback) =
+        compileSrcs(mainDir, extraClasspath = List(libDir.resolve("target")))(
+          List(List(src2))
+        ): @unchecked
+      val libApis = callback.apis(src2File)
+      val namer = select(libApis, "Global.Foo.Namer")
+      assert(namer.selfType.isInstanceOf[EmptyType])
+      assert(memberNames(select(libApis, "Global.Foo")).contains("Global.Foo.Namer"))
+    }
   }
 
+  /**
+   * An inherited class is seen through the parent type it is inherited from: `B`'s `AA` has
+   * `def t: Int`, unlike `A.AA`. Zinc no longer extracts it as a class of its own (`B.AA`):
+   * `AA` is declared in `A`, which Zinc analyses, so it hashes `B`'s `AA` by composing `A`'s
+   * hash for `AA` with `B`'s linearized parents as seen from `B`. So `B`'s API must record
+   * the instantiated parent, and change when it does.
+   */
   it should "make a different representation for an inherited class" in {
-    val src =
-      """|class A[T] {
-         |  abstract class AA { def t: T }
-         |}
-         |class B extends A[Int]
+    def src(targ: String) =
+      s"""|class A[T] {
+          |  abstract class AA { def t: T }
+          |}
+          |class B extends A[$targ]
       """.stripMargin
-    val apis = extractApisFromSrc(src).map(a => a.name -> a).toMap
-    assert(apis.keySet === Set("A", "A.AA", "B", "B.AA"))
-    assert(apis("A.AA") !== apis("B.AA"))
+    val apis = extractApisFromSrc(src("Int")).map(a => a.name -> a).toMap
+    assert(apis.keySet === Set("A", "A.AA", "B"))
+    val apis2 = extractApisFromSrc(src("String")).map(a => a.name -> a).toMap
+    assert(SameAPI(apis("A"), apis2("A")))
+    assert(SameAPI(apis("A.AA"), apis2("A.AA")))
+    assert(!SameAPI(apis("B"), apis2("B")))
   }
 
   it should "handle package objects and type companions" in {

@@ -18,6 +18,7 @@ import java.nio.file.{ Files, Path, Paths, StandardCopyOption }
 import java.net.URLClassLoader
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import sbt.util.Logger
 import sbt.util.InterfaceUtil._
@@ -248,6 +249,9 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkBridge") {
       case (p, expected :: Nil, i) => p.checkBridge(i, expected)
     },
+    onArgs("checkInvalidationLog") {
+      case (p, expectedLog :: Nil, _) => p.checkInvalidationLog(expectedLog)
+    },
     onArgs("checkNumberOfLibraries") {
       case (p, x :: Nil, i) => p.checkNumberOfLibraries(i, x.toInt)
     },
@@ -262,6 +266,12 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     },
     onArgs("checkClasses") {
       case (p, src :: products, i) => p.checkClasses(i, dropRightColon(src), products)
+    },
+    onArgs("checkAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
+    },
+    onArgs("checkNotAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkNotAnnotated(i, cls, annotation)
     },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
@@ -361,11 +371,26 @@ case class ProjectStructure(
   val cachedStore = AnalysisStore.cached(fileStore)
   val earlyCacheFile = baseDirectory / "target" / "early" / "inc_compile.zip"
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
+  private val invalidationLines = new ConcurrentLinkedQueue[String]()
+  private val compilerLog = new Logger {
+    override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
+    override def success(message: => String): Unit = scriptedLog.success(message)
+    override def log(level: sbt.util.Level.Value, message: => String): Unit = {
+      val rendered = message
+      rendered.linesIterator.filter(_.startsWith("[inv] ")).foreach(invalidationLines.add)
+      scriptedLog.log(level, rendered)
+    }
+  }
   // val earlyCachedStore = AnalysisStore.cached(fileStore)
   val profiler = new ZincInvalidationProfiler
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
   val (incOptions, scalacOptions) = {
     val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
@@ -437,6 +462,27 @@ case class ProjectStructure(
       ()
     }
 
+  def checkInvalidationLog(expectedLog: String): Future[Unit] = Future {
+    import scala.collection.JavaConverters._
+    val expected = Files
+      .readAllLines(baseDirectory.resolve(expectedLog))
+      .asScala
+      .iterator
+      .filter(_.nonEmpty)
+      .toVector
+    val actual = invalidationLines.iterator.asScala.toVector
+    expected.foldLeft(actual) { (remaining, expectedLine) =>
+      remaining.dropWhile(_ != expectedLine) match {
+        case _ +: tail => tail
+        case _ =>
+          throw new AssertionError(
+            s"Expected invalidation-log line '$expectedLine' in order.\nActual log:\n${actual.mkString("\n")}"
+          )
+      }
+    }
+    ()
+  }
+
   def checkRecompilations(i: IncState, step: Int, expected: List[String]): Future[Unit] =
     compile(i).map { analysis =>
       val allCompilations = analysis.compilations.allCompilations
@@ -477,6 +523,26 @@ case class ProjectStructure(
         assert(expected == actual, msg)
       }
       assertClasses(expected.toSet, classes(src))
+      ()
+    }
+
+  /** Test discovery, as sbt does it: does `cls` have a public method annotated `annotation`? */
+  def checkAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.nonEmpty, s"$cls has no method annotated $annotation")
+      ()
+    }
+
+  /** Test discovery, as sbt does it: does no public method of `cls` look annotated `annotation`? */
+  def checkNotAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.isEmpty, s"$cls has a method annotated $annotation")
       ()
     }
 
@@ -767,7 +833,7 @@ case class ProjectStructure(
       if (exportPipelining) Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       CompileOrder.Mixed,
@@ -779,8 +845,8 @@ case class ProjectStructure(
       stamper
     )
     val result =
-      if (javaOnly) incrementalCompiler.compileAllJava(in, scriptedLog)
-      else incrementalCompiler.compile(in, scriptedLog)
+      if (javaOnly) incrementalCompiler.compileAllJava(in, compilerLog)
+      else incrementalCompiler.compile(in, compilerLog)
     val analysis = result.analysis match { case a: Analysis => a }
     cachedStore.set(AnalysisContents.create(analysis, result.setup))
     val javaOnlyStr = if (javaOnly) "(java-only) " else ""
@@ -873,11 +939,15 @@ case class ProjectStructure(
       Optional.empty[XClassFileManager]
     )
       .withInvalidationProfiler(profiler)
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if (scalaVersion.startsWith("3"))
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions = {
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)

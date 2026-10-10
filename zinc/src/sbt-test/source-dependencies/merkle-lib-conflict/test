@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/P.scala P.scala
+# P.isEmpty conflicts with the isEmpty D inherits from the library trait Seq
+-> compile

@@ -204,7 +204,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
   def compileSrcs(
       baseDir: Path,
       reporter: Reporter = mkReporter,
-      scalaVersion0: String = scalaVersion
+      scalaVersion0: String = scalaVersion,
+      extraClasspath: Seq[Path] = Nil
   )(groupedSrcs: List[List[String]]): (Seq[VirtualFile], TestCallback) = {
     val rootPaths: Map[String, Path] = Map(
       "BASE" -> baseDir,
@@ -225,7 +226,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
       }
       val sources = srcFiles.toArray[VirtualFile]
       val (si, sc) = mkScalaCompiler(baseDir, scalaVersion0)
-      val cp = ((si.allJars).map(_.toPath) ++ Array(targetDir)).map(converter.toVirtualFile)
+      val cp = ((si.allJars).map(_.toPath) ++ extraClasspath ++ Array(targetDir))
+        .map(converter.toVirtualFile)
       sc.compile(
         sources = sources,
         classpath = cp,
