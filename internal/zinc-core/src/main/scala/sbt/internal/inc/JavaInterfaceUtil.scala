@@ -21,9 +21,9 @@ object JavaInterfaceUtil:
     def toScalaTuple: (T, U) = sbtTuple.get1() -> sbtTuple.get2()
 
   @deprecated("use scala.jdk.OptionConverters instead", "2.0.0-M17")
-  private[sbt] class EnrichOptional[T](optional: Optional[T]):
+  private[sbt] implicit class EnrichOptional[T](optional: Optional[T]):
     def toOption: Option[T] = InterfaceUtil.toOption(optional)
 
   @deprecated("use scala.jdk.OptionConverters instead", "2.0.0-M17")
-  private[sbt] class EnrichOption[T](option: Option[T]):
+  private[sbt] implicit class EnrichOption[T](option: Option[T]):
     def toOptional: Optional[T] = InterfaceUtil.toOptional(option)
