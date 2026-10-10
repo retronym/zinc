@@ -218,7 +218,8 @@ private[inc] abstract class IncrementalCommon(
                 cycleNum >= options.transitiveStep,
                 IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
               ) ++
-                (invalidateByAddedClasses(compiledClasses, previous, analysis) --
+                ((invalidateByAddedClasses(compiledClasses, previous, analysis) ++
+                  invalidateByPackageScope(analysis.relations, external = false)) --
                   recompiledClasses -- compiledClasses)
             }
 
@@ -340,6 +341,14 @@ private[inc] abstract class IncrementalCommon(
    */
   /** The classes to recompile because a library ancestor changed. See [[LibraryAncestors]]. */
   protected def libraryDescendants(relations: Relations): Set[String] = Set.empty
+
+  /**
+   * The classes that a change to a package's members reaches without an edge to its package
+   * object, for the API changes last detected: those of upstream classes, or of this subproject's
+   * classes in the last cycle. See [[PackageScope]].
+   */
+  protected def invalidateByPackageScope(relations: Relations, external: Boolean): Set[String] =
+    Set.empty
 
   /** The classes of the libraries that changed since the previous compile, set before it. */
   private[inc] var changedLibraryClasses: Set[String] = Set.empty
@@ -655,7 +664,11 @@ private[inc] abstract class IncrementalCommon(
       }.toSet
 
     val byLibraryAncestor = libraryDescendants(previous)
-    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor
+    val byPackageScope =
+      if changes.external.apiChanges.isEmpty then Set.empty[String]
+      else invalidateByPackageScope(previous, external = true)
+    val allInvalidatedClasses =
+      invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor ++ byPackageScope
     val allInvalidatedSourcefiles = addedSrcs ++ modifiedSrcs ++ byProduct ++ byLibraryDep
 
     if previous.allSources.isEmpty then
@@ -682,6 +695,7 @@ private[inc] abstract class IncrementalCommon(
             "sources invalidated by binary dependencies" -> byLibraryDep.map(_.id),
             "classes invalidated by external sources" -> byExtSrcDep,
             "classes with a changed library ancestor" -> byLibraryAncestor,
+            "classes invalidated by a package's external members" -> byPackageScope,
           )
         )
       )

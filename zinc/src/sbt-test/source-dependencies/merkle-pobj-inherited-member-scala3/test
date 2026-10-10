@@ -1,0 +1,6 @@
+# Client, in `package a; package b`, resolves Foo to a.Foo (another file).
+> p/compile
+# Base gains Foo, which `package object b` inherits: it shadows a.Foo, and its v is a String, so a clean build fails.
+# The package object's stored API lists its declarations only, and it need not recompile.
+$ copy-file changes/Base.scala p/Base.scala
+-> p/compile

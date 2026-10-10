@@ -67,6 +67,32 @@ private[inc] class IncrementalNameHashingCommon(
     if !LibraryAncestors.invalidates(options) then Set.empty
     else LibraryAncestors.descendants(changedLibraryClasses, previousAPIs)
 
+  override protected def invalidateByPackageScope(
+      relations: Relations,
+      external: Boolean
+  ): Set[String] =
+    if ancestorChanges.isEmpty then Set.empty
+    else
+      val api =
+        if external then (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
+        else currentAPI
+      val packageObjects = relations.classes._2s.filter(PackageScope.isPackageObject)
+      val changes = PackageScope.changes(ancestorChanges, api, packageObjects)
+      val invalidated = PackageScope.invalidated(changes, relations)
+      if changes.nonEmpty then
+        invalidationLog.debug(
+          InvalidationLog.section(
+            "Package members",
+            Seq(
+              "added names" ->
+                changes.map(c => s"${c.packageObject}: ${c.added.toList.sorted.mkString(", ")}"),
+              "changed implicits" -> changes.filter(_.implicitsChanged).map(_.packageObject),
+              "invalidated classes" -> invalidated
+            )
+          )
+        )
+      invalidated
+
   /** @inheritdoc */
   protected def invalidatedPackageObjects(
       invalidatedClasses: Set[String],
