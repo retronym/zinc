@@ -211,7 +211,8 @@ private[inc] abstract class IncrementalCommon(
               cycleNum >= options.transitiveStep,
               IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
             ) ++
-              (invalidateByAddedClasses(compiledClasses, previous, analysis) --
+              ((invalidateByAddedClasses(compiledClasses, previous, analysis) ++
+                invalidateCoDefinedByAddedNames(newApiChanges, previous, analysis)) --
                 recompiledClasses -- compiledClasses)
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
@@ -606,6 +607,50 @@ private[inc] abstract class IncrementalCommon(
       )
       invalidated
   end invalidateByAddedClasses
+
+  /**
+   * Invalidates the classes that use a name added to a class and are defined in the source file
+   * of one of its dependents.
+   *
+   * A top-level import is in scope for every class of its file, but the bridges charge its
+   * dependency to one of them (Scala 2 the first, Scala 3 the last). When an object imported with
+   * a wildcard gains a member, a class of the file that uses the name now resolves it to the
+   * member, although the name-hash filter only checked the class charged with the import. A
+   * client that uses an existing member through the import references it, so this concerns
+   * added names only.
+   *
+   * @param changes The API changes detected in this cycle.
+   * @param previous The analysis before this cycle.
+   * @param current The analysis after this cycle.
+   */
+  def invalidateCoDefinedByAddedNames(
+      changes: APIChanges,
+      previous: Analysis,
+      current: Analysis
+  ): Set[String] =
+    val relations = current.relations
+    val usedNames = relations.names.toMultiMap
+    def names(analysis: Analysis, className: String): Set[String] =
+      if analysis.relations.definesClass(className).isEmpty then Set.empty
+      else analysis.apis.internalAPI(className).nameHashes.iterator.map(_.name).toSet
+    val invalidated =
+      for
+        case NamesChange(className, _) <- changes.apiChanges.toSet
+        added = names(current, className) -- names(previous, className)
+        if added.nonEmpty
+        dependent <- relations.memberRef.internal.reverse(className)
+        coDefined <- relations.definesClass(dependent).flatMap(relations.classNames)
+        if coDefined != dependent && usedNames.get(coDefined).exists(_.exists(u => added(u.name)))
+      yield coDefined
+    if invalidated.nonEmpty then
+      invalidationLog.debug(
+        InvalidationLog.section(
+          "Names added to a class, used beside its dependents",
+          Seq("invalidated classes" -> invalidated)
+        )
+      )
+    invalidated
+  end invalidateCoDefinedByAddedNames
 
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
   def invalidateInitial(
