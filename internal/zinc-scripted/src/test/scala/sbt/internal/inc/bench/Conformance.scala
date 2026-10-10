@@ -564,7 +564,7 @@ object Conformance:
     val bases = all
       .filter(b => o.only.isEmpty || o.only(b.id))
       .map(b =>
-        b.copy(edits = b.edits.filter(e => o.edits.isEmpty || o.edits(e.cfg)))
+        b.copy(edits = b.edits.filter(e => o.edits.isEmpty || o.edits(e.cls) || o.edits(e.cfg)))
       )
     val ordered = ConformanceOrder.order(bases, o.layouts, o.order, o.seed, o.shard)
     val items = o.sample.fold(ordered)(ordered.take)
