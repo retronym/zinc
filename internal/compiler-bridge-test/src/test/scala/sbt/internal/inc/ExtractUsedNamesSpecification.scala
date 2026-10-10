@@ -49,6 +49,17 @@ class ExtractUsedNamesSpecification
     assert(!usedNames("d.Second").contains("a.b._"))
   }
 
+  it should "extract the outer clause of a chained package clause as the reserved name <pkg>._" in {
+    val srcA = """|package a
+                  |package b
+                  |class Chained""".stripMargin
+    val srcB = """|package a.c
+                  |class Single""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB)
+    assert(usedNames("a.b.Chained").filter(_.endsWith("._")) === Set("a._"))
+    assert(!usedNames("a.c.Single").exists(_.endsWith("._")))
+  }
+
   // test covers https://github.com/gkossakowski/sbt/issues/6
   it should "extract names in type tree" in {
     val srcA = """|package a {
