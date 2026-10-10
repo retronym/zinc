@@ -42,6 +42,12 @@ import sjsonnew.support.scalajson.unsafe.Parser
  * revert and compare with the base. A divergence in the revert rebuilds the base from scratch.
  * Results go to `--out` as JSON lines.
  *
+ * A base given as `files` may hold Java sources: a path under `src/main/java/` keeps a public
+ * class's file beside its package, and the subproject compiles them with its Scala sources. Scripted
+ * turns `pipelining` on, which hands every Java source to every cycle and reads a Java class's API
+ * from scalac rather than from its classfile; `--inc-option pipelining=false` runs them as sbt does
+ * by default.
+ *
  * Cases run in [[ConformanceOrder]]'s order (`--order covering|reversed|enum`), so bugs show
  * early; `--sample N` runs the first N of a shard. `--print-order` writes the order and stops.
  *
@@ -664,6 +670,13 @@ object Conformance:
       }
 
   private def json(xs: Seq[String]): String =
-    xs.map(s => "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"")
-      .mkString("[", ",", "]")
+    xs.map(s =>
+      "\"" + s.flatMap {
+        case '\\'         => "\\\\"
+        case '"'          => "\\\""
+        case '\n'         => "\\n"
+        case c if c < ' ' => f"\\u${c.toInt}%04x"
+        case c            => c.toString
+      } + "\""
+    ).mkString("[", ",", "]")
 end Conformance
