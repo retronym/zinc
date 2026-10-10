@@ -1,0 +1,7 @@
+# Client imports a.q.Bar but does not use it; its classfile does not name Bar.
+> compile
+
+# Without a.q.Bar the import does not compile: a clean build fails. The import records an edge to
+# Bar, whose deletion invalidates Client.
+$ delete src/main/java/a/q/Bar.java
+-> compile
