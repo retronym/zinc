@@ -1,0 +1,9 @@
+# p/lib holds Scala 2.13 classes, built from scala2/ (one scripted test has one compiler):
+# show.jar has Show with a default instance, l.jar has the trait L. object C extends L of C.
+> p/run default
+$ sleep 2000
+# L gains an implicit Show instance, inherited by C's companion, so a clean build of the client
+# finds it. C recompiles (it extends L), but Scala 3's ExtractAPI skips Scala 2 ancestors when it
+# lists inherited members, so C's API does not move and Main keeps the default instance.
+$ copy-file changes/l.jar p/lib/l.jar
+> p/run sl
