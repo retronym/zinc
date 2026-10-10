@@ -1,0 +1,6 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run s
+# B mixes in T, but m is declared in the class A, so B has no forwarder for it: only the client recompiles
+> app/checkRecompilations 1 p.X

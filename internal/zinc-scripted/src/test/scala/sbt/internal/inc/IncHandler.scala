@@ -459,6 +459,10 @@ case class ProjectStructure(
       ()
     }
 
+  /** Returns the invalidation-log lines recorded since the last call, and forgets them. */
+  def drainInvalidationLog(): Vector[String] =
+    Iterator.continually(invalidationLines.poll()).takeWhile(_ != null).toVector
+
   def checkInvalidationLog(expectedLog: String): Future[Unit] = Future {
     import scala.jdk.CollectionConverters.*
     val expected = Files
