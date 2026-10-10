@@ -706,8 +706,8 @@ private[inc] abstract class IncrementalCommon(
   end invalidateByPackageObjectChanges
 
   /**
-   * Invalidates a package object together with a class of its package that has the name of a
-   * member added to it.
+   * Invalidates a package object together with a class of its package that has the name of one of
+   * its members, when the member or the class is new.
    *
    * The two definitions clash, but Scala 3 reports it only when it compiles both, so this
    * recompiles them in one cycle, unless this cycle already compiled them together.
@@ -721,14 +721,36 @@ private[inc] abstract class IncrementalCommon(
       runStart: Analysis,
       current: Analysis
   ): Set[String] =
-    val clashes =
+    def qualified(pkg: String, name: String) = if pkg.isEmpty then name else s"$pkg.$name"
+    val byAddedMember =
       for
         change <- packageObjectChanges(compiledClasses, runStart, current)
         name <- change.added
-        className = if change.pkg.isEmpty then name else s"${change.pkg}.$name"
+        className = qualified(change.pkg, name)
         if !compiledClasses(className) && current.relations.definesClass(className).nonEmpty
         invalidated <- List(change.packageObject, className)
       yield invalidated
+    val addedClasses = compiledClasses.filter { className =>
+      val api = current.apis.internalAPI(className).api()
+      runStart.relations.definesClass(className).isEmpty &&
+      IncrementalCommon.packageOfPackageObject(className).isEmpty &&
+      api.classApi.topLevel && api.objectApi.topLevel
+    }
+    val byAddedClass =
+      if addedClasses.isEmpty then Nil
+      else
+        val packageObjects = current.relations.classes._2s.toList.flatMap { c =>
+          IncrementalCommon.packageOfPackageObject(c).filterNot(_ => compiledClasses(c)).map(c -> _)
+        }
+        for
+          (packageObject, pkg) <- packageObjects
+          names = current.apis.internalAPI(packageObject).nameHashes.iterator.map(_.name).toSet
+          name <- names.filterNot(IncrementalCommon.isNotInPackageScope)
+          className = qualified(pkg, name)
+          if addedClasses(className)
+          invalidated <- List(packageObject, className)
+        yield invalidated
+    val clashes = byAddedMember ++ byAddedClass
     if clashes.nonEmpty then
       invalidationLog.debug(
         InvalidationLog.section("Package object clashes", Seq("invalidated classes" -> clashes))
