@@ -1,0 +1,7 @@
+> p/compile
+
+# W exports every member of D, so it gains a forwarder for n
+$ copy-file changes/A.scala p/A.scala
+> p/compile
+$ copy-file changes/App.scala p/App.scala
+> p/run

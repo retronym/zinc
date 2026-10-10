@@ -1,0 +1,5 @@
+> p/run 1
+
+# W's forwarder for m changes its result type
+$ copy-file changes/A.scala p/A.scala
+> p/run s

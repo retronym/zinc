@@ -286,6 +286,20 @@ private[inc] object DescendantRules:
     )
   }
 
+  /**
+   * An inheritance edge without subclassing. Scala 3 records a wildcard `export` as an inheritance
+   * dependency on the exported class, because the exporting class has a forwarder for each of its
+   * members, new ones included. The other rules reason about inherited members, which such a class
+   * does not have, so it always recompiles. Its stored parents do not name the changed class.
+   */
+  val exports: DescendantRule = rule("exports") { (view, d, change) =>
+    val stored =
+      view.classLikes(d).flatMap(_.structure.parents.iterator.flatMap(MerkleHashes.typeName))
+    if view.api(d).isDefined && !stored.contains(change.className) then
+      Some(s"forwards the members of ${change.className}")
+    else None
+  }
+
   /** Name hashing's own fallbacks: a changed implicit member. */
   val fallbacks: DescendantRule = rule("fallbacks") { (_, _, change) =>
     onNames(change.modifiedNames.in(xsbti.UseScope.Implicit).map(_.name), "implicit")
@@ -299,7 +313,7 @@ private[inc] object DescendantRules:
    * stored linearization fresh, which [[MerkleHashes]] reads for other subprojects.
    */
   val default: List[DescendantRule] =
-    List(overrides, conflicts, `abstract`, header, traitDirect, mirror, annotated)
+    List(overrides, conflicts, `abstract`, header, traitDirect, mirror, annotated, exports)
 
   /** `default` plus rules it subsumes: `uses`, `fallbacks` (by `memberRef` edges) and `trait`. */
   val all: List[DescendantRule] =
@@ -313,6 +327,7 @@ private[inc] object DescendantRules:
       traitDirect,
       mirror,
       annotated,
+      exports,
       fallbacks
     )
 
