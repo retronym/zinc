@@ -97,7 +97,7 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit:
         bridgeLabels
           .find(bridgesByLabel(_).version == version)
           .getOrElse(sys.error(s"No bridge for Scala $version in ${bridges.map(_.version)}"))
-      case None => Label212
+      case None => sys.env.getOrElse("ZINC_SCRIPTED_DEFAULT_LABEL", Label212)
 
   // Create a provider that uses the bridges from the classes directory of the projects
   def getZincProvider(targetDir: Path, log: Logger): CompilerBridgeProvider =
