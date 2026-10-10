@@ -1,0 +1,5 @@
+-> checkAnnotated FooTest Test
+
+# Base gains its first @Test method; FooTest must be refreshed to be discovered
+$ copy-file changes/Base.scala Base.scala
+> checkAnnotated FooTest Test

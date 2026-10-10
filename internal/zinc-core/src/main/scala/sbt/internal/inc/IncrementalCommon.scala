@@ -46,6 +46,7 @@ private[inc] abstract class IncrementalCommon(
     java.lang.Boolean.getBoolean("xsbt.skip.cp.lookup")
 
   private[inc] final val invalidationLog = new InvalidationLog(log, options.relationsDebug)
+  private[inc] final val timings = new PhaseTimings
   def debug(s: => String): Unit = invalidationLog.detail(s)
 
   final def iterations(state0: CycleState): Iterator[CycleState] =
@@ -100,8 +101,10 @@ private[inc] abstract class IncrementalCommon(
         )
       )
 
-      val pruned = IncrementalCommon
-        .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      val pruned = timings.time("prune") {
+        IncrementalCommon
+          .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      }
 
       invalidationLog.detail(s"Cycle $cycleNum pruned relations:\n${pruned.relations}")
 
@@ -165,15 +168,17 @@ private[inc] abstract class IncrementalCommon(
       override val isFullCompilation: Boolean = allSources.subsetOf(invalidatedSources)
       override val previousAnalysis: Analysis = previous
       override val previousAnalysisPruned: Analysis = pruned
+      override def timings: PhaseTimings = IncrementalCommon.this.timings
 
       override def mergeAndInvalidate(
           partialAnalysis: Analysis,
           shouldRegisterCycle: Boolean,
       ): CompileCycleResult =
-        val analysis =
+        val analysis = timings.time("merge") {
           if isFullCompilation then
             partialAnalysis.copy(compilations = pruned.compilations ++ partialAnalysis.compilations)
           else pruned ++ partialAnalysis
+        }
 
         // Represents all classes that were compiled as a result of external and internal invalidation (by a previous cycle)
         // Maps the changed sources by the user to class names we can count as invalidated
@@ -186,12 +191,13 @@ private[inc] abstract class IncrementalCommon(
         // stored API was read from the compiled classes and never equals the one from scalac.
         val unchangedJavaClasses =
           pipelinedJavaSources.flatMap(previous.relations.classNames) -- classesToRecompile
-        val newApiChanges =
+        val newApiChanges = timings.time("detectAPIChanges") {
           detectAPIChanges(
             recompiledClasses -- unchangedJavaClasses,
             previous.apis.internalAPI,
             analysis.apis.internalAPI
           )
+        }
         if !isFullCompilation && newApiChanges.apiChanges.nonEmpty then
           invalidationLog.debug(
             InvalidationLog.section(
@@ -203,13 +209,19 @@ private[inc] abstract class IncrementalCommon(
         val nextInvalidations =
           if isFullCompilation then Set.empty[String]
           else
-            invalidateAfterInternalCompilation(
-              analysis,
-              newApiChanges,
-              recompiledClasses,
-              cycleNum >= options.transitiveStep,
-              IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
-            )
+            val compiledClasses = invalidatedSources.flatMap(analysis.relations.classNames)
+            timings.time("invalidate") {
+              invalidateAfterInternalCompilation(
+                analysis,
+                newApiChanges,
+                recompiledClasses,
+                cycleNum >= options.transitiveStep,
+                IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
+              ) ++
+                (invalidateByAddedClasses(compiledClasses, previous, analysis) --
+                  recompiledClasses -- compiledClasses) ++
+                invalidateByPackageScope(analysis.relations, recompiledClasses ++ compiledClasses)
+            }
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -232,7 +244,7 @@ private[inc] abstract class IncrementalCommon(
       ): CompileCycleResult =
         classFileManager.generated(partialAnalysis.relations.allProducts.map(toVf).toArray)
         prev match
-          case Some(prev) => prev.copy(analysis = pruned ++ partialAnalysis)
+          case Some(prev) => prev.copy(analysis = timings.time("merge")(pruned ++ partialAnalysis))
           case _          => mergeAndInvalidate(partialAnalysis, shouldRegisterCycle)
     end IncrementalCallbackImpl
   end CycleState
@@ -327,6 +339,23 @@ private[inc] abstract class IncrementalCommon(
    * @param newAPI A function that returns the current class associated with a given class name.
    * @return A list of API changes of the given two analyzed classes.
    */
+  /** The classes to recompile because a library ancestor changed. See [[LibraryAncestors]]. */
+  protected def libraryDescendants(relations: Relations): Set[String] = Set.empty
+
+  /**
+   * The classes that a change to a package's members reaches without an edge to its package
+   * object, for the API changes last detected: those of upstream classes, or of this subproject's
+   * classes in the last cycle. See [[PackageScope]].
+   *
+   * @param compiled The classes compiled in the last cycle, which saw the new members; empty for
+   *                 upstream changes.
+   */
+  protected def invalidateByPackageScope(relations: Relations, compiled: Set[String]): Set[String] =
+    Set.empty
+
+  /** The classes of the libraries that changed since the previous compile, set before it. */
+  private[inc] var changedLibraryClasses: Set[String] = Set.empty
+
   def detectAPIChanges(
       recompiledClasses: collection.Set[String],
       oldAPI: String => AnalyzedClass,
@@ -453,7 +482,10 @@ private[inc] abstract class IncrementalCommon(
       val incrementalExternalChanges =
         val previousAPIs = previousAnalysis.apis
         val externalFinder = lookupAnalyzedClass(_: String, None).getOrElse(APIs.emptyAnalyzedClass)
-        detectAPIChanges(previousAPIs.allExternals, previousAPIs.externalAPI, externalFinder)
+        // A class of this subproject is tracked internally. An analysis may still list it as
+        // external, from Java compiled apart with pipelining (see `AnalysisCallback.Builder`).
+        val externals = previousAPIs.allExternals.filter(previousRelations.definesClass(_).isEmpty)
+        detectAPIChanges(externals, previousAPIs.externalAPI, externalFinder)
 
       val changedExternalClassNames = incrementalExternalChanges.allModified.toSet
       if !lookup.shouldDoIncrementalCompilation(changedExternalClassNames, previousAnalysis) then
@@ -565,7 +597,56 @@ private[inc] abstract class IncrementalCommon(
     nextInvalidations
   end invalidateAfterInternalCompilation
 
+  /**
+   * Invalidates the classes that use the simple name of a top-level class added by this cycle.
+   *
+   * An added class can change how an existing class resolves a name, although neither depends on
+   * the other: `a.b.Foo` shadows `a.Foo` in a client in `package a; package b`, and `q.Foo`
+   * shadows `a.Foo` or `scala.Foo` in a client in package `a` that imports `q._`. Zinc does not
+   * record the scopes that a lookup searched, so this invalidates the classes that use the name
+   * and see the added class's package (see [[PackageScope.Reach]]).
+   *
+   * @param compiledClasses The classes defined by the sources compiled in this cycle.
+   * @param previous The analysis before this cycle.
+   * @param current The analysis after this cycle.
+   */
+  def invalidateByAddedClasses(
+      compiledClasses: Set[String],
+      previous: Analysis,
+      current: Analysis
+  ): Set[String] =
+    def isTopLevel(className: String): Boolean =
+      // A class without a companion has an empty, top-level placeholder for it.
+      val api = current.apis.internalAPI(className).api()
+      api.classApi.topLevel && api.objectApi.topLevel
+    val added =
+      compiledClasses.filter(c => previous.relations.definesClass(c).isEmpty && isTopLevel(c))
+    if added.isEmpty then Set.empty
+    else
+      val reach = PackageScope.Reach(
+        current.relations,
+        IncrementalCommon.comesFromScalaSource(previous.relations, Some(current.relations)),
+        PackageScope.global(options)
+      )
+      // No reference resolves to a package object by its name, `package`.
+      val names = added.iterator
+        .map(c => c.substring(c.lastIndexOf('.') + 1) -> PackageScope.packageOf(c))
+        .filter(_._1 != "package")
+        .toList
+      val invalidated = PackageScope.usersOf(names, current.relations, reach)
+      invalidationLog.debug(
+        InvalidationLog.section(
+          "Added classes",
+          Seq("added classes" -> added, "classes using their names" -> invalidated)
+        )
+      )
+      invalidated
+  end invalidateByAddedClasses
+
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
+  /** The previous analysis's APIs, which external invalidation reads for unrecompiled classes. */
+  private[inc] var previousAPIs: APIs = APIs.empty
+
   def invalidateInitial(
       previous: Relations,
       changes: InitialChanges
@@ -595,7 +676,12 @@ private[inc] abstract class IncrementalCommon(
         invalidateClassesExternally(previous, externalAPIChange, isScalaSource)
       }.toSet
 
-    val allInvalidatedClasses = invalidatedClasses ++ byExtSrcDep
+    val byLibraryAncestor = libraryDescendants(previous)
+    val byPackageScope =
+      if changes.external.apiChanges.isEmpty then Set.empty[String]
+      else invalidateByPackageScope(previous, Set.empty)
+    val allInvalidatedClasses =
+      invalidatedClasses ++ byExtSrcDep ++ byLibraryAncestor ++ byPackageScope
     val allInvalidatedSourcefiles = addedSrcs ++ modifiedSrcs ++ byProduct ++ byLibraryDep
 
     if previous.allSources.isEmpty then
@@ -621,6 +707,8 @@ private[inc] abstract class IncrementalCommon(
             "sources invalidated by products" -> byProduct.map(_.id),
             "sources invalidated by binary dependencies" -> byLibraryDep.map(_.id),
             "classes invalidated by external sources" -> byExtSrcDep,
+            "classes with a changed library ancestor" -> byLibraryAncestor,
+            "classes invalidated by a package's external members" -> byPackageScope,
           )
         )
       )

@@ -1,0 +1,6 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# B is not recompiled; app depends on the owner of m (lib.A), so it is invalidated through A
+> app/run s
+> lib/checkRecompilations 1 lib.A

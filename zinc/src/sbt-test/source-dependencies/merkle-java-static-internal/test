@@ -1,0 +1,5 @@
+> run 0
+
+$ copy-file changes/A.java A.java
+# J calls the static s inherited by B, in the same subproject
+> run s

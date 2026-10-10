@@ -1,0 +1,3 @@
+package q
+
+trait Base
