@@ -1,0 +1,8 @@
+# C, in package a.b, resolves t.m through the implicit class in T's companion.
+> p/compile
+
+# An implicit class added to package object b is in C's lexical scope, which wins over the
+# companion: t.m is now a String and a clean build rejects C. C reaches the package object
+# through no edge.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile
