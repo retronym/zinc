@@ -1057,9 +1057,9 @@ class ExtractAPI[GlobalType <: Global](
       val tParams: Array[xsbti.api.TypeParameter]
   )
 
-  private[this] val fullClasses = perRunCaches.newMap[Symbol, ClassLike]()
+  private[this] val fullClasses = perRunCaches.newMap[String, ClassLike]()
   private[this] val pendingHashes = collection.mutable.ArrayBuffer[PendingClass]()
-  private[this] val extracted = collection.mutable.LinkedHashMap[Symbol, Extracted]()
+  private[this] val extracted = collection.mutable.LinkedHashMap[String, Extracted]()
 
   /** The classes extracted from this unit, each with its thin API and hashes (`buildHashes`). */
   def allExtracted: List[Extracted] = {
@@ -1072,7 +1072,7 @@ class ExtractAPI[GlobalType <: Global](
     if (pendingHashes.nonEmpty) {
       val todo = pendingHashes.toList
       pendingHashes.clear()
-      todo.foreach(p => extracted(p.sym) = hashClass(p))
+      todo.foreach(p => extracted(p.name) = hashClass(p))
       forceAll()
     }
   }
@@ -1846,7 +1846,7 @@ class ExtractAPI[GlobalType <: Global](
 
     val hasMacro = p.modifiers.isMacro || declared.exists(_.isMacro)
     val hashes = new xsbti.ClassHashes(apiHash, extraHash, nameHashes, hasMacro)
-    new Extracted(fullClasses.getOrElse(sym, null), thinClass(p, members, isModule), hashes)
+    new Extracted(fullClasses.getOrElse(p.name, null), thinClass(p, members, isModule), hashes)
   }
 
   /** What `APIUtil.minimize` keeps of the class `mkClassLike` builds. */
@@ -1996,7 +1996,7 @@ class ExtractAPI[GlobalType <: Global](
         tParams
       ) // use original symbol (which is a term symbol when `c.isModule`) for `name` and other non-classy stuff
       allNonLocalClassesInSrc += classWithMembers
-      fullClasses(sym) = classWithMembers
+      fullClasses(name) = classWithMembers
     }
     if (buildHashes)
       pendingHashes += new PendingClass(
