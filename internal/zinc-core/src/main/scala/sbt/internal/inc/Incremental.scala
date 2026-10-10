@@ -1128,6 +1128,9 @@ private final class AnalysisCallback(
           mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
       val partialAnalysis = incHandler.timings.time("analysis")(getAnalysis)
+      // Scala 3 calls `apiPhaseCompleted` only when pipelining, so report here as well.
+      if Incremental.apiCheck(options) then
+        ApiHashCheck.reportSummary(Incremental.apiCheckReport(options), log)
       val hasScala = Analysis.sources(partialAnalysis).scala.nonEmpty
       // If we had early output and scala sources, then the cycle has already been registered
       val shouldRegisterCycle = earlyOutput.isEmpty || !hasScala
