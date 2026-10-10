@@ -1,0 +1,7 @@
+# Client, a Scala object in `package a; package b`, resolves `Foo` to the Java class `a.Foo`.
+> compile
+
+# A Java class `a.b.Foo` shadows it and has no `m`: a clean build fails. Zinc sees the Java
+# class as added, and Client uses its name.
+$ copy-file changes/Foo.java src/main/java/a/b/Foo.java
+-> compile
