@@ -46,6 +46,7 @@ private[inc] abstract class IncrementalCommon(
     java.lang.Boolean.getBoolean("xsbt.skip.cp.lookup")
 
   private[inc] final val invalidationLog = new InvalidationLog(log, options.relationsDebug)
+  private[inc] final val timings = new PhaseTimings
   def debug(s: => String): Unit = invalidationLog.detail(s)
 
   final def iterations(state0: CycleState): Iterator[CycleState] =
@@ -100,8 +101,10 @@ private[inc] abstract class IncrementalCommon(
         )
       )
 
-      val pruned = IncrementalCommon
-        .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      val pruned = timings.time("prune") {
+        IncrementalCommon
+          .pruneClassFilesOfInvalidations(invalidatedSources, previous, classfileManager, converter)
+      }
 
       invalidationLog.detail(s"Cycle $cycleNum pruned relations:\n${pruned.relations}")
 
@@ -165,15 +168,17 @@ private[inc] abstract class IncrementalCommon(
       override val isFullCompilation: Boolean = allSources.subsetOf(invalidatedSources)
       override val previousAnalysis: Analysis = previous
       override val previousAnalysisPruned: Analysis = pruned
+      override def timings: PhaseTimings = IncrementalCommon.this.timings
 
       override def mergeAndInvalidate(
           partialAnalysis: Analysis,
           shouldRegisterCycle: Boolean,
       ): CompileCycleResult =
-        val analysis =
+        val analysis = timings.time("merge") {
           if isFullCompilation then
             partialAnalysis.copy(compilations = pruned.compilations ++ partialAnalysis.compilations)
           else pruned ++ partialAnalysis
+        }
 
         // Represents all classes that were compiled as a result of external and internal invalidation (by a previous cycle)
         // Maps the changed sources by the user to class names we can count as invalidated
@@ -186,12 +191,13 @@ private[inc] abstract class IncrementalCommon(
         // stored API was read from the compiled classes and never equals the one from scalac.
         val unchangedJavaClasses =
           pipelinedJavaSources.flatMap(previous.relations.classNames) -- classesToRecompile
-        val newApiChanges =
+        val newApiChanges = timings.time("detectAPIChanges") {
           detectAPIChanges(
             recompiledClasses -- unchangedJavaClasses,
             previous.apis.internalAPI,
             analysis.apis.internalAPI
           )
+        }
         if !isFullCompilation && newApiChanges.apiChanges.nonEmpty then
           invalidationLog.debug(
             InvalidationLog.section(
@@ -203,13 +209,15 @@ private[inc] abstract class IncrementalCommon(
         val nextInvalidations =
           if isFullCompilation then Set.empty[String]
           else
-            invalidateAfterInternalCompilation(
-              analysis,
-              newApiChanges,
-              recompiledClasses,
-              cycleNum >= options.transitiveStep,
-              IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
-            )
+            timings.time("invalidate") {
+              invalidateAfterInternalCompilation(
+                analysis,
+                newApiChanges,
+                recompiledClasses,
+                cycleNum >= options.transitiveStep,
+                IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
+              )
+            }
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -232,7 +240,7 @@ private[inc] abstract class IncrementalCommon(
       ): CompileCycleResult =
         classFileManager.generated(partialAnalysis.relations.allProducts.map(toVf).toArray)
         prev match
-          case Some(prev) => prev.copy(analysis = pruned ++ partialAnalysis)
+          case Some(prev) => prev.copy(analysis = timings.time("merge")(pruned ++ partialAnalysis))
           case _          => mergeAndInvalidate(partialAnalysis, shouldRegisterCycle)
     end IncrementalCallbackImpl
   end CycleState
