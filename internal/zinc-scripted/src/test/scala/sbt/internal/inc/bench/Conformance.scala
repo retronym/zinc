@@ -670,6 +670,13 @@ object Conformance:
       }
 
   private def json(xs: Seq[String]): String =
-    xs.map(s => "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"")
-      .mkString("[", ",", "]")
+    xs.map(s =>
+      "\"" + s.flatMap {
+        case '\\'         => "\\\\"
+        case '"'          => "\\\""
+        case '\n'         => "\\n"
+        case c if c < ' ' => f"\\u${c.toInt}%04x"
+        case c            => c.toString
+      } + "\""
+    ).mkString("[", ",", "]")
 end Conformance
