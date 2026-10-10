@@ -43,7 +43,9 @@ private[sbt] object JavaAnalyze:
       readClassfileAPI: (VirtualFileRef, Seq[(String, ClassFile)]) => Unit = (_, _) => (),
       // sbt/zinc#145: extra member-ref edges for inlined `static final` constants that javac erases
       // from the bytecode, recovered from the attributed AST. Keyed `fromBinaryName -> onBinaryNames`.
-      constantDeps: Map[String, Set[String]] = Map.empty
+      constantDeps: Map[String, Set[String]] = Map.empty,
+      // The simple names each class looks up, from the attributed AST, keyed by binary name.
+      usedNames: Map[String, Set[String]] = Map.empty
   ): Unit =
     // A Java class file's parents are declared by the class. Its statics become a module of
     // the same name, but one that never inherits, so every endpoint here is a type.
@@ -292,6 +294,12 @@ private[sbt] object JavaAnalyze:
         binaryClassName <- typesInSource.keysIterator
         onBinaryName <- constantDeps.getOrElse(binaryClassName, Set.empty)
       do processDependency(onBinaryName, DependencyByMemberRef, binaryClassName)
+
+      for
+        binaryClassName <- typesInSource.keysIterator
+        className <- getMappedSource(binaryClassName)
+        name <- usedNames.getOrElse(binaryClassName, Set.empty)
+      do analysis.usedName(className, name, java.util.EnumSet.of(xsbti.UseScope.Default))
 
       def readInheritanceDependencies(classes: Seq[Class[?]]) =
         val api = readAPI(source, classes)
