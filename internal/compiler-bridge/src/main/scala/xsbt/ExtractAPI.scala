@@ -753,28 +753,53 @@ class ExtractAPI[GlobalType <: Global](
     result.toList
   }
 
+  /**
+   * Would `a` and `b` be the same member if one were seen from a subclass of the other's owner?
+   * Their declared signatures are compared structurally without `asSeenFrom`: a method's own type
+   * parameters match by position, a class's type parameters and abstract types match anything
+   * (they are what `asSeenFrom` would substitute), aliases and annotations are looked through,
+   * and `Any`, `AnyRef` and `Object` are one type, as for Java-defined methods.
+   */
   private def sameShape(a: Symbol, b: Symbol): Boolean = {
-    def isWild(t: Type) = {
-      val s = t.typeSymbolDirect
-      s.isAbstractType || s.isTypeParameterOrSkolem
-    }
+    val ta = a.info
+    val tb = b.info
+    val tpsA = ta.typeParams
+    val tpsB = tb.typeParams
     def paramss(t: Type): List[List[Symbol]] = t match {
       case PolyType(_, res)    => paramss(res)
       case MethodType(ps, res) => ps :: paramss(res)
       case _                   => Nil
     }
-    val ta = a.info
-    val tb = b.info
+    def norm(t: Type): Type = t.dealias match {
+      case at: AnnotatedType => norm(at.underlying)
+      case u                 => u
+    }
+    def isTop(s: Symbol) =
+      (s eq definitions.AnyClass) || (s eq definitions.AnyRefClass) || (s eq definitions.ObjectClass)
+    def same(x0: Type, y0: Type): Boolean = {
+      val x = norm(x0)
+      val y = norm(y0)
+      val sx = x.typeSymbolDirect
+      val sy = y.typeSymbolDirect
+      val ix = tpsA.indexOf(sx)
+      val iy = tpsB.indexOf(sy)
+      if (ix >= 0 || iy >= 0) ix == iy
+      else if (sx.isAbstractType || sx.isTypeParameterOrSkolem) true
+      else if (sy.isAbstractType || sy.isTypeParameterOrSkolem) true
+      else if (isTop(sx) && isTop(sy)) true
+      else
+        (x, y) match {
+          case (TypeRef(_, _, xs), TypeRef(_, _, ys)) =>
+            (sx eq sy) && xs.size == ys.size && xs.corresponds(ys)(same)
+          case _ => sx eq sy
+        }
+    }
     val pa = paramss(ta).filter(_.nonEmpty)
     val pb = paramss(tb).filter(_.nonEmpty)
-    ta.typeParams.size == tb.typeParams.size && pa.size == pb.size &&
-    pa.corresponds(pb) { (xs, ys) =>
-      xs.size == ys.size && xs.corresponds(ys) { (x, y) =>
-        val tx = x.tpe
-        val ty = y.tpe
-        isWild(tx) || isWild(ty) || (tx.typeSymbolDirect eq ty.typeSymbolDirect)
-      }
-    }
+    tpsA.size == tpsB.size && pa.size == pb.size &&
+    pa.corresponds(pb)((xs, ys) =>
+      xs.size == ys.size && xs.corresponds(ys)((x, y) => same(x.tpe, y.tpe))
+    )
   }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
