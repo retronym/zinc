@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, and d.Importer, which imports a.b._, find the implicit a.T through `import w.W._`;
+# so does c.Other, which neither is in package a.b nor imports it.
+> p/compile
+# `package object b` gains an implicit a.T: Client's and Importer's searches are now ambiguous, so a clean build
+# fails. c.Other cannot see it and is not recompiled.
+$ copy-file changes/PObj.scala p/PObj.scala
+-> p/compile

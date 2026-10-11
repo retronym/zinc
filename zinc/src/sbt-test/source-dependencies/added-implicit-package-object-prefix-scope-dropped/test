@@ -1,0 +1,8 @@
+# Client, in package c, finds the implicit a.b.T in T's companion. The build drops package prefixes from the
+# implicit scope (-Xsource-features:package-prefix-implicits), as Scala 3 does.
+> p/compile
+# The package object of a.b gains an implicit a.b.T, which is not in the implicit scope of a.b.T here, so a clean
+# build succeeds. Client neither is in a.b nor imports it, so Zinc does not recompile it.
+$ copy-file changes/PObj.scala p/PObj.scala
+> p/compile
+> p/checkRecompilations 0 c.Client
