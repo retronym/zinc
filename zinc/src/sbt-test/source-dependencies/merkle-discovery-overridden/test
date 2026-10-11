@@ -1,0 +1,11 @@
+# FooTest inherits @Test t1 from Base
+> checkAnnotated FooTest Test
+
+# Mid overrides t1 without the annotation. FooTest's stored API lists every annotated declaration
+# of its ancestors, overridden or not, so it must not depend on the override: incremental and
+# clean builds agree.
+$ copy-file changes/Mid.scala Mid.scala
+> checkAnnotated FooTest Test
+
+> clean
+> checkAnnotated FooTest Test

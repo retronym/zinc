@@ -722,6 +722,8 @@ private final class AnalysisCallback(
 
   private val subprojectClasses = new scala.collection.concurrent.TrieMap[String, Boolean]
 
+  private val externalAPIs = new scala.collection.concurrent.TrieMap[String, Option[AnalyzedClass]]
+
   override def isSubprojectClass(binaryClassName: String): Boolean =
     subprojectClasses.getOrElseUpdate(
       binaryClassName,
@@ -977,7 +979,7 @@ private final class AnalysisCallback(
   ): Unit =
     // TODO: handle library JARs and rt.jar.
     val vf = converter.toVirtualFile(classFile)
-    externalAPI(onBinaryName, Some(vf)) match
+    externalAPIs.getOrElseUpdate(onBinaryName, externalAPI(onBinaryName, Some(vf))) match
       case Some(api) =>
         // dependency is a product of a source in another project
         val targetBinaryClassName = onBinaryName
