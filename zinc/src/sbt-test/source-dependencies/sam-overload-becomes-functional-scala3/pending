@@ -1,0 +1,7 @@
+# K passes a lambda to the overloaded P.run; only run(F2) takes a functional type, so the lambda converts to F2. K
+# records an edge on F2 (the chosen alternative's parameter type), none on F1.
+> p/compile
+# F1.other gets a default, so F1 becomes functional and the call is ambiguous: a clean build fails. Zinc does not
+# recompile K. Lean: Sam.p2_today.
+$ copy-file changes/F1.scala p/F1.scala
+-> p/compile
