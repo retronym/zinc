@@ -1,0 +1,11 @@
+# O inherits f from T; Scala 2.13 gives O a mixin forwarder, f(LV;)I, and its companion class a static forwarder.
+> compile
+> run
+# V becomes a value class, so f erases to f(I)I. A clean build gives O forwarders taking an Int.
+# Zinc recompiles V, and T and Client, which use the name V. T's API hash is unchanged (its signature names
+# V, not V's erasure), so nothing reaches O: its inheritance edge to T fires only on an API change, and it
+# uses no name that changed. O's forwarders keep f(LV;)I, and calling one throws NoSuchMethodError on
+# T.f$(T, V). Client asserts that O's forwarders match T's methods.
+$ copy-file changes/V.scala V.scala
+> compile
+> run
