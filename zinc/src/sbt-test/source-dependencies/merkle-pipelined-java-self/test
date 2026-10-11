@@ -1,0 +1,9 @@
+# With pipelining, Java compiles apart from Scala, after it. U's dependency on the Scala class S of the same subproject
+# must be internal: recorded as a dependency on another subproject's S, through this one's own analysis, it composed S
+# with the Java ancestor J in two forms (J's API from scalac's Java parser, then from javac's class file), which never
+# hash alike, so every compile saw S as a changed upstream class and invalidated its users.
+> p/compile
+> p/checkExternalDependencies a.U
+$ copy-file changes/Other.scala p/Other.scala
+> p/compile
+> p/checkExternalDependencies a.U
