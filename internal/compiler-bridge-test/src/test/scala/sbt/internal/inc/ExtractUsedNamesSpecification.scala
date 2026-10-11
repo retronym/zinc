@@ -23,6 +23,44 @@ class ExtractUsedNamesSpecification
     assert(usedNames("a.A") === expectedNames)
   }
 
+  it should "extract a wildcard import of a package as the reserved name <pkg>._" in {
+    val srcA = """|package a.b { class X }
+                  |package a.c { object O { class Z } }""".stripMargin
+    val srcB =
+      """|package d
+                  |class D1 { import a.b._; val x = new X }
+                  |class D3 { import a.b.X; import a.c.O._; val x = new X; val z = new Z }
+                  |class D4 { import a.b.{X => Y, _}; import _root_._; val x = new Y }""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB)
+    assert(usedNames("d.D1").contains("a.b._"))
+    assert(usedNames("d.D4").contains("a.b._"))
+    assert(!usedNames("d.D3").exists(_.endsWith("._")))
+    assert(usedNames("d.D4").filter(_.endsWith("._")) === Set("a.b._"))
+  }
+
+  it should "record the outer clause of a chained package clause as <pkg>._" in {
+    val srcA = "package a.b { class X }"
+    val srcB = """|package a
+                  |package b
+                  |class Chained""".stripMargin
+    val srcC = """|package a.b
+                  |class Single""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    assert(usedNames("a.b.Chained").contains("a._"))
+    assert(!usedNames("a.b.Single").exists(_.endsWith("._")))
+  }
+
+  it should "charge a top-level wildcard import of a package to the first class" in {
+    val srcA = "package a.b { class X }"
+    val srcB = """|package d
+                  |import a.b._
+                  |class First
+                  |class Second { val x = new X }""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB)
+    assert(usedNames("d.First").contains("a.b._"))
+    assert(!usedNames("d.Second").contains("a.b._"))
+  }
+
   // test covers https://github.com/gkossakowski/sbt/issues/6
   it should "extract names in type tree" in {
     val srcA = """|package a {
