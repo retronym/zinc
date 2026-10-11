@@ -1,0 +1,5 @@
+# Client uses the class side of Leaf, a case class with a synthetic companion.
+> p/compile
+# m now returns a String, so a clean build fails. Leaf's class-side API must be stored for Zinc to see the change.
+$ copy-file changes/Leaf.scala p/Leaf.scala
+-> p/compile
