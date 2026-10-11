@@ -100,7 +100,7 @@ object Conformance:
     case "--stop" :: rest         => parse(rest, o.copy(stop = true))
     case "--debug" :: rest        => parse(rest, o.copy(logLevel = Some(Level.Debug)))
     case "--keys-at" :: v :: rest =>
-      require(v == "base" || v == "inc", s"--keys-at base|inc, not $v")
+      require(Set("base", "inc", "both")(v), s"--keys-at base|inc|both, not $v")
       parse(rest, o.copy(keysAt = v))
     case "--inc-option" :: kv :: rest =>
       val Array(k, v) = kv.split("=", 2)
@@ -633,10 +633,11 @@ object Conformance:
         cases += 1
         val files = b.sources(Some(e))
         def missing() = if e.keys.isEmpty then Nil else l.work.missingKeys(e.keys)
-        val missingAtBase = if o.keysAt == "base" then missing() else Nil
+        val missingAtBase = if o.keysAt != "inc" then missing() else Nil
         l.work.write(files)
         val inc = l.work.compile()
-        val missingKeys = if o.keysAt == "inc" then missing() else missingAtBase
+        val missingAtInc = if o.keysAt != "base" then missing() else Nil
+        val missingKeys = if o.keysAt == "inc" then missingAtInc else missingAtBase
         if missingKeys.nonEmpty then uncovered += 1
         val cl = l.cleanBuild(files, b)
         val verdict = compare(inc, cl)
@@ -657,7 +658,9 @@ object Conformance:
             (if e.keys.isEmpty then ""
              else
                s""""coverage":"${if missingKeys.isEmpty then "covered" else "uncovered"}",""" +
-                 s""""uncoveredKeys":${json(missingKeys)},""") +
+                 s""""uncoveredKeys":${json(missingKeys)},""" +
+                 (if o.keysAt == "both" then s""""uncoveredKeysInc":${json(missingAtInc)},"""
+                  else "")) +
             s""""cleanOk":${cl.ok},"diff":${json(diff(inc, cl))},""" +
             (if b.probe.isEmpty then ""
              else s""""baseProbe":${json(r0.probe)},"cleanProbe":${json(cl.probe)},""") +

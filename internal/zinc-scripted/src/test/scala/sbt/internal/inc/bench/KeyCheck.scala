@@ -58,11 +58,14 @@ final class KeyCheck(analyses: Seq[Analysis]):
     relations.flatMap(r => r.memberRef.internal.forward(c) ++ r.memberRef.external.forward(c)).toSet
 
   private def inhs(c: String): Set[String] =
-    relations.flatMap(r => r.inheritance.internal.forward(c) ++ r.inheritance.external.forward(c)).toSet
+    relations.flatMap(r =>
+      r.inheritance.internal.forward(c) ++ r.inheritance.external.forward(c)
+    ).toSet
 
   private def isIn(pkg: String, c: String): Boolean =
     val rest =
-      if pkg.isEmpty then c else if c.startsWith(pkg + ".") then c.substring(pkg.length + 1) else null
+      if pkg.isEmpty then c
+      else if c.startsWith(pkg + ".") then c.substring(pkg.length + 1) else null
     rest != null && {
       val top = rest.takeWhile(_ != '.')
       top == rest || classes(if pkg.isEmpty then top else s"$pkg.$top")
@@ -72,25 +75,25 @@ final class KeyCheck(analyses: Seq[Analysis]):
     resolve(target, targets ++ classes) match
       case Right(t) => Option.when(!targets(t))("no edge")
       case Left(_) if targets.exists(t => t == target || t.endsWith("." + target)) => None
-      case Left(why) => Some(why)
+      case Left(why)                                                               => Some(why)
 
   /** Why class `c` lacks `key`, or `None` if it has it. */
   def lacks(c: String, key: String): Option[String] =
     key.split(":", 2) match
-      case Array("uses", n)                       => Option.when(!usedNames(c).exists(_._1 == n))("absent")
-      case Array(k, n) if k.startsWith("uses@")   =>
+      case Array("uses", n) => Option.when(!usedNames(c).exists(_._1 == n))("absent")
+      case Array(k, n) if k.startsWith("uses@") =>
         val scope = k.stripPrefix("uses@")
         Option.when(!usedNames(c).exists(u => u._1 == n && u._2.equalsIgnoreCase(scope)))("absent")
-      case Array("usesFile", n)                   =>
+      case Array("usesFile", n) =>
         Option.when(!sourceClasses(c).exists(s => usedNames(s).exists(_._1 == n)))("absent")
-      case Array("ref", t)                        => edge(refs(c), t)
-      case Array("refFile", t)                    => edge(sourceClasses(c).flatMap(refs), t)
-      case Array("inh", t)                        => edge(inhs(c), t)
-      case Array("inhFile", t)                    => edge(sourceClasses(c).flatMap(inhs), t)
-      case Array("sees", p)                       =>
+      case Array("ref", t)     => edge(refs(c), t)
+      case Array("refFile", t) => edge(sourceClasses(c).flatMap(refs), t)
+      case Array("inh", t)     => edge(inhs(c), t)
+      case Array("inhFile", t) => edge(sourceClasses(c).flatMap(inhs), t)
+      case Array("sees", p)    =>
         val recorded = sourceClasses(c).exists(s => usedNames(s).exists(_._1 == p + "._"))
         Option.when(!isIn(p, c) && !recorded)("not in the package and no `" + p + "._`")
-      case _                                      => Some("unknown key")
+      case _ => Some("unknown key")
 
   /**
    * The expected keys that are missing, as `Class key (reason)`, for `expected` mapping each
