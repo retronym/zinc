@@ -1,0 +1,11 @@
+# Scala 3 variant: O inherits f from T.
+> p/compile
+> p/run
+# V becomes a value class, so V erases to Int in T's method. A clean build gives the forwarders an Int.
+# Zinc recompiles V, and T and Client, which use the name V. T's API hash is unchanged (its signature names
+# V, not V's erasure), so nothing reaches the class with the forwarders: its inheritance edge to T fires only on
+# an API change, and it uses no name that changed. Its forwarders keep the old erasure, and calling one throws
+# NoSuchMethodError on the old static trait method. Client asserts the forwarders match T's methods.
+$ copy-file changes/V.scala p/V.scala
+> p/compile
+> p/run
