@@ -760,15 +760,15 @@ class ExtractAPI[GlobalType <: Global](
     while (bcs ne Nil) {
       val bc = bcs.head
       val internal = isInternal(bc)
-      var e = bc.info.decls.elems
-      while (e ne null) {
-        val m = e.sym
-        val flags = if (fastFlags) m.rawflags & flagMask else m.flags(flagMask)
+      var ms = bc.info.decls.toList
+      while (ms ne Nil) {
+        val m = ms.head
+        val flags = if (fastFlags) m.rawflags & flagMask else (m.flags & flagMask)
         if (
           (flags & Flags.BridgeAndPrivateFlags) == 0 && !m.isConstructor &&
           (!internal || discoveryReadsAnnotations(m))
         ) result += m
-        e = e.next
+        ms = ms.tail
       }
       bcs = bcs.tail
     }
@@ -783,11 +783,11 @@ class ExtractAPI[GlobalType <: Global](
     val fastFlags = (flagMask & ~Flags.InitialFlags) == 0
     def walk(deferred: Boolean): Unit =
       info.baseClasses.foreach { bc =>
-        var e = bc.info.decls.elems
-        while (e ne null) {
-          val m = e.sym
-          e = e.next
-          val flags = if (fastFlags) m.rawflags & flagMask else m.flags(flagMask)
+        var ms = bc.info.decls.toList
+        while (ms ne Nil) {
+          val m = ms.head
+          ms = ms.tail
+          val flags = if (fastFlags) m.rawflags & flagMask else (m.flags & flagMask)
           if (
             (flags & Flags.BridgeAndPrivateFlags) == 0 &&
             ((flags & Flags.DEFERRED) != 0) == deferred &&
