@@ -52,6 +52,8 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       }
       val stop = System.currentTimeMillis
       debuglog("API phase took : " + ((stop - start) / 1000.0) + " s")
+      if (System.getProperty("xsbt.reportApiPhase") != null)
+        reporter.echo(NoPosition, s"[api-phase] ${stop - start}ms")
     }
 
     // TODO In 2.13, shouldSkipThisPhaseForJava should be overridden instead of cancelled
