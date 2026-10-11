@@ -784,6 +784,8 @@ class ExtractAPI[GlobalType <: Global](
       val ix = tpsA.indexOf(sx)
       val iy = tpsB.indexOf(sy)
       if (ix >= 0 || iy >= 0) ix == iy
+      else if (isExact(sx) || isExact(sy))
+        (sx eq sy) && x.typeArgs.corresponds(y.typeArgs)(same)
       else if (sx.isAbstractType || sx.isTypeParameterOrSkolem) true
       else if (sy.isAbstractType || sy.isTypeParameterOrSkolem) true
       else if (isTop(sx) && isTop(sy)) true
@@ -791,14 +793,20 @@ class ExtractAPI[GlobalType <: Global](
         (x, y) match {
           case (TypeRef(_, _, xs), TypeRef(_, _, ys)) =>
             (sx eq sy) && xs.size == ys.size && xs.corresponds(ys)(same)
+          case (RefinedType(xps, _), RefinedType(yps, _)) =>
+            xps.size == yps.size && xps.corresponds(yps)(same)
           case _ => sx eq sy
         }
     }
+    def isExact(s: Symbol) =
+      (s eq definitions.RepeatedParamClass) || (s eq definitions.JavaRepeatedParamClass) ||
+        (s eq definitions.ByNameParamClass)
     val pa = paramss(ta).filter(_.nonEmpty)
     val pb = paramss(tb).filter(_.nonEmpty)
     tpsA.size == tpsB.size && pa.size == pb.size &&
     pa.corresponds(pb)((xs, ys) =>
-      xs.size == ys.size && xs.corresponds(ys)((x, y) => same(x.tpe, y.tpe))
+      xs.size == ys.size && xs.head.isImplicit == ys.head.isImplicit &&
+        xs.corresponds(ys)((x, y) => same(x.tpe, y.tpe))
     )
   }
 
