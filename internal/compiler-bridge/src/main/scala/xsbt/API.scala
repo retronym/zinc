@@ -44,9 +44,10 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
         val w = ExtractAPI.walkNanos.getAndSet(0)
         val m = ExtractAPI.membersNanos.getAndSet(0)
         val f = ExtractAPI.fallbacks.getAndSet(0)
+        val b = ExtractAPI.perBaseNanos.getAndSet(0)
         reporter.echo(
           NoPosition,
-          s"[inherited-members-time] classes=$n walk=${w / 1000000}ms members=${m / 1000000}ms fallbacks=$f"
+          s"[inherited-members-time] classes=$n walk=${w / 1000000}ms members=${m / 1000000}ms perBase=${b / 1000000}ms fallbacks=$f"
         )
       }
       val stop = System.currentTimeMillis

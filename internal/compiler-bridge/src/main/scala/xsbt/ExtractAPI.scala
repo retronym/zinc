@@ -701,6 +701,7 @@ class ExtractAPI[GlobalType <: Global](
   private def nonPrivateInherited(info: Type, declSet: Set[Symbol]): List[Symbol] =
     inheritedMembersMode match {
       case "members" => byFindMembers(info, declSet)
+      case "perBase" => byBaseDecls(info)
       case "time" =>
         val walkFirst = (ExtractAPI.timedClasses.getAndIncrement() & 1) == 0
         def timed[T](acc: java.util.concurrent.atomic.AtomicLong)(f: => T): T = {
@@ -711,10 +712,12 @@ class ExtractAPI[GlobalType <: Global](
         }
         if (walkFirst) {
           val r = timed(ExtractAPI.walkNanos)(byBaseClassWalk(info, declSet))
+          timed(ExtractAPI.perBaseNanos)(byBaseDecls(info))
           timed(ExtractAPI.membersNanos)(byFindMembers(info, declSet))
           r
         } else {
           timed(ExtractAPI.membersNanos)(byFindMembers(info, declSet))
+          timed(ExtractAPI.perBaseNanos)(byBaseDecls(info))
           timed(ExtractAPI.walkNanos)(byBaseClassWalk(info, declSet))
         }
       case "compare" =>
@@ -736,20 +739,58 @@ class ExtractAPI[GlobalType <: Global](
     }
 
   private[this] val inheritedMembersMode: String =
-    Option(System.getProperty("xsbt.inheritedMembers")).getOrElse("walk")
+    Option(System.getProperty("xsbt.inheritedMembers")).getOrElse("perBase")
 
   private def byFindMembers(info: Type, declSet: Set[Symbol]): List[Symbol] =
     info.nonPrivateMembers.toList.filter(m => !declSet(m))
+
+  /**
+   * Every non-private declaration of every base class, overridden or not, except that a base
+   * class of this subproject contributes only what discovery reads. No member's type is
+   * consulted: a name's hashes combine all its declarations along the linearization, as Zinc's
+   * composition does for ancestors in this subproject, which is a superset of the members the
+   * class inherits.
+   */
+  private def byBaseDecls(info: Type): List[Symbol] = {
+    val result = new collection.mutable.ListBuffer[Symbol]
+    val flagMask = phase.flagMask
+    val fastFlags = (flagMask & ~Flags.InitialFlags) == 0
+    var bcs = info.baseClasses
+    if (bcs ne Nil) bcs = bcs.tail
+    while (bcs ne Nil) {
+      val bc = bcs.head
+      val internal = isInternal(bc)
+      var e = bc.info.decls.elems
+      while (e ne null) {
+        val m = e.sym
+        val flags = if (fastFlags) m.rawflags & flagMask else m.flags(flagMask)
+        if (
+          (flags & Flags.BridgeAndPrivateFlags) == 0 && !m.isConstructor &&
+          (!internal || discoveryReadsAnnotations(m))
+        ) result += m
+        e = e.next
+      }
+      bcs = bcs.tail
+    }
+    result.toList
+  }
 
   private def byBaseClassWalk(info: Type, declSet: Set[Symbol]): List[Symbol] = {
     val clazz = info.typeSymbol
     val found = new java.util.HashMap[Name, List[Symbol]]()
     val result = new collection.mutable.ListBuffer[Symbol]
+    val flagMask = phase.flagMask
+    val fastFlags = (flagMask & ~Flags.InitialFlags) == 0
     def walk(deferred: Boolean): Unit =
       info.baseClasses.foreach { bc =>
-        bc.info.decls.foreach { m =>
+        var e = bc.info.decls.elems
+        while (e ne null) {
+          val m = e.sym
+          e = e.next
+          val flags = if (fastFlags) m.rawflags & flagMask else m.flags(flagMask)
           if (
-            !m.hasFlag(Flags.BridgeAndPrivateFlags) && m.isDeferred == deferred &&
+            (flags & Flags.BridgeAndPrivateFlags) == 0 &&
+            ((flags & Flags.DEFERRED) != 0) == deferred &&
             (!m.isClassConstructor || (bc eq clazz))
           ) {
             val seen = found.get(m.name)
@@ -2335,6 +2376,7 @@ object ExtractAPI {
   private[xsbt] val walkNanos = new java.util.concurrent.atomic.AtomicLong
   private[xsbt] val membersNanos = new java.util.concurrent.atomic.AtomicLong
   private[xsbt] val fallbacks = new java.util.concurrent.atomic.AtomicLong
+  private[xsbt] val perBaseNanos = new java.util.concurrent.atomic.AtomicLong
 
   private val emptyAnnotationArray = new Array[xsbti.api.Annotation](0)
   private val erasedSignatureMarker: xsbti.api.Type =
