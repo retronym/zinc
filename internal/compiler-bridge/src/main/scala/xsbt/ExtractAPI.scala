@@ -549,8 +549,8 @@ class ExtractAPI[GlobalType <: Global](
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
     val declSet = decls.toSet
     val (inherited, platform) =
-      info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
+      nonPrivateInherited(info, declSet)
+        .filter(m => !isInternal(m.owner) || discoveryReadsAnnotations(m))
         .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     mkStructure(
       s,
@@ -687,6 +687,94 @@ class ExtractAPI[GlobalType <: Global](
     val it = byName.values.iterator
     while (it.hasNext) result = it.next() :: result
     result
+  }
+
+  /**
+   * The non-private members of `info` that it does not declare itself. `nonPrivateMembers` decides
+   * whether a member of a base class is overridden by comparing member types as seen from `info`,
+   * which costs an `asSeenFrom` per name declared in two base classes. Under the `walk` mode
+   * (property `xsbt.inheritedMembers`) the same walk compares the declared signatures' shapes
+   * instead: type parameter count, parameter list lengths, and parameter type symbols, where an
+   * abstract type or type parameter matches anything. `compare` runs both and reports classes
+   * where they differ.
+   */
+  private def nonPrivateInherited(info: Type, declSet: Set[Symbol]): List[Symbol] =
+    inheritedMembersMode match {
+      case "members" => byFindMembers(info, declSet)
+      case "compare" =>
+        val walked = byBaseClassWalk(info, declSet)
+        val reference = byFindMembers(info, declSet)
+        val missing = reference.filterNot(walked.toSet)
+        val extra = walked.filterNot(reference.toSet)
+        if (missing.nonEmpty || extra.nonEmpty) {
+          def show(ms: List[Symbol]) =
+            ms.map(m => s"${m.owner.fullName}.${m.name.decode}${m.info.paramss.map(_.size)}")
+              .mkString(", ")
+          reporter.echo(
+            NoPosition,
+            s"[inherited-members] ${info.typeSymbol.fullName}: walk missing [${show(missing)}] extra [${show(extra)}]"
+          )
+        }
+        walked
+      case _ => byBaseClassWalk(info, declSet)
+    }
+
+  private[this] val inheritedMembersMode: String =
+    Option(System.getProperty("xsbt.inheritedMembers")).getOrElse("walk")
+
+  private def byFindMembers(info: Type, declSet: Set[Symbol]): List[Symbol] =
+    info.nonPrivateMembers.toList.filter(m => !declSet(m))
+
+  private def byBaseClassWalk(info: Type, declSet: Set[Symbol]): List[Symbol] = {
+    val clazz = info.typeSymbol
+    val found = new java.util.HashMap[Name, List[Symbol]]()
+    val result = new collection.mutable.ListBuffer[Symbol]
+    def walk(deferred: Boolean): Unit =
+      info.baseClasses.foreach { bc =>
+        bc.info.decls.foreach { m =>
+          if (
+            !m.hasFlag(Flags.BridgeAndPrivateFlags) && m.isDeferred == deferred &&
+            (!m.isClassConstructor || (bc eq clazz))
+          ) {
+            val seen = found.get(m.name)
+            if (
+              (seen eq null) || seen.forall(e =>
+                (e ne m) && ((e.owner eq m.owner) || !sameShape(e, m))
+              )
+            ) {
+              found.put(m.name, if (seen eq null) m :: Nil else m :: seen)
+              if (!declSet(m)) result += m
+            }
+          }
+        }
+      }
+    walk(deferred = false)
+    walk(deferred = true)
+    result.toList
+  }
+
+  private def sameShape(a: Symbol, b: Symbol): Boolean = {
+    def isWild(t: Type) = {
+      val s = t.typeSymbolDirect
+      s.isAbstractType || s.isTypeParameterOrSkolem
+    }
+    def paramss(t: Type): List[List[Symbol]] = t match {
+      case PolyType(_, res)    => paramss(res)
+      case MethodType(ps, res) => ps :: paramss(res)
+      case _                   => Nil
+    }
+    val ta = a.info
+    val tb = b.info
+    val pa = paramss(ta).filter(_.nonEmpty)
+    val pb = paramss(tb).filter(_.nonEmpty)
+    ta.typeParams.size == tb.typeParams.size && pa.size == pb.size &&
+    pa.corresponds(pb) { (xs, ys) =>
+      xs.size == ys.size && xs.corresponds(ys) { (x, y) =>
+        val tx = x.tpe
+        val ty = y.tpe
+        isWild(tx) || isWild(ty) || (tx.typeSymbolDirect eq ty.typeSymbolDirect)
+      }
+    }
   }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
@@ -1703,8 +1791,8 @@ class ExtractAPI[GlobalType <: Global](
       sort((if (sym.isModuleClass) removeConstructors(decls) else decls).toArray).toList
     private val declSet = decls.toSet
     private val (inherited0, platform) =
-      info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
+      nonPrivateInherited(info, declSet)
+        .filter(m => !isInternal(m.owner) || discoveryReadsAnnotations(m))
         .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     val inherited: List[Symbol] = sort(inherited0.toArray).toList
     val stubbed: List[Symbol] =
