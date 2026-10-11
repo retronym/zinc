@@ -17,6 +17,8 @@ import xsbt.api.Discovery
 import xsbti.UseScope
 import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash, Parameterized, Type }
 
+import scala.util.hashing.MurmurHash3
+
 /**
  * A class's stored API omits the members it inherits from classes of its own subproject. Within
  * that subproject the invalidator walks the hierarchy instead; another subproject only sees the
@@ -74,14 +76,35 @@ private[inc] object MerkleHashes {
   def hasForwarderHashes(c: AnalyzedClass): Boolean =
     c.nameHashes.exists(h => forwarded(h.name).isDefined)
 
-  private def compose(classes: Seq[AnalyzedClass], suffix: String): Array[NameHash] =
-    classes
-      .flatMap(c => c.nameHashes.iterator.map(h => (h.name, h.scope) -> ((c.name, h.hash))))
-      .groupBy(_._1)
-      .map { case (k, v) => k -> v.map(_._2) }
-      .iterator
-      .map { case ((name, scope), hashes) => NameHash.of(name + suffix, scope, hashes.hashCode) }
-      .toArray
+  private final class Mix(var hash: Int, var count: Int)
+
+  private def compose(classes: Seq[AnalyzedClass], suffix: String): Array[NameHash] = {
+    val byScope = new java.util.EnumMap[UseScope, java.util.HashMap[String, Mix]](classOf[UseScope])
+    classes.foreach { c =>
+      val classHash = c.name.hashCode
+      c.nameHashes.foreach { h =>
+        var byName = byScope.get(h.scope)
+        if (byName eq null) {
+          byName = new java.util.HashMap[String, Mix]
+          byScope.put(h.scope, byName)
+        }
+        var mix = byName.get(h.name)
+        if (mix eq null) {
+          mix = new Mix(MurmurHash3.seqSeed, 0)
+          byName.put(h.name, mix)
+        }
+        mix.hash = MurmurHash3.mix(MurmurHash3.mix(mix.hash, classHash), h.hash)
+        mix.count += 1
+      }
+    }
+    val result = Array.newBuilder[NameHash]
+    byScope.forEach { (scope, byName) =>
+      byName.forEach { (name, mix) =>
+        result += NameHash.of(name + suffix, scope, MurmurHash3.finalizeHash(mix.hash, mix.count))
+      }
+    }
+    result.result()
+  }
 
   private def isTrait(c: AnalyzedClass): Boolean =
     c.api().classApi().definitionType == DefinitionType.Trait
