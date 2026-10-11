@@ -803,9 +803,9 @@ class ExtractAPI[GlobalType <: Global](
         var r = Same
         var xr = xs
         var yr = ys
-        while (r != Different && (xr ne Nil)) {
-          r = math.max(r, f(xr.head, yr.head))
-          if (r == Different) return Different
+        while ((r != Different) && (xr ne Nil)) {
+          val v = f(xr.head, yr.head)
+          r = if (v == Different) Different else math.max(r, v)
           xr = xr.tail
           yr = yr.tail
         }
@@ -833,7 +833,8 @@ class ExtractAPI[GlobalType <: Global](
               if (args == Different || prefixesSettled) args else Unsure
             }
           case (RefinedType(xps, _), RefinedType(yps, _)) =>
-            math.max(all(xps, yps)(same), Unsure)
+            val r = all(xps, yps)(same)
+            if (r == Different) Different else Unsure
           case _ => Unsure
         }
     }
