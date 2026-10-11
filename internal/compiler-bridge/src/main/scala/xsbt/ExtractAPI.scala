@@ -701,6 +701,22 @@ class ExtractAPI[GlobalType <: Global](
   private def nonPrivateInherited(info: Type, declSet: Set[Symbol]): List[Symbol] =
     inheritedMembersMode match {
       case "members" => byFindMembers(info, declSet)
+      case "time" =>
+        val walkFirst = (ExtractAPI.timedClasses.getAndIncrement() & 1) == 0
+        def timed[T](acc: java.util.concurrent.atomic.AtomicLong)(f: => T): T = {
+          val t0 = System.nanoTime
+          val r = f
+          acc.addAndGet(System.nanoTime - t0)
+          r
+        }
+        if (walkFirst) {
+          val r = timed(ExtractAPI.walkNanos)(byBaseClassWalk(info, declSet))
+          timed(ExtractAPI.membersNanos)(byFindMembers(info, declSet))
+          r
+        } else {
+          timed(ExtractAPI.membersNanos)(byFindMembers(info, declSet))
+          timed(ExtractAPI.walkNanos)(byBaseClassWalk(info, declSet))
+        }
       case "compare" =>
         val walked = byBaseClassWalk(info, declSet)
         val reference = byFindMembers(info, declSet)
@@ -2279,6 +2295,10 @@ class ExtractAPI[GlobalType <: Global](
 }
 
 object ExtractAPI {
+  private[xsbt] val timedClasses = new java.util.concurrent.atomic.AtomicLong
+  private[xsbt] val walkNanos = new java.util.concurrent.atomic.AtomicLong
+  private[xsbt] val membersNanos = new java.util.concurrent.atomic.AtomicLong
+
   private val emptyAnnotationArray = new Array[xsbti.api.Annotation](0)
   private val erasedSignatureMarker: xsbti.api.Type =
     xsbti.api.Singleton.of(xsbti.api.Path.of(Array(xsbti.api.Id.of("<erased-signature>"))))

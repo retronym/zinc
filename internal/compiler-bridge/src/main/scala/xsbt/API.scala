@@ -39,6 +39,15 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       nonLocalClassSymbolsInCurrentUnits.clear()
 
       callback.apiPhaseCompleted()
+      if (System.getProperty("xsbt.inheritedMembers") == "time") {
+        val n = ExtractAPI.timedClasses.getAndSet(0)
+        val w = ExtractAPI.walkNanos.getAndSet(0)
+        val m = ExtractAPI.membersNanos.getAndSet(0)
+        reporter.echo(
+          NoPosition,
+          s"[inherited-members-time] classes=$n walk=${w / 1000000}ms members=${m / 1000000}ms"
+        )
+      }
       val stop = System.currentTimeMillis
       debuglog("API phase took : " + ((stop - start) / 1000.0) + " s")
     }
