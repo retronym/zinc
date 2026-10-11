@@ -755,7 +755,7 @@ class ExtractAPI[GlobalType <: Global](
             val seen = found.get(m.name)
             if (
               (seen eq null) || seen.forall(e =>
-                (e ne m) && ((e.owner eq m.owner) || !sameShape(e, m))
+                (e ne m) && ((e.owner eq m.owner) || !overrides(info, e, m))
               )
             ) {
               found.put(m.name, if (seen eq null) m :: Nil else m :: seen)
@@ -771,12 +771,13 @@ class ExtractAPI[GlobalType <: Global](
 
   /**
    * Would `a` and `b` be the same member if one were seen from a subclass of the other's owner?
-   * Their declared signatures are compared structurally without `asSeenFrom`: a method's own type
-   * parameters match by position, a class's type parameters and abstract types match anything
-   * (they are what `asSeenFrom` would substitute), aliases and annotations are looked through,
-   * and `Any`, `AnyRef` and `Object` are one type, as for Java-defined methods.
+   * Their declared signatures are compared structurally, without `asSeenFrom`: [[Same]] or
+   * [[Different]] when that settles it, [[Unsure]] when the answer depends on what `asSeenFrom`
+   * would substitute (a class's type parameters, abstract types, prefixes, singletons) or on a
+   * Java-specific rule (`Object` as `Any`). A method's own type parameters match by position, and
+   * aliases and annotations are looked through.
    */
-  private def sameShape(a: Symbol, b: Symbol): Boolean = {
+  private def compareShapes(a: Symbol, b: Symbol): Int = {
     val ta = a.info
     val tb = b.info
     val tpsA = ta.typeParams
@@ -792,39 +793,73 @@ class ExtractAPI[GlobalType <: Global](
     }
     def isTop(s: Symbol) =
       (s eq definitions.AnyClass) || (s eq definitions.AnyRefClass) || (s eq definitions.ObjectClass)
-    def same(x0: Type, y0: Type): Boolean = {
+    def isExact(s: Symbol) =
+      (s eq definitions.RepeatedParamClass) || (s eq definitions.JavaRepeatedParamClass) ||
+        (s eq definitions.ByNameParamClass)
+    def isWild(s: Symbol) = s.isAbstractType || s.isTypeParameterOrSkolem
+    def all[T](xs: List[T], ys: List[T])(f: (T, T) => Int): Int =
+      if (xs.size != ys.size) Different
+      else {
+        var r = Same
+        var xr = xs
+        var yr = ys
+        while (r != Different && (xr ne Nil)) {
+          r = math.max(r, f(xr.head, yr.head))
+          if (r == Different) return Different
+          xr = xr.tail
+          yr = yr.tail
+        }
+        r
+      }
+    def same(x0: Type, y0: Type): Int = {
       val x = norm(x0)
       val y = norm(y0)
       val sx = x.typeSymbolDirect
       val sy = y.typeSymbolDirect
       val ix = tpsA.indexOf(sx)
       val iy = tpsB.indexOf(sy)
-      if (ix >= 0 || iy >= 0) ix == iy
-      else if (isExact(sx) || isExact(sy))
-        (sx eq sy) && x.typeArgs.corresponds(y.typeArgs)(same)
-      else if (sx.isAbstractType || sx.isTypeParameterOrSkolem) true
-      else if (sy.isAbstractType || sy.isTypeParameterOrSkolem) true
-      else if (isTop(sx) && isTop(sy)) true
+      if (ix >= 0 || iy >= 0) { if (ix == iy) Same else Different }
+      else if (isExact(sx) || isExact(sy)) {
+        if (sx ne sy) Different else all(x.typeArgs, y.typeArgs)(same)
+      } else if (isWild(sx) || isWild(sy)) Unsure
+      else if (isTop(sx) && isTop(sy)) { if (sx eq sy) Same else Unsure }
       else
         (x, y) match {
-          case (TypeRef(_, _, xs), TypeRef(_, _, ys)) =>
-            (sx eq sy) && xs.size == ys.size && xs.corresponds(ys)(same)
+          case (TypeRef(px, _, xs), TypeRef(py, _, ys)) =>
+            if (sx ne sy) Different
+            else {
+              val args = all(xs, ys)(same)
+              val prefixesSettled = sx.isStatic || (px =:= py)
+              if (args == Different || prefixesSettled) args else Unsure
+            }
           case (RefinedType(xps, _), RefinedType(yps, _)) =>
-            xps.size == yps.size && xps.corresponds(yps)(same)
-          case _ => sx eq sy
+            math.max(all(xps, yps)(same), Unsure)
+          case _ => Unsure
         }
     }
-    def isExact(s: Symbol) =
-      (s eq definitions.RepeatedParamClass) || (s eq definitions.JavaRepeatedParamClass) ||
-        (s eq definitions.ByNameParamClass)
-    val pa = paramss(ta).filter(_.nonEmpty)
-    val pb = paramss(tb).filter(_.nonEmpty)
-    tpsA.size == tpsB.size && pa.size == pb.size &&
-    pa.corresponds(pb)((xs, ys) =>
-      xs.size == ys.size && xs.head.isImplicit == ys.head.isImplicit &&
-        xs.corresponds(ys)((x, y) => same(x.tpe, y.tpe))
-    )
+    if (tpsA.size != tpsB.size) Different
+    else {
+      val pa = paramss(ta).filter(_.nonEmpty)
+      val pb = paramss(tb).filter(_.nonEmpty)
+      all(pa, pb)((xs, ys) =>
+        if (xs.size != ys.size || xs.head.isImplicit != ys.head.isImplicit) Different
+        else all(xs, ys)((x, y) => same(x.tpe, y.tpe))
+      )
+    }
   }
+  private final val Different = 0
+  private final val Same = 1
+  private final val Unsure = 2
+
+  /** Does `b` override `a` (or vice versa) as members of `info`? */
+  private def overrides(info: Type, a: Symbol, b: Symbol): Boolean =
+    compareShapes(a, b) match {
+      case Different => false
+      case Same      => true
+      case _ =>
+        ExtractAPI.fallbacks.incrementAndGet()
+        info.memberType(a) matches info.memberType(b)
+    }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
   private def discoveryReads(m: Symbol): Boolean = discoveryReadsAnnotations(m) ||
@@ -2298,6 +2333,7 @@ object ExtractAPI {
   private[xsbt] val timedClasses = new java.util.concurrent.atomic.AtomicLong
   private[xsbt] val walkNanos = new java.util.concurrent.atomic.AtomicLong
   private[xsbt] val membersNanos = new java.util.concurrent.atomic.AtomicLong
+  private[xsbt] val fallbacks = new java.util.concurrent.atomic.AtomicLong
 
   private val emptyAnnotationArray = new Array[xsbti.api.Annotation](0)
   private val erasedSignatureMarker: xsbti.api.Type =
