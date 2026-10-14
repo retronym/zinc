@@ -44,6 +44,43 @@ def refs_in(text, own_repo):
 SUBJECT_REF = re.compile(r"#\d+|@[0-9a-f]{7,40}")
 
 
+def classify(title, paths):
+    non_test = {p: n for p, n in paths.items() if not TEST.search(p)}
+    sem = {p: n for p, n in non_test.items() if SEMANTIC.search(p)}
+    changed = sum(sem.values())
+    if sem:
+        incidental = len(paths) > 12 and changed * 10 < sum(non_test.values())
+        kind = "mechanical" if MECHANICAL.search(title) or incidental else "semantic"
+    elif non_test:
+        kind = "plumbing"
+    else:
+        kind = "test"
+    return kind, sorted(p.split("/")[-1] for p in sem)
+
+
+def build_open_units(open_prs):
+    out = {}
+    for p in open_prs:
+        files = {f["path"]: f["additions"] + f["deletions"] for f in p["files"]}
+        kind, sem = classify(p["title"], files)
+        text = p["title"] + "\n" + p["body"]
+        u = {"source": p["source"], "repo": p["repo"], "pr": p["number"], "part": None, "title": p["title"], "date": p["updated"],
+             "files": files, "text": text, "shas": [], "url": p["url"], "kind": kind, "semantic_files": sem,
+             "subjects": {norm_subject(p["title"])}, "authors": {p["author"]}, "open": True, "draft": p["draft"],
+             "id": f"{p['source']}:{p['repo']}#{p['number']}"}
+        u["refs"] = sorted(r for r in refs_in(text, p["repo"]) if not (r[0] == p["repo"] and r[1] == p["number"]))
+        out[(p["source"], "open", p["repo"], p["number"])] = u
+    return out
+
+
+def presence(us, line):
+    merged = [u for u in us if u["source"] == line and not u.get("open")]
+    if merged:
+        return "has", merged
+    opens = [u for u in us if u["source"] == line and u.get("open")]
+    return ("in-review", opens) if opens else (None, [])
+
+
 def segment(cs, num):
     marks = [bool([m for m in SUBJECT_REF.findall(c["message"].split("\n")[0]) if m != f"#{num}"]) for c in cs]
     if sum(marks) < 2:
@@ -86,19 +123,7 @@ def build_units(commits):
                 u["text"] += "\n" + pr["body"]
     sha_owner = {sha: u for u in by.values() for sha in u["shas"]}
     for u in by.values():
-        paths = u["files"]
-        non_test = {p: n for p, n in paths.items() if not TEST.search(p)}
-        sem = {p: n for p, n in non_test.items() if SEMANTIC.search(p)}
-        changed = sum(sem.values())
-        if sem:
-            total = sum(non_test.values())
-            incidental = len(paths) > 12 and changed * 10 < total
-            u["kind"] = "mechanical" if MECHANICAL.search(u["title"]) or incidental else "semantic"
-        elif non_test:
-            u["kind"] = "plumbing"
-        else:
-            u["kind"] = "test"
-        u["semantic_files"] = sorted(p.split("/")[-1] for p in sem)
+        u["kind"], u["semantic_files"] = classify(u["title"], u["files"])
         refs = refs_in(u["title"] + "\n" + u["text"], u["repo"])
         for m in re.finditer(r"@([0-9a-f]{7,40})", u["text"]):
             for sha, o in sha_owner.items():
@@ -274,12 +299,14 @@ def main():
     a = ap.parse_args()
     out = Path(a.out)
     units = build_units(json.load(open(out / "commits.json")))
+    if (out / "open_prs.json").exists():
+        units.update(build_open_units(json.load(open(out / "open_prs.json"))))
     ledger = json.load(open(a.verdicts)) if Path(a.verdicts).exists() else {}
     report = []
     links = list(ledger_links(units, ledger))
     for g in merge_groups(chains(units), links):
         us = [units[k] for k in g]
-        present = {u["source"] for u in us}
+        present = {u["source"] for u in us if not u.get("open")}
         kinds = {u["kind"] for u in us}
         kind = "semantic" if "semantic" in kinds else "mechanical" if "mechanical" in kinds else "plumbing" if "plumbing" in kinds else "test"
         lead = min(us, key=lambda u: u["date"])
@@ -288,8 +315,11 @@ def main():
         status = {}
         verdicts = group_verdicts(g, units, ledger)
         for line in LINES:
-            if line in present:
-                status[line] = {"state": "has", "refs": [u["pr"] for u in us if u["source"] == line]}
+            state, there = presence(us, line)
+            if state == "has":
+                status[line] = {"state": "has", "refs": [u["pr"] for u in there]}
+            elif state == "in-review":
+                status[line] = {"state": "in-review", "prs": [{"repo": u["repo"], "pr": u["pr"], "url": u["url"], "draft": u["draft"], "title": u["title"], "author": sorted(u["authors"])[0], "updated": u["date"][:10]} for u in there]}
             elif kind in ("test", "plumbing"):
                 status[line] = {"state": "n/a", "reason": f"{kind} only"}
             else:
@@ -308,14 +338,14 @@ def main():
             if v:
                 status[line] = ledger_status(v)
         report.append({"key": key, "title": lead["title"], "kind": kind, "latest": latest, "first": lead["date"], "lines": status,
-                       "edges": chain_edges(g, units, links), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
+                       "edges": chain_edges(g, units, links), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "state": ("draft" if u["draft"] else "open") if u.get("open") else "merged", "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
     unmatched = sorted(set(ledger) - {unit_key_str(u) for u in units.values()})
     if unmatched:
         print("ledger keys matching no fix:", ", ".join(unmatched))
     report.sort(key=lambda r: r["latest"], reverse=True)
     (out / "report.json").write_text(json.dumps(report, indent=1))
     recent = [r for r in report if r["latest"][:10] >= a.since]
-    sym = {"has": "✓", "pending": "**pending**", "triage": "triage", "probably-n/a": "n/a?", "n/a": "n/a", "ported": "ported", "wontfix": "n/a"}
+    sym = {"has": "✓", "pending": "**pending**", "triage": "triage", "probably-n/a": "n/a?", "n/a": "n/a", "ported": "ported", "wontfix": "n/a", "in-review": "open PR"}
     row = lambda r: f"| {r['first'][:10]} {r['title'][:75].replace('|', '/')} (`{r['key']}`) | " + " | ".join(sym.get(r['lines'][l]['state'], r['lines'][l]['state']) for l in LINES) + " |"
     head = ["| fix | " + " | ".join(LINES) + " |", "|---|" + "---|" * len(LINES)]
     md = [f"# Bridge cross-port gaps (chains with activity since {a.since})", "", "## Behaviour changes", ""] + head

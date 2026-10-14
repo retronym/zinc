@@ -12,12 +12,12 @@ TEMPLATE = r'''<!doctype html>
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--fg:#1c2230;--fg2:#4f5a6b;--fg3:#7d8797;--line:#dde2ea;
 --l0:#2a78d6;--l1:#d9531e;--l2:#14916a;--l3:#7b55c9;
---crit:#c0392b;--crit-bg:#fde8e6;--warn:#9a6700;--warn-bg:#fff1c9;--mute:#7d8797;--mute-bg:#eef1f5;--good:#1a7f37;--good-bg:#e6f4ea;
+--crit:#c0392b;--crit-bg:#fde8e6;--warn:#9a6700;--warn-bg:#fff1c9;--mute:#7d8797;--mute-bg:#eef1f5;--good:#1a7f37;--good-bg:#e6f4ea;--rev:#6b46c1;--rev-bg:#efe9fb;
 --sans:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,"SF Mono",Menlo,monospace}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1419;--panel:#171d25;--fg:#e8ecf2;--fg2:#aab4c2;--fg3:#7b8694;--line:#2a3340;
---l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;color-scheme:dark}}
+--l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;--rev:#b79df0;--rev-bg:#2a2140;color-scheme:dark}}
 :root[data-theme="dark"]{--bg:#0f1419;--panel:#171d25;--fg:#e8ecf2;--fg2:#aab4c2;--fg3:#7b8694;--line:#2a3340;
---l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;color-scheme:dark}
+--l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;--rev:#b79df0;--rev-bg:#2a2140;color-scheme:dark}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--sans);padding-inline:16px;padding-block:0 48px}
 .wrap{max-width:1120px;margin:0 auto}h1{font-size:1.5rem;margin:28px 0 4px}h2{font-size:1.05rem;margin:28px 0 8px}
 p{margin:0 0 8px;color:var(--fg2);max-width:78ch}code{font:.85em var(--mono);background:var(--mute-bg);padding:1px 5px;border-radius:4px}
@@ -40,6 +40,7 @@ a:focus-visible{outline:2px solid var(--l0)}
 <span><i style="background:var(--crit-bg);border-color:var(--crit)"></i>pending: should exist, missing</span>
 <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>triage: separate implementation, decide if the symptom applies</span>
 <span><i style="background:var(--mute-bg);border-color:var(--mute);border-style:dashed"></i>n/a? looks mechanical, confirm</span>
+<span><i style="background:var(--rev-bg);border-color:var(--rev)"></i>open PR: a submitted port exists, avoid duplicate work</span>
 <span><i style="background:transparent;border-color:transparent"></i>n/a: excluded by rule</span>
 </div>
 <h2>Behaviour changes</h2><div class="panel" id="sem"></div>
@@ -60,6 +61,7 @@ const STATE = {
   "probably-n/a": {fill: "var(--mute-bg)", stroke: "var(--mute)", ink: "var(--mute)", label: "n/a?", dash: "3 3"},
   "n/a": {fill: "none", stroke: "none", ink: "var(--fg3)", label: "n/a", dash: ""},
   ported: {fill: "var(--good-bg)", stroke: "var(--good)", ink: "var(--good)", label: "ported", dash: ""},
+  "in-review": {fill: "var(--rev-bg)", stroke: "var(--rev)", ink: "var(--rev)", label: "open PR", dash: ""},
   wontfix: {fill: "none", stroke: "none", ink: "var(--fg3)", label: "won't port", dash: ""}
 };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -80,9 +82,9 @@ const unitHtml = u => {
   const commits = u.shas.slice(0, 6).map(h => `<a href="https://github.com/${u.repo}/commit/${h}" target="_blank" rel="noopener">${h.slice(0, 7)}</a>`).join(" ") + (u.shas.length > 6 ? ` +${u.shas.length - 6} more` : "");
   const cites = (u.refs || []).map(r => `<a href="https://github.com/${r[0]}/issues/${r[1]}" target="_blank" rel="noopener">${esc(r[0].split("/")[1])}#${r[1]}</a>`).join(" ");
   return `<div class="u"><b>${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))}</b> ${esc(u.title)}
-    <div class="m">${esc(lane)} · ${esc(u.date)} · ${esc(u.authors.join(", "))}${u.files.length ? "<br>extraction files: " + esc(u.files.join(", ")) : ""}<br>commits: ${commits}${cites ? "<br>cites: " + cites : ""}</div></div>`;
+    <div class="m">${u.state === "merged" ? "merged" : "<b>" + esc(u.state) + " PR</b>, updated"} ${esc(u.date)} · ${esc(lane)} · ${esc(u.authors.join(", "))}${u.files.length ? "<br>extraction files: " + esc(u.files.join(", ")) : ""}<br>commits: ${commits}${cites ? "<br>cites: " + cites : ""}</div></div>`;
 };
-const unitLine = u => `<div class="l">${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))} <span class="m">${esc(LINES.find(l => l[0] === u.source)[1])} · ${esc(u.date)}</span></div>`;
+const unitLine = u => `<div class="l">${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))} <span class="m">${esc(LINES.find(l => l[0] === u.source)[1])} · ${u.state === "merged" ? esc(u.date) : esc(u.state) + " PR"}</span></div>`;
 const refLink = r => { const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(r); const href = m ? `https://github.com/${m[1]}/issues/${m[2]}` : /^https:\/\//.test(r) ? r : null; return href ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(r)}</a>` : esc(r); };
 const linkText = (node, url) => { if (!url) return node; const a = el("a", {href: url, target: "_blank", rel: "noopener"}); a.append(node); return a; };
 function draw(host, rows, ghostArrows) {
@@ -102,13 +104,13 @@ function draw(host, rows, ghostArrows) {
   rows.forEach((r, ri) => {
     const y0 = HEAD_H + ri * ROW_H, cy = y0 + 22;
     svg.append(el("line", {x1: 0, y1: y0, x2: W, y2: y0, stroke: "var(--line)"}));
-    const lead = r.units[0];
+    const lead = r.units.find(u => u.state === "merged") || r.units[0];
     const title = txt(clip(r.title, 52), {x: 12, y: cy - 2, "font-size": 13, "font-weight": 600, fill: "var(--fg)", class: "lnk"});
     svg.append(withTip(linkText(title, lead.url), () => `<div class="h">${esc(r.title)}</div>${r.units.map(unitLine).join("")}<div class="m">hover a dot for commits and files</div>`));
     const keyUnit = r.units[0];
     svg.append(txt(`${r.first.slice(0, 10)} · ${r.key}`, {x: 12, y: cy + 15, "font-size": 11, fill: "var(--fg3)", "font-family": "var(--mono)"}));
     const present = {};
-    r.units.forEach(u => { (present[u.source] = present[u.source] || []).push(u); });
+    r.units.filter(u => u.state === "merged").forEach(u => { (present[u.source] = present[u.source] || []).push(u); });
     const lane = s => LINES.findIndex(l => l[0] === s);
     const edges = new Map();
     r.edges.forEach(e => { const a = lane(e.from.split(":")[0]), b = lane(e.to.split(":")[0]); if (a === b) return; const k = a + ">" + b; (edges.get(k) || edges.set(k, []).get(k)).push(e); });
@@ -126,12 +128,15 @@ function draw(host, rows, ghostArrows) {
       const s = STATE[st.state] || STATE["n/a"];
       const g = el("g", {style: "cursor:help"});
       g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
-      g.append(txt(s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
-      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}${st.ref ? "<br>ported as " + refLink(st.ref) : ""}${st.tracking ? "<br>tracking: " + refLink(st.tracking) : ""}</div>
+      g.append(txt(st.state === "in-review" && st.prs.every(p => p.draft) ? "draft PR" : s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
+      const prs = st.prs || [];
+      const prHtml = prs.map(p => `<div class="l"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)}#${p.pr}</a> ${esc(p.title)}<div class="m">${p.draft ? "draft" : "open"} · ${esc(p.author)} · updated ${esc(p.updated)}</div></div>`).join("");
+      const ghostNode = prs.length ? linkText(g, prs[0].url) : g;
+      svg.append(withTip(ghostNode, () => prHtml + `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}${st.ref ? "<br>ported as " + refLink(st.ref) : ""}${st.tracking ? "<br>tracking: " + refLink(st.tracking) : ""}</div>
         <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
     });
     edges.forEach((es, k) => { const [a, b] = k.split(">").map(Number);
-      const led = es.every(e => e.kind === "ledger"); arc(a, b, led ? "var(--good)" : "var(--fg2)", led ? "a-good" : "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join("")); });
+      const led = es.every(e => e.kind === "ledger"); arc(a, b, led ? "var(--good)" : "var(--fg2)", led ? "a-good" : "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join(""), !present[LINES[b][0]]); });
     if (ghostArrows) {
       const origin = lane(lead.source);
       LINES.forEach(([id], li) => { const st = r.lines[id].state;
@@ -157,7 +162,7 @@ function draw(host, rows, ghostArrows) {
 }
 const sem = DATA.filter(r => r.kind === "semantic"), mech = DATA.filter(r => r.kind === "mechanical");
 const count = s => sem.reduce((n, r) => n + Object.values(r.lines).filter(l => l.state === s).length, 0);
-document.getElementById("tiles").innerHTML = [[sem.length, "behaviour changes tracked"], [count("pending"), "pending ports"], [count("triage"), "cells to triage"], [mech.length, "look mechanical, confirm"]]
+document.getElementById("tiles").innerHTML = [[sem.length, "behaviour changes tracked"], [count("pending"), "pending ports"], [count("triage"), "cells to triage"], [count("in-review"), "ports in review (open or draft PRs)"], [mech.length, "look mechanical, confirm"]]
   .map(([n, l]) => `<div class="tile"><b>${n}</b><span>${l}</span></div>`).join("");
 draw(document.getElementById("sem"), sem, true);
 draw(document.getElementById("mech"), mech, false);
