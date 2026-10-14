@@ -22,8 +22,9 @@ p{margin:0 0 8px;color:var(--fg2);max-width:78ch}code{font:.85em var(--mono);bac
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}.tile b{display:block;font-size:1.6rem;line-height:1.1}.tile span{color:var(--fg2);font-size:.85rem}
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.85rem;color:var(--fg2);margin:10px 0}.legend i{display:inline-block;width:14px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px;border:1.5px solid}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 0;overflow-x:auto}
-svg{display:block;min-width:1040px;width:100%;height:auto}svg text{font-family:var(--sans)}
+.wrap{min-width:1040px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+svg{display:block;min-width:1040px;width:100%;height:auto}
+.lanehead{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);border-radius:8px 8px 0 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}svg text{font-family:var(--sans)}
 a:focus-visible{outline:2px solid var(--l0)}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
 <h1>Bridge cross-port gaps</h1>
@@ -42,7 +43,7 @@ a:focus-visible{outline:2px solid var(--l0)}details summary{cursor:pointer;font-
 const DATA = __DATA__;
 const LINES = [["scala2","scala/scala 2.13.x","--l0"],["scala3","scala/scala3 main","--l1"],["zinc-develop","sbt/zinc develop","--l2"],["zinc-1.12.x","sbt/zinc 1.12.x","--l3"]];
 const NS = "http://www.w3.org/2000/svg";
-const LABEL_W = 340, COL_W = 175, ROW_H = 58, HEAD_H = 34, W = LABEL_W + COL_W * 4 + 10;
+const LABEL_W = 340, COL_W = 175, ROW_H = 58, HEAD_H = 4, W = LABEL_W + COL_W * 4 + 10;
 const cx = i => LABEL_W + COL_W * i + COL_W / 2;
 const el = (n, a = {}, kids = []) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); for (const c of kids) e.append(c); return e; };
 const txt = (s, a) => { const t = el("text", a); t.textContent = s; return t; };
@@ -61,11 +62,13 @@ function draw(host, rows, ghostArrows) {
   const marker = (id, color) => defs.append(el("marker", {id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse"}, [el("path", {d: "M0 0L10 5L0 10z", fill: color})]));
   marker("a-solid", "var(--fg2)"); marker("a-crit", "var(--crit)"); marker("a-warn", "var(--warn)");
   svg.append(defs);
+  const hs = el("svg", {viewBox: `0 0 ${W} 30`, role: "presentation"});
   LINES.forEach(([id, name, col], i) => {
-    svg.append(el("rect", {x: LABEL_W + COL_W * i + 4, y: 4, width: COL_W - 8, height: 24, rx: 5, fill: `var(${col})`}));
-    svg.append(txt(name, {x: cx(i), y: 20, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#fff"}));
-    svg.append(el("line", {x1: cx(i), y1: HEAD_H, x2: cx(i), y2: H - 4, stroke: `var(${col})`, "stroke-opacity": .18, "stroke-width": 2}));
+    hs.append(el("rect", {x: LABEL_W + COL_W * i + 4, y: 3, width: COL_W - 8, height: 24, rx: 5, fill: `var(${col})`}));
+    hs.append(txt(name, {x: cx(i), y: 19, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#fff"}));
+    svg.append(el("line", {x1: cx(i), y1: 0, x2: cx(i), y2: H, stroke: `var(${col})`, "stroke-opacity": .18, "stroke-width": 2}));
   });
+  hs.append(txt("fix", {x: 12, y: 19, "font-size": 12, "font-weight": 600, fill: "var(--fg3)"}));
   rows.forEach((r, ri) => {
     const y0 = HEAD_H + ri * ROW_H, cy = y0 + 22;
     svg.append(el("line", {x1: 0, y1: y0, x2: W, y2: y0, stroke: "var(--line)"}));
@@ -110,7 +113,8 @@ function draw(host, rows, ghostArrows) {
       if (url) { const a = el("a", {href: url.url, target: "_blank", rel: "noopener"}); a.append(t); svg.append(a); } else svg.append(t);
     });
   });
-  host.replaceChildren(svg);
+  const head = document.createElement("div"); head.className = "lanehead"; head.append(hs);
+  host.replaceChildren(head, svg);
 }
 const sem = DATA.filter(r => r.kind === "semantic"), mech = DATA.filter(r => r.kind === "mechanical");
 const count = s => sem.reduce((n, r) => n + Object.values(r.lines).filter(l => l.state === s).length, 0);
