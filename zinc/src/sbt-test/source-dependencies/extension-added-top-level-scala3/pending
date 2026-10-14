@@ -1,0 +1,7 @@
+# C, in package a.b, resolves t.m to the extension in T's companion.
+> p/compile
+
+# A top-level extension in a new file of package a.b wins over the companion: t.m is a String
+# and a clean build rejects C. Zinc compiles the new file alone.
+$ copy-file changes/Ext.scala p/Ext.scala
+-> p/compile
