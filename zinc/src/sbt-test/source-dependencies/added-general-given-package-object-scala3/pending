@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, summons an A: `import a.X.given` supplies `given B`.
+> p/run B
+# `package object b` gains `given A`, at the same nesting level as the import. Scala 3.7+ picks the most general
+# instance, so a clean build chooses A. Client has no edge to the package object (G1, a new trigger); Zinc recompiles
+# PObj.scala only and Client keeps B. Lean: SpecGivens.general_added_stale.
+$ copy-file changes/PObj.scala p/PObj.scala
+> p/run A
