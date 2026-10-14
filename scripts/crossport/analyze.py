@@ -159,9 +159,77 @@ def chains(units):
     return list(groups.values())
 
 
-def chain_edges(g, units):
+def unit_key_str(u):
+    return f"{u['source']}#{u['pr'] or u['shas'][0][:10]}" + (f"/{u['part'][0]}" if u["part"] else "")
+
+
+def unit_key(key, units):
+    m = re.fullmatch(r"([\w.\-]+)#(\w+)(?:/(\d+))?", key)
+    if not m:
+        return None
+    cand = (m.group(1), int(m.group(2)) if m.group(2).isdigit() else m.group(2))
+    if m.group(3):
+        cand += (int(m.group(3)) - 1,)
+    return cand if cand in units else None
+
+
+def resolve_ref(ref, units, line=None):
+    m = re.fullmatch(r"([\w.\-]+/[\w.\-]+)#(\d+)", ref or "")
+    if not m:
+        return []
+    ks = [k for k, u in units.items() if u["repo"] == m.group(1) and u["pr"] == int(m.group(2))]
+    return [k for k in ks if units[k]["source"] == line] or ks
+
+
+def ledger_links(units, ledger):
+    for key, lines in ledger.items():
+        k = unit_key(key, units)
+        if not k:
+            continue
+        for line, v in lines.items():
+            if v.get("state") == "ported":
+                for t in resolve_ref(v.get("ref"), units, line):
+                    if t != k:
+                        yield k, t
+
+
+def merge_groups(groups, links):
+    where = {k: i for i, g in enumerate(groups) for k in g}
+    parent = list(range(len(groups)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b in links:
+        parent[find(where[a])] = find(where[b])
+    merged = {}
+    for i, g in enumerate(groups):
+        merged.setdefault(find(i), []).extend(g)
+    return list(merged.values())
+
+
+def ledger_status(v):
+    return {"state": v["state"], "reason": v.get("reason", ""), "ref": v.get("ref"), "tracking": v.get("tracking"), "ledger": True}
+
+
+def group_verdicts(g, units, ledger):
+    out = {}
+    for k in sorted(g, key=lambda k: units[k]["date"]):
+        for line, v in ledger.get(unit_key_str(units[k]), {}).items():
+            out[line] = v
+    return out
+
+
+def chain_edges(g, units, extra=()):
     ids = {k: units[k]["id"] for k in g}
     out = {}
+    for k1, k2 in extra:
+        if k1 in ids and k2 in ids:
+            a, b = sorted([k1, k2], key=lambda k: (units[k]["date"], LINES.index(units[k]["source"]) if units[k]["source"].startswith("zinc") else 9))
+            out[(ids[a], ids[b])] = "ledger"
     for i, k1 in enumerate(g):
         for k2 in g[i + 1:]:
             u1, u2 = units[k1], units[k2]
@@ -179,7 +247,7 @@ def chain_edges(g, units):
             if not kind:
                 continue
             a, b = sorted([k1, k2], key=lambda k: (units[k]["date"], LINES.index(units[k]["source"]) if units[k]["source"].startswith("zinc") else 9))
-            out[(ids[a], ids[b])] = kind
+            out.setdefault((ids[a], ids[b]), kind)
     return [{"from": f, "to": t, "kind": k} for (f, t), k in out.items()]
 
 
@@ -208,15 +276,17 @@ def main():
     units = build_units(json.load(open(out / "commits.json")))
     ledger = json.load(open(a.verdicts)) if Path(a.verdicts).exists() else {}
     report = []
-    for g in chains(units):
+    links = list(ledger_links(units, ledger))
+    for g in merge_groups(chains(units), links):
         us = [units[k] for k in g]
         present = {u["source"] for u in us}
         kinds = {u["kind"] for u in us}
         kind = "semantic" if "semantic" in kinds else "mechanical" if "mechanical" in kinds else "plumbing" if "plumbing" in kinds else "test"
         lead = min(us, key=lambda u: u["date"])
-        key = f"{lead['source']}#{lead['pr'] or lead['shas'][0][:10]}" + (f"/{lead['part'][0]}" if lead["part"] else "")
+        key = unit_key_str(lead)
         latest = max(u["date"] for u in us)
         status = {}
+        verdicts = group_verdicts(g, units, ledger)
         for line in LINES:
             if line in present:
                 status[line] = {"state": "has", "refs": [u["pr"] for u in us if u["source"] == line]}
@@ -234,12 +304,12 @@ def main():
                     status[line] = {"state": "pending", "reason": "missing on this zinc line"}
                 else:
                     status[line] = {"state": "pending" if present & {"zinc-develop", "zinc-1.12.x"} else "triage", "reason": "no linked change found"}
-            v = ledger.get(key, {}).get(line)
+            v = verdicts.get(line)
             if v:
-                status[line] = {"state": v["state"], "reason": v.get("reason", ""), "ref": v.get("ref"), "ledger": True}
+                status[line] = ledger_status(v)
         report.append({"key": key, "title": lead["title"], "kind": kind, "latest": latest, "first": lead["date"], "lines": status,
-                       "edges": chain_edges(g, units), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
-    unmatched = sorted(set(ledger) - {r["key"] for r in report})
+                       "edges": chain_edges(g, units, links), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
+    unmatched = sorted(set(ledger) - {unit_key_str(u) for u in units.values()})
     if unmatched:
         print("ledger keys matching no fix:", ", ".join(unmatched))
     report.sort(key=lambda r: r["latest"], reverse=True)
@@ -256,4 +326,5 @@ def main():
     print(Counter(r["kind"] for r in report), Counter(s["state"] for r in recent for s in r["lines"].values()))
 
 
-main()
+if __name__ == "__main__":
+    main()

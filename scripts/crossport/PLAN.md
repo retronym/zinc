@@ -14,6 +14,10 @@ The report decides per fix and per line whether a port exists, is missing, or do
 
 TODO. `analyze.py` is one `main()` plus helpers that read files. Tests need the classification and linking logic callable on plain data. Split into pure functions over unit dicts (`classify`, `link`, `status_for_line`) and keep IO in `main()`. Tests use the stdlib `unittest` under `scripts/crossport/tests/`, so there is nothing to install: `python3 -m unittest discover scripts/crossport/tests`.
 
+## Done
+
+- Ledger refs as edges (DONE). A `ported` verdict with a `ref` to a PR in the data merges the two fixes into one row and draws a green "ledger" arrow. A verdict keyed by any PR of a merged row is still found. An optional `tracking` field (`owner/repo#N` or a URL) is shown as a link in the hover. Tests: `python3 -m unittest discover scripts/crossport/tests`.
+
 ## Steps
 
 Suggested order is cheapest and most certain first.

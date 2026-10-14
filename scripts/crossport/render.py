@@ -83,13 +83,14 @@ const unitHtml = u => {
     <div class="m">${esc(lane)} · ${esc(u.date)} · ${esc(u.authors.join(", "))}${u.files.length ? "<br>extraction files: " + esc(u.files.join(", ")) : ""}<br>commits: ${commits}${cites ? "<br>cites: " + cites : ""}</div></div>`;
 };
 const unitLine = u => `<div class="l">${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))} <span class="m">${esc(LINES.find(l => l[0] === u.source)[1])} · ${esc(u.date)}</span></div>`;
+const refLink = r => { const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(r); const href = m ? `https://github.com/${m[1]}/issues/${m[2]}` : /^https:\/\//.test(r) ? r : null; return href ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(r)}</a>` : esc(r); };
 const linkText = (node, url) => { if (!url) return node; const a = el("a", {href: url, target: "_blank", rel: "noopener"}); a.append(node); return a; };
 function draw(host, rows, ghostArrows) {
   const H = HEAD_H + rows.length * ROW_H + 8;
   const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Cross-port swim lanes"});
   const defs = el("defs");
   const marker = (id, color) => defs.append(el("marker", {id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse"}, [el("path", {d: "M0 0L10 5L0 10z", fill: color})]));
-  marker("a-solid", "var(--fg2)"); marker("a-crit", "var(--crit)"); marker("a-warn", "var(--warn)");
+  marker("a-solid", "var(--fg2)"); marker("a-crit", "var(--crit)"); marker("a-warn", "var(--warn)"); marker("a-good", "var(--good)");
   svg.append(defs);
   const hs = el("svg", {viewBox: `0 0 ${W} 30`, role: "presentation"});
   LINES.forEach(([id, name, col], i) => {
@@ -126,11 +127,11 @@ function draw(host, rows, ghostArrows) {
       const g = el("g", {style: "cursor:help"});
       g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
       g.append(txt(s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
-      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" + (st.ref ? ": see " + esc(st.ref) : "") : ""}</div>
+      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}${st.ref ? "<br>ported as " + refLink(st.ref) : ""}${st.tracking ? "<br>tracking: " + refLink(st.tracking) : ""}</div>
         <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
     });
     edges.forEach((es, k) => { const [a, b] = k.split(">").map(Number);
-      arc(a, b, "var(--fg2)", "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join("")); });
+      const led = es.every(e => e.kind === "ledger"); arc(a, b, led ? "var(--good)" : "var(--fg2)", led ? "a-good" : "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join("")); });
     if (ghostArrows) {
       const origin = lane(lead.source);
       LINES.forEach(([id], li) => { const st = r.lines[id].state;
