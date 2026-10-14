@@ -27,8 +27,8 @@ svg{display:block;min-width:1040px;width:100%;height:auto}
 .lanehead{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);border-radius:8px 8px 0 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}svg text{font-family:var(--sans)}
 a:focus-visible{outline:2px solid var(--l0)}
 .lnk:hover{text-decoration:underline}
-.tip{position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
-.tip[hidden]{display:none}.tip .h{font-weight:600;margin-bottom:4px}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
+.tip{max-height:70vh;overflow:auto;position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
+.tip[hidden]{display:none}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
 <h1>Bridge cross-port gaps</h1>
 <p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.12.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
@@ -73,11 +73,12 @@ const withTip = (node, html) => {
 const unitLabel = u => "#" + (u.pr || u.id.split(":")[1]) + (u.part ? `.${u.part[0]}/${u.part[1]}` : "");
 const unitHtml = u => {
   const lane = LINES.find(l => l[0] === u.source)[1];
-  const commits = u.shas.map(h => `<a href="https://github.com/${u.repo}/commit/${h}" target="_blank" rel="noopener">${h.slice(0, 7)}</a>`).join(" ");
+  const commits = u.shas.slice(0, 6).map(h => `<a href="https://github.com/${u.repo}/commit/${h}" target="_blank" rel="noopener">${h.slice(0, 7)}</a>`).join(" ") + (u.shas.length > 6 ? ` +${u.shas.length - 6} more` : "");
   const cites = (u.refs || []).map(r => `<a href="https://github.com/${r[0]}/issues/${r[1]}" target="_blank" rel="noopener">${esc(r[0].split("/")[1])}#${r[1]}</a>`).join(" ");
   return `<div class="u"><b>${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))}</b> ${esc(u.title)}
     <div class="m">${esc(lane)} · ${esc(u.date)} · ${esc(u.authors.join(", "))}${u.files.length ? "<br>extraction files: " + esc(u.files.join(", ")) : ""}<br>commits: ${commits}${cites ? "<br>cites: " + cites : ""}</div></div>`;
 };
+const unitLine = u => `<div class="l">${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))} <span class="m">${esc(LINES.find(l => l[0] === u.source)[1])} · ${esc(u.date)}</span></div>`;
 const linkText = (node, url) => { if (!url) return node; const a = el("a", {href: url, target: "_blank", rel: "noopener"}); a.append(node); return a; };
 function draw(host, rows, ghostArrows) {
   const H = HEAD_H + rows.length * ROW_H + 8;
@@ -98,7 +99,7 @@ function draw(host, rows, ghostArrows) {
     svg.append(el("line", {x1: 0, y1: y0, x2: W, y2: y0, stroke: "var(--line)"}));
     const lead = r.units[0];
     const title = txt(clip(r.title, 52), {x: 12, y: cy - 2, "font-size": 13, "font-weight": 600, fill: "var(--fg)", class: "lnk"});
-    svg.append(withTip(linkText(title, lead.url), () => `<div class="h">${esc(r.title)}</div>${r.units.map(unitHtml).join("")}`));
+    svg.append(withTip(linkText(title, lead.url), () => `<div class="h">${esc(r.title)}</div>${r.units.map(unitLine).join("")}<div class="m">hover a dot for commits and files</div>`));
     const keyUnit = r.units[0];
     svg.append(txt(`${r.first.slice(0, 10)} · ${r.key}`, {x: 12, y: cy + 15, "font-size": 11, fill: "var(--fg3)", "font-family": "var(--mono)"}));
     const present = {};
