@@ -73,7 +73,9 @@ def build_units(commits):
                                      "title": seg[0]["message"].split("\n")[0] if part else (pr["title"] if pr else seg[0]["message"].split("\n")[0]),
                                      "date": seg[0]["date"], "files": {}, "text": "", "shas": [], "url": pr["url"] if pr else None})
             u.setdefault("subjects", set())
+            u.setdefault("authors", set())
             for c in seg:
+                u["authors"].add(c["author"])
                 u["subjects"].add(norm_subject(c["message"].split("\n")[0]))
                 u["date"] = max(u["date"], c["date"])
                 u["text"] += "\n" + c["message"]
@@ -236,7 +238,7 @@ def main():
             if v:
                 status[line] = {"state": v["state"], "reason": v.get("reason", ""), "ref": v.get("ref"), "ledger": True}
         report.append({"key": key, "title": lead["title"], "kind": kind, "latest": latest, "first": lead["date"], "lines": status,
-                       "edges": chain_edges(g, units), "units": [{"id": u["id"], "part": u["part"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
+                       "edges": chain_edges(g, units), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
     report.sort(key=lambda r: r["latest"], reverse=True)
     (out / "report.json").write_text(json.dumps(report, indent=1))
     recent = [r for r in report if r["latest"][:10] >= a.since]

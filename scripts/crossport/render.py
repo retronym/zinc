@@ -25,7 +25,10 @@ p{margin:0 0 8px;color:var(--fg2);max-width:78ch}code{font:.85em var(--mono);bac
 .wrap{min-width:1040px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
 svg{display:block;min-width:1040px;width:100%;height:auto}
 .lanehead{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);border-radius:8px 8px 0 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}svg text{font-family:var(--sans)}
-a:focus-visible{outline:2px solid var(--l0)}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
+a:focus-visible{outline:2px solid var(--l0)}
+.lnk:hover{text-decoration:underline}
+.tip{position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
+.tip[hidden]{display:none}.tip .h{font-weight:600;margin-bottom:4px}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
 <h1>Bridge cross-port gaps</h1>
 <p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.12.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
@@ -55,6 +58,27 @@ const STATE = {
   "n/a": {fill: "none", stroke: "none", ink: "var(--fg3)", label: "n/a", dash: ""},
   ported: {fill: "var(--good-bg)", stroke: "var(--good)", ink: "var(--good)", label: "ported", dash: ""}
 };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const tipEl = document.createElement("div"); tipEl.className = "tip"; tipEl.hidden = true; document.body.append(tipEl);
+let hideTimer;
+const place = (x, y) => { const r = tipEl.getBoundingClientRect(); tipEl.style.left = Math.max(8, Math.min(x + 14, innerWidth - r.width - 8)) + "px"; tipEl.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px"; };
+tipEl.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+tipEl.addEventListener("mouseleave", () => { tipEl.hidden = true; });
+const withTip = (node, html) => {
+  node.addEventListener("mouseenter", e => { clearTimeout(hideTimer); tipEl.innerHTML = html(); tipEl.hidden = false; place(e.clientX, e.clientY); });
+  node.addEventListener("mousemove", e => { if (tipEl.matches(":hover")) return; place(e.clientX, e.clientY); });
+  node.addEventListener("mouseleave", () => { hideTimer = setTimeout(() => { if (!tipEl.matches(":hover")) tipEl.hidden = true; }, 180); });
+  return node;
+};
+const unitLabel = u => "#" + (u.pr || u.id.split(":")[1]) + (u.part ? `.${u.part[0]}/${u.part[1]}` : "");
+const unitHtml = u => {
+  const lane = LINES.find(l => l[0] === u.source)[1];
+  const commits = u.shas.map(h => `<a href="https://github.com/${u.repo}/commit/${h}" target="_blank" rel="noopener">${h.slice(0, 7)}</a>`).join(" ");
+  const cites = (u.refs || []).map(r => `<a href="https://github.com/${r[0]}/issues/${r[1]}" target="_blank" rel="noopener">${esc(r[0].split("/")[1])}#${r[1]}</a>`).join(" ");
+  return `<div class="u"><b>${u.url ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(unitLabel(u))}</a>` : esc(unitLabel(u))}</b> ${esc(u.title)}
+    <div class="m">${esc(lane)} · ${esc(u.date)} · ${esc(u.authors.join(", "))}${u.files.length ? "<br>extraction files: " + esc(u.files.join(", ")) : ""}<br>commits: ${commits}${cites ? "<br>cites: " + cites : ""}</div></div>`;
+};
+const linkText = (node, url) => { if (!url) return node; const a = el("a", {href: url, target: "_blank", rel: "noopener"}); a.append(node); return a; };
 function draw(host, rows, ghostArrows) {
   const H = HEAD_H + rows.length * ROW_H + 8;
   const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Cross-port swim lanes"});
@@ -72,45 +96,54 @@ function draw(host, rows, ghostArrows) {
   rows.forEach((r, ri) => {
     const y0 = HEAD_H + ri * ROW_H, cy = y0 + 22;
     svg.append(el("line", {x1: 0, y1: y0, x2: W, y2: y0, stroke: "var(--line)"}));
-    svg.append(txt(clip(r.title, 52), {x: 12, y: cy - 2, "font-size": 13, "font-weight": 600, fill: "var(--fg)"}, ));
-    svg.lastChild.append(el("title", {}, [document.createTextNode(r.title)]));
+    const lead = r.units[0];
+    const title = txt(clip(r.title, 52), {x: 12, y: cy - 2, "font-size": 13, "font-weight": 600, fill: "var(--fg)", class: "lnk"});
+    svg.append(withTip(linkText(title, lead.url), () => `<div class="h">${esc(r.title)}</div>${r.units.map(unitHtml).join("")}`));
+    const keyUnit = r.units[0];
     svg.append(txt(`${r.first.slice(0, 10)} · ${r.key}`, {x: 12, y: cy + 15, "font-size": 11, fill: "var(--fg3)", "font-family": "var(--mono)"}));
     const present = {};
     r.units.forEach(u => { (present[u.source] = present[u.source] || []).push(u); });
     const lane = s => LINES.findIndex(l => l[0] === s);
     const edges = new Map();
-    r.edges.forEach(e => { const a = lane(e.from.split(":")[0]), b = lane(e.to.split(":")[0]); if (a !== b) edges.set(a + ">" + b, e.kind); });
-    const arc = (a, b, color, marker, dash, tip, ghost) => {
+    r.edges.forEach(e => { const a = lane(e.from.split(":")[0]), b = lane(e.to.split(":")[0]); if (a === b) return; const k = a + ">" + b; (edges.get(k) || edges.set(k, []).get(k)).push(e); });
+    const uById = Object.fromEntries(r.units.map(u => [u.id, u]));
+    const arc = (a, b, color, marker, dash, tipHtml, ghost) => {
       const dir = b > a ? 1 : -1, x1 = cx(a) + dir * 11, x2 = cx(b) - dir * (ghost ? 42 : 14), span = Math.abs(b - a);
       const bulge = span === 1 ? 0 : -(10 + span * 5), mx = (x1 + x2) / 2;
-      const p = el("path", {d: `M${x1} ${cy} Q${mx} ${cy + 2 * bulge} ${x2} ${cy}`, fill: "none", stroke: color, "stroke-width": 1.6, "marker-end": `url(#${marker})`, "stroke-dasharray": dash});
-      p.append(el("title", {}, [document.createTextNode(tip)])); svg.append(p);
+      const d = `M${x1} ${cy} Q${mx} ${cy + 2 * bulge} ${x2} ${cy}`;
+      svg.append(el("path", {d, fill: "none", stroke: color, "stroke-width": 1.6, "marker-end": `url(#${marker})`, "stroke-dasharray": dash}));
+      svg.append(withTip(el("path", {d, fill: "none", stroke: "transparent", "stroke-width": 12, "pointer-events": "stroke", style: "cursor:help"}), () => tipHtml));
     };
     LINES.forEach(([id], li) => {
       const st = r.lines[id];
       if (present[id]) return;
       const s = STATE[st.state] || STATE["n/a"];
-      const g = el("g");
-      if (s.stroke !== "none") g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
+      const g = el("g", {style: "cursor:help"});
+      g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
       g.append(txt(s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
-      g.append(el("title", {}, [document.createTextNode(`${id}: ${st.state}${st.reason ? " (" + st.reason + ")" : ""}`)]));
-      svg.append(g);
+      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}</div>
+        <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
     });
-    edges.forEach((kind, k) => { const [a, b] = k.split(">").map(Number); arc(a, b, "var(--fg2)", "a-solid", "", `port (${kind})`); });
+    edges.forEach((es, k) => { const [a, b] = k.split(">").map(Number);
+      arc(a, b, "var(--fg2)", "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join("")); });
     if (ghostArrows) {
-      const origin = lane(r.units[0].source);
+      const origin = lane(lead.source);
       LINES.forEach(([id], li) => { const st = r.lines[id].state;
         if (present[id] || (st !== "pending" && st !== "triage")) return;
-        arc(origin, li, st === "pending" ? "var(--crit)" : "var(--warn)", st === "pending" ? "a-crit" : "a-warn", "5 4", `${st}: ${r.units[0].source} → ${id}`, true); });
+        arc(origin, li, st === "pending" ? "var(--crit)" : "var(--warn)", st === "pending" ? "a-crit" : "a-warn", "5 4", `<div class="h">${esc(st)}: ${esc(lead.source)} → ${esc(id)}</div><div class="m">${esc(r.lines[id].reason || "")}</div>`, true); });
     }
     LINES.forEach(([id, , col], li) => {
       const us = present[id]; if (!us) return;
-      svg.append(el("circle", {cx: cx(li), cy, r: 8, fill: `var(${col})`, stroke: "var(--panel)", "stroke-width": 2}));
-      const label = us.map(u => "#" + (u.pr || u.id.split(":")[1]) + (u.part ? `.${u.part[0]}` : "")).join(" ");
-      const t = txt(clip(label, 24), {x: cx(li), y: cy + 24, "text-anchor": "middle", "font-size": 11, fill: "var(--fg2)", "font-family": "var(--mono)"});
-      t.append(el("title", {}, [document.createTextNode(us.map(u => `${u.date} ${u.title}`).join("\n"))]));
-      const url = us.find(u => u.url);
-      if (url) { const a = el("a", {href: url.url, target: "_blank", rel: "noopener"}); a.append(t); svg.append(a); } else svg.append(t);
+      const dot = el("circle", {cx: cx(li), cy, r: 8, fill: `var(${col})`, stroke: "var(--panel)", "stroke-width": 2, style: "cursor:pointer"});
+      svg.append(withTip(linkText(dot, us.find(u => u.url)?.url), () => us.map(unitHtml).join("")));
+      const labels = us.map(unitLabel), cw = 6.7, gap = 8, total = labels.reduce((n, l) => n + l.length * cw, 0) + gap * (labels.length - 1);
+      let x = cx(li) - total / 2;
+      us.forEach((u, i) => {
+        const w = labels[i].length * cw;
+        const t = txt(labels[i], {x: x + w / 2, y: cy + 24, "text-anchor": "middle", "font-size": 11, fill: "var(--fg2)", "font-family": "var(--mono)", class: "lnk"});
+        svg.append(withTip(linkText(t, u.url), () => unitHtml(u)));
+        x += w + gap;
+      });
     });
   });
   const head = document.createElement("div"); head.className = "lanehead"; head.append(hs);
