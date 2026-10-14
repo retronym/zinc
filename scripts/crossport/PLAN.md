@@ -17,6 +17,7 @@ TODO. `analyze.py` is one `main()` plus helpers that read files. Tests need the 
 ## Done
 
 - Ledger refs as edges (DONE). A `ported` verdict with a `ref` to a PR in the data merges the two fixes into one row and draws a green "ledger" arrow. A verdict keyed by any PR of a merged row is still found. An optional `tracking` field (`owner/repo#N` or a URL) is shown as a link in the hover. Tests: `python3 -m unittest discover scripts/crossport/tests`.
+- Open PRs (DONE). `fetch.py` also lists open and draft PRs touching the bridge paths on the upstream repositories and on retronym's forks (one GraphQL query per repo and base). `analyze.py` links them to fixes by citation, shared subject or ledger ref, and a lane with only an open PR shows "open PR" or "draft PR" in purple instead of pending or triage, so submitted ports are not redone. Hover lists each PR with author, draft state and last update; merged PRs show "merged" with their date. `--no-open` skips the fetch.
 
 ## Steps
 

@@ -63,5 +63,38 @@ class Verdicts(unittest.TestCase):
         self.assertEqual((st["state"], st["tracking"], st["ref"], st["ledger"]), ("pending", "retronym/scala#135", None, True))
 
 
+def open_pr(source, repo, number, title, body="", draft=False, files=None):
+    return {"source": source, "repo": repo, "base": "2.13.x", "number": number, "title": title, "body": body, "draft": draft,
+            "url": f"https://github.com/{repo}/pull/{number}", "created": "2026-10-01T00:00:00Z", "updated": "2026-10-10T00:00:00Z",
+            "author": "someone", "files": files or [{"path": "src/sbt-bridge/scala/tools/xsbt/ExtractAPI.scala", "additions": 12, "deletions": 3}]}
+
+
+class OpenPullRequests(unittest.TestCase):
+    def test_open_pr_becomes_an_open_semantic_unit(self):
+        units = analyze.build_open_units([open_pr("scala2", "retronym/scala", 135, "Forward-port the class and companion fix", draft=True)])
+        (u,) = units.values()
+        self.assertEqual((u["kind"], u["open"], u["draft"], u["semantic_files"]), ("semantic", True, True, ["ExtractAPI.scala"]))
+        self.assertEqual(u["id"], "scala2:retronym/scala#135")
+
+    def test_open_pr_on_a_lane_is_in_review_not_has(self):
+        merged = unit("zinc-develop", "sbt/zinc", 1807, "2026-09-18")
+        (open_u,) = analyze.build_open_units([open_pr("scala2", "retronym/scala", 135, "port")]).values()
+        state, prs = analyze.presence([merged, open_u], "scala2")
+        self.assertEqual((state, [p["pr"] for p in prs]), ("in-review", [135]))
+        self.assertEqual(analyze.presence([merged, open_u], "zinc-develop")[0], "has")
+        self.assertEqual(analyze.presence([merged, open_u], "scala3"), (None, []))
+
+    def test_a_merged_unit_on_the_lane_wins_over_an_open_one(self):
+        merged = unit("scala2", "scala/scala", 11137, "2025-09-26")
+        (open_u,) = analyze.build_open_units([open_pr("scala2", "retronym/scala", 140, "follow-up")]).values()
+        self.assertEqual(analyze.presence([merged, open_u], "scala2")[0], "has")
+
+    def test_open_pr_citing_a_fix_joins_its_group(self):
+        units = {("zinc-develop", 1807): dict(unit("zinc-develop", "sbt/zinc", 1807, "2026-09-18"), title="Tell a class and its companion apart")}
+        units.update(analyze.build_open_units([open_pr("scala2", "retronym/scala", 135, "Port of the companion fix", body="Port of sbt/zinc#1807")]))
+        groups = analyze.chains(units)
+        self.assertEqual([len(g) for g in groups], [2])
+
+
 if __name__ == "__main__":
     unittest.main()

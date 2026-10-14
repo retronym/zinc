@@ -20,6 +20,16 @@ SOURCES = [
      "paths": ["internal/compiler-bridge", "internal/compiler-bridge-test"]},
 ]
 
+OPEN_PR_REPOS = [
+    ("scala/scala", "2.13.x", "scala2"), ("scala/scala3", "main", "scala3"),
+    ("sbt/zinc", "develop", "zinc-develop"), ("sbt/zinc", "1.12.x", "zinc-1.12.x"),
+    ("retronym/scala", "2.13.x", "scala2"), ("retronym/scala3", "main", "scala3"),
+    ("retronym/zinc", "develop", "zinc-develop"), ("retronym/zinc", "1.12.x", "zinc-1.12.x"),
+]
+OPEN_PR_QUERY = """query($owner:String!,$name:String!,$base:String!,$after:String){repository(owner:$owner,name:$name){
+pullRequests(states:OPEN,baseRefName:$base,first:50,after:$after){pageInfo{hasNextPage endCursor}
+nodes{number title body isDraft url createdAt updatedAt author{login} files(first:100){nodes{path additions deletions}}}}}}"""
+
 CACHE = Path(os.environ.get("CROSSPORT_CACHE", Path.home() / ".cache" / "crossport"))
 
 
@@ -64,11 +74,31 @@ def commit_prs(repo, sha):
     return cached(f"prs/{repo.replace('/', '_')}/{sha}.json", produce)
 
 
+def open_prs(source, repo, base, paths):
+    out, after = [], None
+    owner, name = repo.split("/")
+    while True:
+        cmd = ["gh", "api", "graphql", "-f", f"query={OPEN_PR_QUERY}", "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"base={base}"]
+        if after:
+            cmd += ["-f", f"after={after}"]
+        d = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)["data"]["repository"]["pullRequests"]
+        for n in d["nodes"]:
+            files = [{"path": f["path"], "additions": f["additions"], "deletions": f["deletions"]} for f in n["files"]["nodes"]]
+            if any(f["path"].startswith(p + "/") or f["path"] == p for f in files for p in paths):
+                out.append({"source": source, "repo": repo, "base": base, "number": n["number"], "title": n["title"], "body": n["body"] or "",
+                            "draft": n["isDraft"], "url": n["url"], "created": n["createdAt"], "updated": n["updatedAt"],
+                            "author": (n["author"] or {}).get("login", ""), "files": files})
+        if not d["pageInfo"]["hasNextPage"]:
+            return out
+        after = d["pageInfo"]["endCursor"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="2023-06-01")
     ap.add_argument("--out", default="scripts/crossport/out")
     ap.add_argument("--refresh-lists", action="store_true")
+    ap.add_argument("--no-open", action="store_true", help="skip fetching open PRs")
     a = ap.parse_args()
     out = []
     for s in SOURCES:
@@ -86,6 +116,14 @@ def main():
             prs = commit_prs(s["repo"], sha)
             out.append({**d, "source": s["id"], "repo": s["repo"], "branch": s["branch"], "prs": prs})
     Path(a.out).mkdir(parents=True, exist_ok=True)
+    if not a.no_open:
+        paths = {s["id"]: s["paths"] for s in SOURCES}
+        prs = []
+        for repo, base, source in OPEN_PR_REPOS:
+            found = open_prs(source, repo, base, paths["zinc-develop" if source.startswith("zinc") else source])
+            print(f"open PRs {repo} {base}: {len(found)}", file=sys.stderr)
+            prs += found
+        (Path(a.out) / "open_prs.json").write_text(json.dumps(prs, indent=1))
     (Path(a.out) / "commits.json").write_text(json.dumps(out, indent=1))
     print(f"wrote {len(out)} commits", file=sys.stderr)
 
