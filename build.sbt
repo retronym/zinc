@@ -524,6 +524,10 @@ lazy val compilerBridgeScala3Bin = (project in internalPath / "compilerBridgeSca
     autoScalaLibrary := false,
     scalaVersion := scala3ForBridge,
     libraryDependencies += scala3BinaryBridge,
+    resolvers ++= sys.props
+      .get("zinc.scala3Repo")
+      .map(d => Resolver.file("scala3-local", file(d))(Resolver.ivyStylePatterns))
+      .toSeq,
   )
 
 /**
