@@ -59,7 +59,8 @@ const STATE = {
   triage: {fill: "var(--warn-bg)", stroke: "var(--warn)", ink: "var(--warn)", label: "triage", dash: ""},
   "probably-n/a": {fill: "var(--mute-bg)", stroke: "var(--mute)", ink: "var(--mute)", label: "n/a?", dash: "3 3"},
   "n/a": {fill: "none", stroke: "none", ink: "var(--fg3)", label: "n/a", dash: ""},
-  ported: {fill: "var(--good-bg)", stroke: "var(--good)", ink: "var(--good)", label: "ported", dash: ""}
+  ported: {fill: "var(--good-bg)", stroke: "var(--good)", ink: "var(--good)", label: "ported", dash: ""},
+  wontfix: {fill: "none", stroke: "none", ink: "var(--fg3)", label: "won't port", dash: ""}
 };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const tipEl = document.createElement("div"); tipEl.className = "tip"; tipEl.hidden = true; document.body.append(tipEl);
@@ -125,7 +126,7 @@ function draw(host, rows, ghostArrows) {
       const g = el("g", {style: "cursor:help"});
       g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
       g.append(txt(s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
-      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}</div>
+      svg.append(withTip(g, () => `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" + (st.ref ? ": see " + esc(st.ref) : "") : ""}</div>
         <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
     });
     edges.forEach((es, k) => { const [a, b] = k.split(">").map(Number);

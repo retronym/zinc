@@ -239,6 +239,9 @@ def main():
                 status[line] = {"state": v["state"], "reason": v.get("reason", ""), "ref": v.get("ref"), "ledger": True}
         report.append({"key": key, "title": lead["title"], "kind": kind, "latest": latest, "first": lead["date"], "lines": status,
                        "edges": chain_edges(g, units), "units": [{"id": u["id"], "part": u["part"], "repo": u["repo"], "shas": u["shas"], "authors": sorted(u["authors"]), "refs": u["refs"], "source": u["source"], "pr": u["pr"], "title": u["title"], "date": u["date"][:10], "url": u["url"], "files": u["semantic_files"]} for u in sorted(us, key=lambda u: u["date"])]})
+    unmatched = sorted(set(ledger) - {r["key"] for r in report})
+    if unmatched:
+        print("ledger keys matching no fix:", ", ".join(unmatched))
     report.sort(key=lambda r: r["latest"], reverse=True)
     (out / "report.json").write_text(json.dumps(report, indent=1))
     recent = [r for r in report if r["latest"][:10] >= a.since]
