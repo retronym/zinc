@@ -14,23 +14,26 @@ TEMPLATE = r'''<!doctype html>
 --l0:#2a78d6;--l1:#d9531e;--l2:#14916a;--l3:#7b55c9;
 --crit:#c0392b;--crit-bg:#fde8e6;--warn:#9a6700;--warn-bg:#fff1c9;--mute:#7d8797;--mute-bg:#eef1f5;--good:#1a7f37;--good-bg:#e6f4ea;
 --sans:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,"SF Mono",Menlo,monospace}
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1419;--panel:#171d25;--fg:#e8ecf2;--fg2:#aab4c2;--fg3:#7b8694;--line:#2a3340;
---l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--sans);padding:0 16px 48px}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1419;--panel:#171d25;--fg:#e8ecf2;--fg2:#aab4c2;--fg3:#7b8694;--line:#2a3340;
+--l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1419;--panel:#171d25;--fg:#e8ecf2;--fg2:#aab4c2;--fg3:#7b8694;--line:#2a3340;
+--l0:#5a9ae8;--l1:#f0885a;--l2:#3cc79a;--l3:#a58be6;--crit:#f0776a;--crit-bg:#3a1a17;--warn:#e3b341;--warn-bg:#33290f;--mute:#7b8694;--mute-bg:#202835;--good:#4cc26a;--good-bg:#14301d;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--sans);padding-inline:16px;padding-block:0 48px}
 .wrap{max-width:1120px;margin:0 auto}h1{font-size:1.5rem;margin:28px 0 4px}h2{font-size:1.05rem;margin:28px 0 8px}
 p{margin:0 0 8px;color:var(--fg2);max-width:78ch}code{font:.85em var(--mono);background:var(--mute-bg);padding:1px 5px;border-radius:4px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}.tile b{display:block;font-size:1.6rem;line-height:1.1}.tile span{color:var(--fg2);font-size:.85rem}
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.85rem;color:var(--fg2);margin:10px 0}.legend i{display:inline-block;width:14px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px;border:1.5px solid}
-.wrap{min-width:1040px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.wrap{min-width:1040px}.wip{display:inline-block;font:600 .7rem var(--sans);letter-spacing:.08em;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 9px;vertical-align:middle;margin-left:8px}
+@media(max-width:1100px){.wrap{min-width:0}.panel{overflow-x:auto}.lanehead{position:static}}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
 svg{display:block;min-width:1040px;width:100%;height:auto}
-.lanehead{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);border-radius:8px 8px 0 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}svg text{font-family:var(--sans)}
+.lanehead{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line);border-radius:8px 8px 0 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}svg text{font-family:var(--sans)}
 a:focus-visible{outline:2px solid var(--l0)}
 .lnk:hover{text-decoration:underline}
 .tip{max-height:70vh;overflow:auto;position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
 .tip[hidden]{display:none}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
-<h1>Bridge cross-port gaps</h1>
+<h1>Bridge cross-port gaps<span class="wip">WIP</span></h1>
 <p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.12.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
 <div class="tiles" id="tiles"></div>
 <div class="legend">
@@ -163,12 +166,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="2025-01-01")
     ap.add_argument("--out", default="scripts/crossport/out")
+    ap.add_argument("--artifact", action="store_true", help="also write report.artifact.html, a page fragment for publishing")
     a = ap.parse_args()
     out = Path(a.out)
     rows = [r for r in json.load(open(out / "report.json")) if r["latest"][:10] >= a.since and r["kind"] in ("semantic", "mechanical")]
     from datetime import date
     html = TEMPLATE.replace("__DATA__", json.dumps(rows)).replace("__SINCE__", a.since).replace("__GEN__", date.today().isoformat())
     (out / "report.html").write_text(html)
+    if a.artifact:
+        frag = html[html.index("<title>"):].replace("<title>Bridge Cross-Port Gaps</title>", "<title>Bridge Port Gaps (WIP)</title>").replace("</head><body>", "").replace("</body></html>", "")
+        (out / "report.artifact.html").write_text(frag)
     print(f"wrote {out / 'report.html'} ({len(rows)} rows)")
 
 
