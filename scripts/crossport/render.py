@@ -32,8 +32,8 @@ a:focus-visible{outline:2px solid var(--l0)}
 .ledger{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;max-height:420px;overflow:auto;font:12px/1.5 var(--mono);margin:0;white-space:pre}
 footer{margin-top:28px;border-top:1px solid var(--line);padding-top:12px;color:var(--fg3);font-size:.85rem}
 .lnk:hover{text-decoration:underline}
-.tip{max-height:70vh;overflow:auto;position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
-.tip[hidden]{display:none}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
+.tip{pointer-events:none;max-height:70vh;overflow:auto;position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
+.tip[hidden]{display:none}.tip.pinned{pointer-events:auto;border-color:var(--l0);padding-right:34px}.tip .x{position:absolute;top:6px;right:8px;border:0;background:none;color:var(--fg2);font-size:1.2rem;line-height:1;cursor:pointer;padding:2px 6px}.tip .hint{margin-top:8px;font-size:.72rem;color:var(--fg3)}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
 <h1>Bridge cross-port gaps<span class="wip">WIP</span></h1>
 <p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.12.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
@@ -71,15 +71,25 @@ const STATE = {
   wontfix: {fill: "none", stroke: "none", ink: "var(--fg3)", label: "won't port", dash: ""}
 };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const tipEl = document.createElement("div"); tipEl.className = "tip"; tipEl.hidden = true; document.body.append(tipEl);
-let hideTimer;
-const place = (x, y) => { const r = tipEl.getBoundingClientRect(); tipEl.style.left = Math.max(8, Math.min(x + 14, innerWidth - r.width - 8)) + "px"; tipEl.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px"; };
-tipEl.addEventListener("mouseenter", () => clearTimeout(hideTimer));
-tipEl.addEventListener("mouseleave", () => { tipEl.hidden = true; });
+const tipEl = document.createElement("div"); tipEl.className = "tip"; tipEl.hidden = true; tipEl.setAttribute("role", "dialog"); document.body.append(tipEl);
+let pinned = false, pinnedBy = null;
+const place = (x, y) => { const r = tipEl.getBoundingClientRect(); tipEl.style.left = Math.max(8, Math.min(x + 12, innerWidth - r.width - 8)) + "px"; tipEl.style.top = Math.max(8, Math.min(y + 12, innerHeight - r.height - 8)) + "px"; };
+const unpin = () => { pinned = false; pinnedBy = null; tipEl.classList.remove("pinned"); tipEl.hidden = true; };
+const show = (html, x, y, pin) => {
+  tipEl.innerHTML = html + (pin ? '<button class="x" type="button" aria-label="Close">×</button>' : '<div class="hint">click to pin; links in a pinned card are clickable</div>');
+  tipEl.classList.toggle("pinned", pin); tipEl.hidden = false; place(x, y);
+};
+tipEl.addEventListener("click", e => { if (e.target.closest(".x")) unpin(); });
+document.addEventListener("click", e => { if (pinned && !tipEl.contains(e.target) && !(pinnedBy && pinnedBy.contains(e.target))) unpin(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") unpin(); });
 const withTip = (node, html) => {
-  node.addEventListener("mouseenter", e => { clearTimeout(hideTimer); tipEl.innerHTML = html(); tipEl.hidden = false; place(e.clientX, e.clientY); });
-  node.addEventListener("mousemove", e => { if (tipEl.matches(":hover")) return; place(e.clientX, e.clientY); });
-  node.addEventListener("mouseleave", () => { hideTimer = setTimeout(() => { if (!tipEl.matches(":hover")) tipEl.hidden = true; }, 180); });
+  node.setAttribute("tabindex", "0"); node.setAttribute("role", "button");
+  node.addEventListener("mouseenter", e => { if (!pinned) show(html(), e.clientX, e.clientY, false); });
+  node.addEventListener("mousemove", e => { if (!pinned) place(e.clientX, e.clientY); });
+  node.addEventListener("mouseleave", () => { if (!pinned) tipEl.hidden = true; });
+  const pin = (e, x, y) => { pinned = true; pinnedBy = node; show(html(), x, y, true); };
+  node.addEventListener("click", e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); e.stopPropagation(); pin(e, e.clientX, e.clientY); });
+  node.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const r = node.getBoundingClientRect(); pin(e, r.left, r.bottom); } });
   return node;
 };
 const unitLabel = u => "#" + (u.pr || u.id.split(":")[1]) + (u.part ? `.${u.part[0]}/${u.part[1]}` : "");
@@ -128,19 +138,6 @@ function draw(host, rows, ghostArrows) {
       svg.append(el("path", {d, fill: "none", stroke: color, "stroke-width": 1.6, "marker-end": `url(#${marker})`, "stroke-dasharray": dash}));
       svg.append(withTip(el("path", {d, fill: "none", stroke: "transparent", "stroke-width": 12, "pointer-events": "stroke", style: "cursor:help"}), () => tipHtml));
     };
-    LINES.forEach(([id], li) => {
-      const st = r.lines[id];
-      if (present[id]) return;
-      const s = STATE[st.state] || STATE["n/a"];
-      const g = el("g", {style: "cursor:help"});
-      g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
-      g.append(txt(st.state === "in-review" && st.prs.every(p => p.draft) ? "draft PR" : s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
-      const prs = st.prs || [];
-      const prHtml = prs.map(p => `<div class="l"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)}#${p.pr}</a> ${esc(p.title)}<div class="m">${p.draft ? "draft" : "open"} · ${esc(p.author)} · updated ${esc(p.updated)}</div></div>`).join("");
-      const ghostNode = prs.length ? linkText(g, prs[0].url) : g;
-      svg.append(withTip(ghostNode, () => prHtml + `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}${st.ref ? "<br>ported as " + refLink(st.ref) : ""}${st.tracking ? "<br>tracking: " + refLink(st.tracking) : ""}</div>
-        <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
-    });
     edges.forEach((es, k) => { const [a, b] = k.split(">").map(Number);
       const led = es.every(e => e.kind === "ledger"); arc(a, b, led ? "var(--good)" : "var(--fg2)", led ? "a-good" : "a-solid", "", `<div class="h">port ${esc(LINES[a][1])} → ${esc(LINES[b][1])}</div>` + es.map(e => `<div class="m">${esc(unitLabel(uById[e.from]))} → ${esc(unitLabel(uById[e.to]))} <i>(${esc(e.kind)})</i></div>`).join(""), !present[LINES[b][0]]); });
     if (ghostArrows) {
@@ -149,6 +146,20 @@ function draw(host, rows, ghostArrows) {
         if (present[id] || (st !== "pending" && st !== "triage")) return;
         arc(origin, li, st === "pending" ? "var(--crit)" : "var(--warn)", st === "pending" ? "a-crit" : "a-warn", "5 4", `<div class="h">${esc(st)}: ${esc(lead.source)} → ${esc(id)}</div><div class="m">${esc(r.lines[id].reason || "")}</div>`, true); });
     }
+    LINES.forEach(([id], li) => {
+      const st = r.lines[id];
+      if (present[id]) return;
+      const s = STATE[st.state] || STATE["n/a"];
+      const g = el("g", {style: "cursor:help"});
+      g.append(el("rect", {x: cx(li) - 38, y: cy - 13, width: 76, height: 26, rx: 6, fill: "var(--panel)"}));
+      g.append(el("rect", {x: cx(li) - 36, y: cy - 11, width: 72, height: 22, rx: 5, fill: s.stroke === "none" ? "transparent" : s.fill, stroke: s.stroke, "stroke-width": 1.4, "stroke-dasharray": s.dash}));
+      g.append(txt(st.state === "in-review" && st.prs.every(p => p.draft) ? "draft PR" : s.label, {x: cx(li), y: cy + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: s.ink}));
+      const prs = st.prs || [];
+      const prHtml = prs.map(p => `<div class="l"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)}#${p.pr}</a> ${esc(p.title)}<div class="m">${p.draft ? "draft" : "open"} · ${esc(p.author)} · updated ${esc(p.updated)}</div></div>`).join("");
+      const ghostNode = prs.length ? linkText(g, prs[0].url) : g;
+      svg.append(withTip(ghostNode, () => prHtml + `<div class="h">${esc(id)}: ${esc(st.state)}</div><div class="m">${esc(st.reason || "")}${st.ledger ? "<br>from the local ledger" : ""}${st.ref ? "<br>ported as " + refLink(st.ref) : ""}${st.tracking ? "<br>tracking: " + refLink(st.tracking) : ""}</div>
+        <div class="m">Origin: ${esc(lead.source)} ${esc(unitLabel(lead))}<br>Record a verdict under <code>${esc(r.key)}.${esc(id)}</code> in <code>verdicts.json</code>.</div>`));
+    });
     LINES.forEach(([id, , col], li) => {
       const us = present[id]; if (!us) return;
       const dot = el("circle", {cx: cx(li), cy, r: 8, fill: `var(${col})`, stroke: "var(--panel)", "stroke-width": 2, style: "cursor:pointer"});
