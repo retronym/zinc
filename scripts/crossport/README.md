@@ -5,7 +5,7 @@ WIP. Reports which fixes to the compiler bridges have not yet been ported betwee
 ```bash
 python3 scripts/crossport/fetch.py      # gh api; cached per commit under ~/.cache/crossport
 python3 scripts/crossport/analyze.py    # group commits into fixes, compute gaps -> out/report.json, out/report.md
-python3 scripts/crossport/render.py --since 2023-06-01   # out/report.html
+python3 scripts/crossport/render.py --since 2023-06-01   # out/report.html; --artifact also writes a publishable page fragment
 ```
 
 - `fetch.py` lists commits touching the bridge paths of each line and caches commit detail and PR metadata, so reruns only fetch new commits.
