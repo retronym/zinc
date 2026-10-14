@@ -24,11 +24,12 @@ def norm_title(s):
 
 def norm_subject(s):
     s = re.sub(r"\s*\((?:sbt/zinc|scala/scala3?)?[#@][^)]*\)\s*$", "", s)
-    return re.sub(r"^\[[^\]]*\]\s*|\s*\(#\d+\)$", "", s).strip().lower()
+    s = re.sub(r"^\[[^\]]*\]\s*|\s*\(#\d+\)$", "", s).lower()
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
 def shared_subject(u1, u2):
-    return any(len(x) > 30 for x in u1["subjects"] & u2["subjects"])
+    return any(len(x) > 25 and len(x.split()) >= 4 for x in u1["subjects"] & u2["subjects"])
 
 
 def refs_in(text, own_repo):
@@ -180,8 +181,13 @@ def chain_edges(g, units):
     return [{"from": f, "to": t, "kind": k} for (f, t), k in out.items()]
 
 
+SCALA2_BRIDGE_MOVED = "2023-07-12"
+
+
 def exclusions(group_units, target):
     why = []
+    if target == "scala2" and max(u["date"] for u in group_units) < SCALA2_BRIDGE_MOVED:
+        why.append("predates the bridge move to scala/scala (2023-07)")
     paths = [p for u in group_units for p in u["files"]]
     if target in ("scala2", "scala3") and paths and all(OLD_SCALA_DIR.search(p) for p in paths if SEMANTIC.search(p) and not TEST.search(p)) and any(SEMANTIC.search(p) for p in paths):
         why.append("only old-Scala-version sources")
