@@ -129,7 +129,7 @@ private[inc] object MerkleHashes {
    */
   private def header(c: AnalyzedClass): Int =
     List(c.api().classApi(), c.api().objectApi())
-      .map(cl => (cl.modifiers.raw, cl.access, cl.annotations.toSeq, cl.definitionType))
+      .map(cl => (cl.modifiers.raw, cl.access, cl.annotations.toSeq, cl.definitionType.ordinal))
       .hashCode
 
   /**

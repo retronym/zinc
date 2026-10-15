@@ -139,7 +139,9 @@ private[inc] final class HierarchyView(
         .contains(ancestor)
     }
 
-  def isTopLevel(className: String): Boolean = classLikes(className).exists(_.topLevel)
+  /** An absent side is stored as `APIUtil.emptyClassLike`, which claims to be top-level. */
+  def isTopLevel(className: String): Boolean =
+    classLikes(className).exists(c => !isEmpty(c) && c.topLevel)
 
   def isTrait(className: String): Boolean =
     api(className).exists(_.api().classApi().definitionType == DefinitionType.Trait)
