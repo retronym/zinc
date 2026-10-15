@@ -3,7 +3,7 @@
 
 usage: render.py [--since YYYY-MM-DD] [--out DIR]
 """
-import argparse, json
+import argparse, json, re
 from pathlib import Path
 
 TEMPLATE = r'''<!doctype html>
@@ -31,6 +31,16 @@ svg{display:block;min-width:1040px;width:100%;height:auto}
 a:focus-visible{outline:2px solid var(--l0)}
 .ledger{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;max-height:420px;overflow:auto;font:12px/1.5 var(--mono);margin:0;white-space:pre}
 footer{margin-top:28px;border-top:1px solid var(--line);padding-top:12px;color:var(--fg3);font-size:.85rem}
+.ci{display:grid;gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.card h3{margin:0 0 4px;font-size:1rem}.card .meta{color:var(--fg2);font-size:.85rem;margin:0 0 8px}.card p{max-width:80ch}
+.agent{border-left:3px solid var(--l0)}.agent .stamp{font:.75rem var(--mono);color:var(--fg3);margin-bottom:6px}
+.pill{display:inline-block;font:600 .7rem var(--sans);letter-spacing:.04em;text-transform:uppercase;padding:1px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.pill.good{background:var(--good-bg);color:var(--good);border-color:var(--good)}.pill.crit{background:var(--crit-bg);color:var(--crit);border-color:var(--crit)}
+.pill.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}.pill.rev{background:var(--rev-bg);color:var(--rev);border-color:var(--rev)}.pill.mute{background:var(--mute-bg);color:var(--mute)}
+.tblw{overflow-x:auto}table.skips{border-collapse:collapse;width:100%;font-size:.85rem}table.skips th,table.skips td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+table.skips th{font:600 .7rem var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--fg3)}table.skips td.sc{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}.chips code{background:var(--mute-bg)}
+
 .lnk:hover{text-decoration:underline}
 .tip{pointer-events:none;max-height:70vh;overflow:auto;position:fixed;z-index:30;max-width:440px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.4}
 .tip[hidden]{display:none}.tip.pinned{pointer-events:auto;border-color:var(--l0);padding-right:34px}.tip .x{position:absolute;top:6px;right:8px;border:0;background:none;color:var(--fg2);font-size:1.2rem;line-height:1;cursor:pointer;padding:2px 6px}.tip .hint{margin-top:8px;font-size:.72rem;color:var(--fg3)}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
@@ -47,6 +57,7 @@ footer{margin-top:28px;border-top:1px solid var(--line);padding-top:12px;color:v
 </div>
 <h2>Behaviour changes</h2><div class="panel" id="sem"></div>
 <details><summary>Touch the extraction code but look mechanical</summary><div class="panel" id="mech"></div></details>
+__CI__
 <h2>Verdicts</h2>
 <p>The local ledger the report was generated with (<a href="__VERDICTS_URL__" target="_blank" rel="noopener"><code>verdicts.json</code></a>), read-only. It overrides the computed state of a line; a <code>ported</code> verdict with a <code>ref</code> links two fixes into one row.</p>
 <pre class="ledger" tabindex="0" aria-label="verdicts.json, read-only">__VERDICTS__</pre>
@@ -186,12 +197,56 @@ draw(document.getElementById("mech"), mech, false);
 </script></body></html>'''
 
 
+def ci_panel(ci, summary):
+    import html as H
+    esc = H.escape
+    def link(text):
+        t = esc(text)
+        t = re.sub(r"\b(?:sbt/)?zinc#(\d+)", r'<a href="https://github.com/sbt/zinc/pull/\1" target="_blank" rel="noopener">zinc#\1</a>', t)
+        t = re.sub(r"scala/(scala3?)#(\d+)", r'<a href="https://github.com/scala/\1/pull/\2" target="_blank" rel="noopener">scala/\1#\2</a>', t)
+        return t
+    cat = {"gap": ("crit", "bridge gap"), "triage": ("warn", "not triaged"), "pending-in-zinc": ("rev", "pending in Zinc"), "label": ("mute", "Scala 2 only")}
+    order = ["gap", "triage", "pending-in-zinc", "label"]
+    out = ['<h2>CI: Zinc\'s scripted suite against each bridge</h2><div class="ci">']
+    if summary:
+        paras = "".join(f"<p>{link(p)}</p>" for p in summary["paragraphs"])
+        out.append(f'<div class="card agent"><h3>Summary</h3><div class="stamp">written by Claude, {esc(summary["generated_at"])}, from the runs below; the reasons in the skip tables are readings of failure output, not confirmed root causes</div>{paras}</div>')
+    for src in ci["sources"]:
+        run, latest = src.get("run"), src.get("latest")
+        h = [f'<div class="card"><h3>{esc(src["label"])}</h3>']
+        meta = [f'<a href="{esc(src["pr"])}" target="_blank" rel="noopener">{esc(src["repo"])} PR</a>']
+        if run:
+            ok = run["conclusion"] == "success"
+            meta.append(f'<span class="pill {"good" if ok else "crit"}">{esc(run["conclusion"])}</span> <a href="{esc(run["url"])}" target="_blank" rel="noopener">run {run["id"]}</a> {esc(run["created"][:16].replace("T", " "))} UTC')
+            meta.append(f'{run["passed"]} passed, {run["pending"]} pending, {len(src["skips"])} skipped; Zinc <code>{esc((run["zinc_sha"] or "")[:8])}</code> on Scala <code>{esc(run["scala_version"] or "?")}</code>')
+        h.append(f'<div class="meta">{" · ".join(meta)}</div>')
+        if latest and run and latest["id"] != run["id"]:
+            h.append(f'<p class="meta"><span class="pill {"good" if latest["conclusion"] == "success" else "crit"}">newest run: {esc(latest["conclusion"])}</span> <a href="{esc(latest["url"])}" target="_blank" rel="noopener">{latest["id"]}</a> {esc(latest["created"][:16].replace("T", " "))} UTC'
+                     + (f', stopped at step "{esc(latest["failed_step"])}" before the tests ran' if latest.get("failed_step") else "") + ".</p>")
+        skips = sorted(src.get("skips", []), key=lambda k: (order.index(k["category"]), k["scenario"]))
+        if skips:
+            counts = {c: sum(1 for k in skips if k["category"] == c) for c in order}
+            h.append('<div class="chips">' + "".join(f'<span class="pill {cat[c][0]}">{counts[c]} {cat[c][1]}</span>' for c in order if counts[c]) + "</div>")
+            rows = "".join(f'<tr><td class="sc">{esc(k["scenario"])}</td><td><span class="pill {cat[k["category"]][0]}">{cat[k["category"]][1]}</span></td><td>{link(k["reason"])}</td></tr>' for k in skips)
+            h.append(f'<div class="tblw"><table class="skips"><thead><tr><th>skipped scenario</th><th>kind</th><th>reason</th></tr></thead><tbody>{rows}</tbody></table></div>')
+        out.append("".join(h) + "</div>")
+    z = ci["zinc"]
+    base = "https://github.com/sbt/zinc/tree/" + z["sha"] + "/zinc/src/sbt-test/"
+    chips = lambda xs: '<div class="chips">' + "".join(f'<a href="{base}{esc(x)}" target="_blank" rel="noopener"><code>{esc(x)}</code></a>' for x in xs) + "</div>"
+    out.append(f'<div class="card"><h3>Zinc\'s own markers (sbt/zinc develop <code>{esc(z["sha"][:8])}</code>)</h3><p class="meta">No reason is recorded in the repository for any of these. A disabled scenario is skipped by every run above, so a port gap it would show goes unnoticed.</p>'
+               f'<div><span class="pill crit">{len(z["disabled"])} disabled</span>{chips(z["disabled"])}</div><div><span class="pill rev">{len(z["pending"])} pending</span>{chips(z["pending"])}</div></div>')
+    out.append(f'</div><p class="meta">CI data fetched {esc(ci["fetched_at"])}.</p>')
+    return "".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="2025-01-01")
     ap.add_argument("--out", default="scripts/crossport/out")
     ap.add_argument("--verdicts", default="scripts/crossport/verdicts.json")
     ap.add_argument("--pr", default="https://github.com/retronym/zinc/pull/65", help="link shown in the generated-by footer")
+    ap.add_argument("--ci", default="scripts/crossport/out/ci.json")
+    ap.add_argument("--ci-summary", default="scripts/crossport/ci_summary.json")
     ap.add_argument("--artifact", action="store_true", help="also write report.artifact.html, a page fragment for publishing")
     a = ap.parse_args()
     out = Path(a.out)
@@ -202,7 +257,9 @@ def main():
     vpath = Path(a.verdicts)
     ledger = json.dumps(json.load(open(vpath)), indent=1) if vpath.exists() else "{}"
     pr_label = "/".join(a.pr.rstrip("/").split("/")[-4:]).replace("/pull/", "#") if "/pull/" in a.pr else a.pr
-    html = TEMPLATE.replace("__VERDICTS__", htmllib.escape(ledger)).replace("__VERDICTS_URL__", "https://github.com/retronym/zinc/blob/cross-port-gap-analysis/scripts/crossport/verdicts.json").replace("__PR_URL__", a.pr).replace("__PR_LABEL__", htmllib.escape(pr_label)).replace("__GENAT__", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")).replace("__DATA__", json.dumps(rows)).replace("__SINCE__", a.since).replace("__GEN__", date.today().isoformat())
+    ci_path, sum_path = Path(a.ci), Path(a.ci_summary)
+    ci_html = ci_panel(json.load(open(ci_path)), json.load(open(sum_path)) if sum_path.exists() else None) if ci_path.exists() else ""
+    html = TEMPLATE.replace("__CI__", ci_html).replace("__VERDICTS__", htmllib.escape(ledger)).replace("__VERDICTS_URL__", "https://github.com/retronym/zinc/blob/cross-port-gap-analysis/scripts/crossport/verdicts.json").replace("__PR_URL__", a.pr).replace("__PR_LABEL__", htmllib.escape(pr_label)).replace("__GENAT__", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")).replace("__DATA__", json.dumps(rows)).replace("__SINCE__", a.since).replace("__GEN__", date.today().isoformat())
     (out / "report.html").write_text(html)
     if a.artifact:
         frag = html[html.index("<title>"):].replace("<title>Bridge Cross-Port Gaps</title>", "<title>Bridge Port Gaps (WIP)</title>").replace("</head><body>", "").replace("</body></html>", "")
