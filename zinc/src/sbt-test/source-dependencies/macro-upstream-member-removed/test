@@ -1,0 +1,8 @@
+> app/run false
+
+$ copy-file lib/changes/B1.scala lib/B.scala
+> app/run true
+
+# B loses b again: the macro expansion in W lists the members of C, so it must be recomputed
+$ copy-file lib/changes/B0.scala lib/B.scala
+> app/run false

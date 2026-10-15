@@ -73,7 +73,7 @@ object APIUtil {
       c.modifiers,
       c.annotations,
       c.definitionType,
-      emptyTypeLzy,
+      lzy(c.selfType),
       lzy(struct),
       savedAnnotations,
       c.childrenOfSealedClass,
@@ -82,12 +82,40 @@ object APIUtil {
     )
   }
 
-  def minimizeStructure(s: Structure, isModule: Boolean): Structure =
+  /**
+   * Keeps the parents, main methods, a stub (name, access, modifiers, annotations) of every
+   * other declaration, and a stub of each abstract inherited member: descendant invalidation
+   * reads which names a class declares, overrides, leaves abstract or annotates, and which names
+   * it inherits abstract from library ancestors, which have no stored API of their own.
+   */
+  def minimizeStructure(s: Structure, isModule: Boolean): Structure = {
+    val mains = if (isModule) s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
+    val stubs = s.declared.filterNot(mains.contains).map(stubDefinition)
+    val inheritedMains = filterDefinitions(s.inherited, isModule).get
+    val abstractInherited =
+      s.inherited.filter(d => d.modifiers.isAbstract && !inheritedMains.contains(d))
     Structure.of(
       lzy(s.parents),
-      filterDefinitions(s.declared, isModule),
-      filterDefinitions(s.inherited, isModule)
+      lzy(mains ++ stubs),
+      lzy(inheritedMains ++ abstractInherited.map(stubDefinition))
     )
+  }
+
+  /** Drops the bridge's erased-signature witness, which only feeds the hash. */
+  def stubDefinition(d: ClassDefinition): ClassDefinition = {
+    val annotations = d.annotations.filterNot(isErasedSignature)
+    Def.of(d.name, d.access, d.modifiers, annotations, Array.empty, Array.empty, emptyType)
+  }
+
+  private def isErasedSignature(a: Annotation): Boolean =
+    a.base match {
+      case s: Singleton =>
+        s.path.components match {
+          case Array(id: Id) => id.id == "<erased-signature>"
+          case _             => false
+        }
+      case _ => false
+    }
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean

@@ -1,0 +1,8 @@
+# Client, in package a with `import q._`, resolves Foo to a.Foo; c.User resolves its own c.Foo.
+> p/compile
+# Adding q.Foo shadows a.Foo for Client, which imports q with a wildcard. c.User uses the name Foo too, but neither is in
+# package q nor imports it, so it does not recompile.
+$ copy-file changes/Added.scala p/Added.scala
+> p/compile
+> p/checkRecompilations 1 q.Foo
+> p/checkRecompilations 2 a.Client

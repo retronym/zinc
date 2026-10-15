@@ -1,0 +1,6 @@
+# Client, in `package a; package b`, resolves Foo to a.Foo; `package object b` extends lib's q.Base.
+> app/compile
+# Base gains Foo, which the package object inherits from the upstream subproject: it shadows a.Foo, and its v is a
+# String, so a clean build fails. Client has no edge to Base or to the package object.
+$ copy-file changes/Base.scala lib/Base.scala
+-> app/compile
