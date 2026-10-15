@@ -15,7 +15,7 @@ package inc
 
 import xsbt.api.Discovery
 import xsbti.UseScope
-import xsbti.api.{ AnalyzedClass, NameHash, Parameterized, Type }
+import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash, Parameterized, Type }
 
 /**
  * A class's stored API omits the members it inherits from classes of its own subproject. Within
@@ -27,6 +27,12 @@ import xsbti.api.{ AnalyzedClass, NameHash, Parameterized, Type }
  * An ancestor contributes its extraHash rather than its apiHash: that covers its class side only,
  * since members of a companion object are not inherited. Its implicit members are added from both
  * sides, since a companion's implicits are in the implicit scope of its descendants.
+ *
+ * A trait also gets, per name, a hash of the contributions of itself and its trait ancestors only,
+ * under the name with [[ForwarderSuffix]]. A class mixing the trait in has forwarders for exactly
+ * those members, and for the private fields of those traits, which their extraHashes cover and
+ * which are hashed under the bare suffix. A change that reaches the trait only through a class
+ * ancestor moves the composed hash but none of these. No client uses these names.
  */
 private[inc] object MerkleHashes:
   def composed(
@@ -38,22 +44,45 @@ private[inc] object MerkleHashes:
       val ancestors = linearization(own)
         .filter(_ != className)
         .flatMap(a => analysis.apis.internal.get(a).orElse(elsewhere(a)))
-      if ancestors.isEmpty then own.withApiHash((own.apiHash, header(own)).hashCode)
+      val forwarded =
+        if isTrait(own) then
+          val traits = (own +: ancestors).filter(isTrait)
+          val fields = traits.map(c => (c.name, c.extraHash)).hashCode
+          compose(traits, ForwarderSuffix) :+ NameHash.of(ForwarderSuffix, UseScope.Default, fields)
+        else Array.empty[NameHash]
+      if ancestors.isEmpty then
+        own
+          .withApiHash((own.apiHash, header(own)).hashCode)
+          .withNameHashes(own.nameHashes ++ forwarded)
       else
-        val all = own +: ancestors
-        val nameHashes = all
-          .flatMap(c => c.nameHashes.iterator.map(h => (h.name, h.scope) -> (c.name, h.hash)))
-          .groupMap(_._1)(_._2)
-          .iterator
-          .map { case ((name, scope), hashes) => NameHash.of(name, scope, hashes.hashCode) }
-          .toArray
         val apiHash =
           (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash, implicits(c))))
             .hashCode
         own
           .withApiHash(apiHash)
-          .withNameHashes(nameHashes)
+          .withNameHashes(compose(own +: ancestors, "") ++ forwarded)
     }
+
+  /** Marks a name hash that covers a trait's mixin forwarders: see the class comment. */
+  val ForwarderSuffix = " <forwarders>"
+
+  /** The name a [[ForwarderSuffix]] hash covers, if `name` is one. */
+  def forwarded(name: String): Option[String] =
+    if name.endsWith(ForwarderSuffix) then Some(name.dropRight(ForwarderSuffix.length)) else None
+
+  def hasForwarderHashes(c: AnalyzedClass): Boolean =
+    c.nameHashes.exists(h => forwarded(h.name).isDefined)
+
+  private def compose(classes: Seq[AnalyzedClass], suffix: String): Array[NameHash] =
+    classes
+      .flatMap(c => c.nameHashes.iterator.map(h => (h.name, h.scope) -> (c.name, h.hash)))
+      .groupMap(_._1)(_._2)
+      .iterator
+      .map { case ((name, scope), hashes) => NameHash.of(name + suffix, scope, hashes.hashCode) }
+      .toArray
+
+  private def isTrait(c: AnalyzedClass): Boolean =
+    c.api().classApi().definitionType == DefinitionType.Trait
 
   /**
    * An ancestor's implicit members, its companion's included. The companions of a class's base

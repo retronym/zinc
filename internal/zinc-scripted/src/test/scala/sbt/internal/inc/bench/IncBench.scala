@@ -49,6 +49,7 @@ import xsbti.compile.AnalysisContents
  * clean, so the next edit starts from the clean build's classfiles. Verification is untimed and
  * runs on the first repetition only. Classfiles that differ are copied, from both sides, to a
  * `-diffs` directory beside the build; `--only REGEX` runs just the edits it matches.
+ * `--inv-log DIR` writes each step's invalidation log per module.
  *
  * {{{
  * sbt "publishBridges; zincScripted3/Test/runMain sbt.internal.inc.bench.IncBench \
@@ -73,6 +74,7 @@ object IncBench:
       logLevel: Level.Value = Level.Warn,
       verify: Boolean = false,
       only: Option[scala.util.matching.Regex] = None,
+      invLog: Option[Path] = None,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
@@ -90,6 +92,7 @@ object IncBench:
     case "--debug" :: rest              => parse(rest, o.copy(logLevel = Level.Debug))
     case "--verify" :: rest             => parse(rest, o.copy(verify = true))
     case "--only" :: v :: rest          => parse(rest, o.copy(only = Some(v.r)))
+    case "--inv-log" :: v :: rest       => parse(rest, o.copy(invLog = Some(Paths.get(v))))
     case "--scalac-option" :: v :: rest =>
       val all = (o.incOptions.get("scalac.options").toList :+ v).mkString(" ")
       parse(rest, o.copy(incOptions = o.incOptions + ("scalac.options" -> all)))
@@ -253,6 +256,13 @@ object IncBench:
     mirror.foreach(m =>
       emit(s"""{$shape,"step":"verify-base",${verdict(cleanBuild(m)._1, base)}}""")
     )
+
+    /** Writes each module's invalidation log since the last step to `--inv-log`. */
+    def invLog(step: String): Unit =
+      for (m, lines) <- runner.drainInvalidationLogs(); d <- o.invLog if lines.nonEmpty do
+        Files.createDirectories(d)
+        Files.write(d.resolve(s"$step-$m.log"), lines.mkString("", "\n", "\n").getBytes("UTF-8"))
+    runner.drainInvalidationLogs()
     for edit <- edits; rep <- 1 to o.reps do
       val file = dir.resolve(edit.file)
       val original = Files.readString(file)
@@ -318,9 +328,11 @@ object IncBench:
         n => mirrorClasses.get(n),
         edited = true
       )
+      invLog(s"${edit.name}-$rep")
       Files.writeString(file, original)
       val reverted =
         step(s"${edit.name}-revert", (base, () => baseBin, baseJava), baseCopy.resolve, false)
+      invLog(s"${edit.name}-revert-$rep")
       if verifying.isDefined && !reverted then
         val targets = moduleNames.map(runner.classesDir(_).getParent)
         runner.finish()
@@ -658,6 +670,11 @@ object IncBench:
       finally Files.deleteIfExists(tmp)
     end stored
 
+    /** Each module's invalidation-log lines since the last call. */
+    def drainInvalidationLogs(): Seq[(String, Vector[String])] =
+      moduleNames.map(m => m -> handler.lookupProject(m).drainInvalidationLog())
+
     def finish(): Unit = handler.finish(state)
   end Runner
+
 end IncBench
