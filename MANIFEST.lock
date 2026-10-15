@@ -1,0 +1,11 @@
+# integration/merkle-1.12.x, built 2026-10-15T09:35:55Z by build-integration from manifest.toml
+
+base	upstream/1.12.x	db2a2f35fe499d0179b78fe0d292aa74e9fb2a6e
+
+rz#48	refs/pull/48/head	fd532f487fa15a003f7c8bbe8982448d97fa3830	clean
+rz#68	refs/pull/68/head	363c4672669507d56831fe79e108ea7f002a0b9e	clean
+rz#68+rz#48	fixups/68-legacy-hashapi-trait-hash.patch	0de6ec8278f97c4511886d21f30990bdae39a43b	applied
+
+# excluded
+backport/1.12.x-z1-overcompilation	not Merkle (decision 5)
+backport/1.12.x-z2-name-kinds	not Merkle (decision 5)
