@@ -550,7 +550,7 @@ class ExtractAPI[GlobalType <: Global](
     val declSet = decls.toSet
     val (inherited, platform) =
       info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
+        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
         .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     mkStructure(
       s,
@@ -690,7 +690,17 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
-  private def discoveryReads(m: Symbol): Boolean = m.annotations.nonEmpty || m.name == nme.main
+  private def discoveryReads(m: Symbol): Boolean = discoveryReadsAnnotations(m) ||
+    m.name == nme.main
+
+  /**
+   * Does `m` carry an annotation discovery can read? Only static annotations count, as in
+   * `mkAnnotations`: a source-only one such as `@nowarn` is present when `m`'s owner is compiled
+   * in the same run and absent when it is read from a classfile, so counting it would make a
+   * descendant's API depend on the batch.
+   */
+  private def discoveryReadsAnnotations(m: Symbol): Boolean =
+    staticAnnotations(m.annotations).nonEmpty
 
   /**
    * A library member as a name with its access and modifiers, but no types: descendant
@@ -1696,7 +1706,7 @@ class ExtractAPI[GlobalType <: Global](
     private val declSet = decls.toSet
     private val (inherited0, platform) =
       info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || m.annotations.nonEmpty))
+        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
         .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     val inherited: List[Symbol] = sort(inherited0.toArray).toList
     val stubbed: List[Symbol] =
