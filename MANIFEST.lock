@@ -1,0 +1,12 @@
+# integration/develop-1.12.x, built 2026-10-15T09:35:47Z by build-integration from manifest.toml
+
+base	upstream/1.12.x	db2a2f35fe499d0179b78fe0d292aa74e9fb2a6e
+
+rz#9	refs/pull/9/head	7ca22a75de572610bff2bd34aa489e575167ff14	clean
+sz#1765	fixups/1765-invalidation-debug-logs.patch	8c2908300bffeaf9c6a1172014cc625a08af781d	applied
+rz#68	refs/pull/68/head	363c4672669507d56831fe79e108ea7f002a0b9e	clean
+
+# excluded
+rz#48	Merkle; see integration/merkle-1.12.x
+backport/1.12.x-z1-overcompilation	not in integration/merkle-1.12.x either
+backport/1.12.x-z2-name-kinds	not in integration/merkle-1.12.x either
