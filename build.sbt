@@ -700,6 +700,7 @@ lazy val zincScripted = (projectMatrix in internalPath / "zinc-scripted")
     Test / buildInfoPackage := "sbt.internal.inc",
     Test / buildInfoKeys := Seq[BuildInfoKey](zinc212 / sourceDirectory),
     conflictWarning := ConflictWarning.disable,
+    Test / run / mainClass := Some("sbt.inc.ScriptedMain"),
   )
   .defaultAxes(VirtualAxis.jvm, VirtualAxis.scalaPartialVersion(scala212))
   .jvmPlatform(scalaVersions = List(scala212))

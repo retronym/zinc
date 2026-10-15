@@ -1,0 +1,17 @@
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+$ copy-file dep/target/dep.jar app/lib/dep.jar
+
+# done this way because last modified times often have ~1s resolution
+> app/compile
+$ sleep 2000
+
+$ copy-file changes/L.scala dep/L.scala
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+$ copy-file dep/target/dep.jar app/lib/dep.jar
+
+# D's API records only the name m from the library class L, and its bytecode does not change. J,
+# Java in a downstream subproject, depends on the jar itself, so it recompiles when the jar
+# changes; D's stored hash for m also folds in the stamp of L's jar
+-> app/compile

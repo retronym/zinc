@@ -10,15 +10,13 @@
 > compile
 > checkRecompilations 0 A A2 B C
 $ copy-file changes/A1.scala src/main/scala/A.scala
-# second iteration and third iteration (due to invalidation of C)
+# second iteration; C does not read the added class AA, so it is not recompiled
 > compile
+> checkRecompilations 0 B C
 > checkRecompilations 1 A A.AA A2
-> checkRecompilations 2 C
 $ copy-file changes/A2.scala src/main/scala/A.scala
-# fourth iteration
+# third iteration
 > compile
-# check if there were exactly four compile iterations performed
-> checkRecompilations 0 B
+> checkRecompilations 0 B C
 > checkRecompilations 1
-> checkRecompilations 2 C
-> checkRecompilations 3 A A2 A.AA
+> checkRecompilations 2 A A2 A.AA

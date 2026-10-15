@@ -136,8 +136,8 @@ class MultiProjectIncrementalSpec extends BaseCompilerSpec {
     val c2 = p2.setup.createCompiler()
     try {
       val s1 = "package pkg; class A { def a = 1 }"
-      val s1b = "package pkg; class A { def a1 = 1 }"
-      val s2 = "package pkg; class B extends A { def b = 2 }"
+      val s1b = "package pkg; class A { def a = \"1\" }"
+      val s2 = "package pkg; class B extends A { def b = a }"
       val s3 = "package pkg; class C"
       val s4 = "package pkg; public class Z { public static int x = 3; }"
 

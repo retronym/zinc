@@ -1,0 +1,6 @@
+> app/run
+
+# M.m now erases to m()Object, so the anonymous subclass of A needs a bridge from m()Object to m()I. As seen from A,
+# M's m is still of type Int, so A's API, which materialises M's members, does not change.
+$ copy-file lib/changes/M.scala lib/M.scala
+> app/run

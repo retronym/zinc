@@ -1,0 +1,6 @@
+> app/compile
+
+# C's bridge m()I implements M.m by calling A's erased m()Object. B now has its own m()I, so C
+# must drop that bridge, or C.m()I overrides B's and the call recurses forever.
+$ copy-file app/changes/B.scala app/B.scala
+> app/run
