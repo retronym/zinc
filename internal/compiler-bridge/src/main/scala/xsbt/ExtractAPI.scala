@@ -697,10 +697,14 @@ class ExtractAPI[GlobalType <: Global](
    * Does `m` carry an annotation discovery can read? Only static annotations count, as in
    * `mkAnnotations`: a source-only one such as `@nowarn` is present when `m`'s owner is compiled
    * in the same run and absent when it is read from a classfile, so counting it would make a
-   * descendant's API depend on the batch.
+   * descendant's API depend on the batch. `m`'s type is completed first: on a member read from a
+   * classfile, scalac adds `@throws` only then, so it would be present or not depending on what
+   * else the run had typed.
    */
-  private def discoveryReadsAnnotations(m: Symbol): Boolean =
+  private def discoveryReadsAnnotations(m: Symbol): Boolean = {
+    m.info
     staticAnnotations(m.annotations).nonEmpty
+  }
 
   /**
    * A library member as a name with its access and modifiers, but no types: descendant
