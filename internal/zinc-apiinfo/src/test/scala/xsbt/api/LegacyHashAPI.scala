@@ -129,6 +129,7 @@ final class LegacyHashAPI private (
   private[this] final val StructureHash = 60
 
   private[this] val ClassHash = 70
+  private[this] final val TraitHash = 71
 
   private[this] final val TrueHash = 97
   private[this] final val FalseHash = 98
@@ -254,6 +255,7 @@ final class LegacyHashAPI private (
       hashTypesSymmetric(c.childrenOfSealedClass, includeDefinitions)
 
     val isTrait = c.definitionType() == DefinitionType.Trait
+    if (isTrait) extend(TraitHash)
     hashStructure(c.structure, includeDefinitions, isTrait)
   }
   def hashField(f: FieldLike): Unit = {
