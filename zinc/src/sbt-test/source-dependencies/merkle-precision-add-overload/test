@@ -1,0 +1,15 @@
+# An ancestor gains an overload of a member that clients of a descendant select.
+> merkle/compile
+> all/compile
+
+# A gains m(String)
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 X
+> merkle/checkRecompilations 0 B C Z
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C X
+> all/checkRecompilations 0 Z

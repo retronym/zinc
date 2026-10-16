@@ -1,0 +1,16 @@
+# §10a Edit 3 without a compile error: A.m becomes final. C also inherits m from M, so the
+# conflicts rule recompiles C; B, with no other path to m, stays.
+> merkle/compile
+> all/compile
+
+# A.m becomes final
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 C
+> merkle/checkRecompilations 0 B M
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C
+> all/checkRecompilations 0 M

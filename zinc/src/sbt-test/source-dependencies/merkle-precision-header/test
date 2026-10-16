@@ -1,0 +1,15 @@
+# Header edits: A gains a parent. The class-name hash of A moves, so every client that names
+# A or a descendant recompiles in both designs. Same classes on both sides; sbt/zinc develop
+# (integration/develop, 38cb22d04) takes a round more: B C in round 2, then X Z in round 3.
+> merkle/compile
+> all/compile
+
+# A gains the parent Serializable
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 B C X Z
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C X Z

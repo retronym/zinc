@@ -4,3 +4,5 @@ $ copy-file changes/A.scala A.scala
 > run s
 > checkRecompilations 1 A
 > checkRecompilations 2 X Y
+# B and C are not recompiled: nothing their own compilation reads changed
+> checkRecompilations 0 B C M Z Main

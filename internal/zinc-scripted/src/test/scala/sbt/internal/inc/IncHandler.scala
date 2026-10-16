@@ -296,6 +296,12 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkNameExistsInClass") {
       case (p, cls :: name :: Nil, i) => p.checkNameExistsInClass(i, dropRightColon(cls), name)
     },
+    onArgs("checkNameHash") {
+      case (p, cls :: name :: Nil, i) => p.checkNameHash(i, cls, name, expected = true)
+    },
+    onArgs("checkNoNameHash") {
+      case (p, cls :: name :: Nil, i) => p.checkNameHash(i, cls, name, expected = false)
+    },
     noArgs("checkSame") { case (p, i) => p.checkSame(i) },
     onArgs("run") { case (p, params, i) => p.run(i, params) },
     noArgs("package") { case (p, i) => p.packageBin(i) },
@@ -629,6 +635,17 @@ case class ProjectStructure(
   def checkNameExistsInClass(i: IncState, className: String, name: String): Future[Unit] =
     compile(i).map[Unit] { analysis =>
       assert(analysis.apis.externalAPI(className).nameHashes.exists(_.name == name))
+      ()
+    }
+
+  /** Whether this subproject's stored API for `className` has a name hash for `name`. */
+  def checkNameHash(i: IncState, className: String, name: String, expected: Boolean): Future[Unit] =
+    compile(i).map[Unit] { analysis =>
+      val names = analysis.apis.internalAPI(className).nameHashes.map(_.name).distinct.sorted
+      assert(
+        names.contains(name) == expected,
+        s"Expected ${if expected then "a" else "no"} name hash for $name in $className; names: ${names.mkString(", ")}"
+      )
       ()
     }
 

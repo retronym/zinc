@@ -1,0 +1,15 @@
+# A protected member changes; the descendant that calls it recompiles, its sibling does not.
+> merkle/compile
+> all/compile
+
+# A.p changes type
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 B
+> merkle/checkRecompilations 0 C
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C
+> all/checkRecompilations 0
