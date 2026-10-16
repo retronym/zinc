@@ -1,0 +1,7 @@
+# Pending until dotc records `import q._` as the used name `q._` (retronym/scala3#11): without it,
+# the narrowed rule does not see that Client imports q.
+# Scala 3 variant: Client, in package a with `import q._`, resolves Foo to a.Foo; adding q.Foo shadows it.
+> p/compile
+$ copy-file changes/Added.scala p/Added.scala
+# A clean build now fails. Client uses the added name, so Zinc recompiles it and the incremental build fails too.
+-> p/compile
