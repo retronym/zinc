@@ -1,0 +1,2 @@
+# Test discovery reads the annotations of inherited methods (a JUnit @Test in a base class)
+> checkAnnotated FooTest Test

@@ -273,6 +273,9 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkAnnotated") {
       case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
     },
+    onArgs("checkNotAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkNotAnnotated(i, cls, annotation)
+    },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
         p.checkMainClasses(i, javaV, dropRightColon(src), products)
@@ -282,6 +285,10 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     },
     onArgs("checkProductsExists") {
       case (p, src :: Nil, i) => p.checkProductsExist(i, src)
+    },
+    onArgs("checkExternalDependencies") {
+      case (p, cls :: dependencies, i) =>
+        p.checkExternalDependencies(i, dropRightColon(cls), dependencies)
     },
     onArgs("checkDependencies") {
       case (p, cls :: dependencies, i) => p.checkDependencies(i, dropRightColon(cls), dependencies)
@@ -385,6 +392,11 @@ case class ProjectStructure(
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
   val (incOptions, scalacOptions) =
     val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
@@ -527,6 +539,15 @@ case class ProjectStructure(
       assert(found.nonEmpty, s"$cls has no method annotated $annotation")
     }
 
+  /** Test discovery, as sbt does it: does no public method of `cls` look annotated `annotation`? */
+  def checkNotAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.isEmpty, s"$cls has a method annotated $annotation")
+    }
+
   def checkMainClasses(
       i: IncState,
       javaV: String,
@@ -595,6 +616,19 @@ case class ProjectStructure(
         assert(expected == actual, s"Expected $expected dependencies, got $actual")
 
       assertDependencies(expected.toSet, classDeps(className))
+      ()
+    }
+
+  /** The classes of other subprojects that `className` depends on. */
+  def checkExternalDependencies(
+      i: IncState,
+      className: String,
+      expected: List[String]
+  ): Future[Unit] =
+    compile(i).map { analysis =>
+      val actual = analysis.relations.memberRef.external.forward(className) ++
+        analysis.relations.inheritance.external.forward(className)
+      assert(expected.toSet == actual, s"Expected external dependencies $expected, got $actual")
       ()
     }
 
@@ -804,7 +838,7 @@ case class ProjectStructure(
       if exportPipelining then Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       compileOrder,
@@ -903,11 +937,15 @@ case class ProjectStructure(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
     )
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if scalaVersion.startsWith("3") then
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions =
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)

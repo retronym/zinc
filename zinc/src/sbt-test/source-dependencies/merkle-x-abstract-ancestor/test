@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/B.scala lib/B.scala
+# C no longer implements A.m
+-> app/compile

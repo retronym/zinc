@@ -1,0 +1,5 @@
+> app/run Int
+
+# the macro reads B's inherited member, and its client names only B
+$ copy-file changes/A.scala app/A.scala
+> app/run String

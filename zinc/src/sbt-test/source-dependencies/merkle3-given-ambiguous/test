@@ -1,0 +1,5 @@
+> p/run
+
+# App's implicit search through D now finds two givens
+$ copy-file changes/P.scala p/P.scala
+-> p/compile
