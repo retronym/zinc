@@ -1,0 +1,11 @@
+# What a class stores: its own declarations' name hashes, not those it inherits from classes of
+# its own subproject (they are composed or walked instead). Library ancestors' members stay, as
+# typeless stubs.
+> compile
+> checkNameHash A m
+> checkNameHash B own
+> checkNoNameHash B m
+> checkNoNameHash B g
+> checkNoNameHash C m
+> checkNoNameHash C own
+> checkNameHash L map

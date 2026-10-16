@@ -1,0 +1,14 @@
+# An ancestor loses a concrete member that nothing uses.
+> merkle/compile
+> all/compile
+
+# A.gone is removed
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 0 B C X
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C
+> all/checkRecompilations 0 X

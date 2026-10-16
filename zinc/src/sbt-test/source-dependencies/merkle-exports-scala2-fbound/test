@@ -5,3 +5,4 @@
 $ copy-file changes/TreeNode.scala p/TreeNode.scala
 > p/compile
 > p/checkRecompilations 1 t.TreeNode
+> p/checkRecompilations 0 e.Expression e.UnaryExpression e.Leaf

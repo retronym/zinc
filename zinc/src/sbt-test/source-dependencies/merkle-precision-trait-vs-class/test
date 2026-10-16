@@ -1,0 +1,26 @@
+# The same edit to a class ancestor and to a trait ancestor. Only the trait's change reaches a
+# descendant's bytecode: B, the first class to mix T in, holds the forwarder for n.
+> merkle/run 0 0
+> all/run 0 0
+
+# class ancestor: A.m changes type
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/run s 0
+> all/run s 0
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 X
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C X
+
+# trait ancestor: T.n changes type
+$ copy-file merkle/changes/T.scala merkle/T.scala
+$ copy-file all/changes/T.scala all/T.scala
+> merkle/run s s
+> all/run s s
+> merkle/checkRecompilations 3 T
+> merkle/checkRecompilations 4 B Y
+> merkle/checkRecompilations 0 C Main
+> all/checkRecompilations 3 T
+> all/checkRecompilations 4 B C Y
+> all/checkRecompilations 0 Main

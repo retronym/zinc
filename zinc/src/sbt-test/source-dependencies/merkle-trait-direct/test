@@ -6,3 +6,4 @@ $ copy-file changes/T.scala T.scala
 > run s
 > checkRecompilations 1 T
 > checkRecompilations 2 B X
+> checkRecompilations 0 C U Main

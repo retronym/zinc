@@ -1,0 +1,25 @@
+# A chain of four classes with a client of m at every level. An edit to the root moves m for
+# every client; an edit to a middle class adds a member nobody uses.
+> merkle/compile
+> all/compile
+
+# the root's m changes type
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 XA XB XC XD
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C D XA XB XC XD
+
+# a middle class gains a member nobody uses
+$ copy-file merkle/changes/B.scala merkle/B.scala
+$ copy-file all/changes/B.scala all/B.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 3 B
+> merkle/checkRecompilations 0 C D ZD
+> all/checkRecompilations 3 B
+> all/checkRecompilations 4 C D
+> all/checkRecompilations 0 ZD

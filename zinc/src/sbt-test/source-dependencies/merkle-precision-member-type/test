@@ -1,0 +1,16 @@
+# §10a Edit 1: an ancestor's member changes type; the descendants neither declare, use nor
+# must implement it, so with Merkle hashes only the clients recompile.
+> merkle/compile
+> all/compile
+
+# A.m: Int becomes A.m: String
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 X Y
+> merkle/checkRecompilations 0 B C M Z
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 B C X Y
+> all/checkRecompilations 0 M Z

@@ -1,0 +1,16 @@
+# A case class's companion object does not extend the case class's parents, so the mirror
+# rule does not fire for it.
+> merkle/compile
+> all/compile
+
+# A.m changes type
+$ copy-file merkle/changes/A.scala merkle/A.scala
+$ copy-file all/changes/A.scala all/A.scala
+> merkle/compile
+> all/compile
+> merkle/checkRecompilations 1 A
+> merkle/checkRecompilations 2 X
+> merkle/checkRecompilations 0 K
+> all/checkRecompilations 1 A
+> all/checkRecompilations 2 K X
+> all/checkRecompilations 0
