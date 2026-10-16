@@ -1,0 +1,7 @@
+# Main inlines L.k, whose body reads the Java constant J.K.
+> p/run 1
+# J.K changes. L uses K and recompiles, but its API does not move (the inline body hashes the
+# reference by name); Main recorded no name for K, which the inliner folded into a literal. A
+# clean build inlines 2.
+$ copy-file changes/J.java p/J.java
+> p/run 2
