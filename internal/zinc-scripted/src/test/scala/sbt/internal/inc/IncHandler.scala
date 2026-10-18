@@ -18,6 +18,7 @@ import java.nio.file.{ Files, Path, Paths, StandardCopyOption }
 import java.net.URLClassLoader
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import sbt.util.Logger
 import sbt.util.InterfaceUtil._
@@ -361,11 +362,26 @@ case class ProjectStructure(
   val cachedStore = AnalysisStore.cached(fileStore)
   val earlyCacheFile = baseDirectory / "target" / "early" / "inc_compile.zip"
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
+  private val invalidationLines = new ConcurrentLinkedQueue[String]()
+  private val compilerLog = new Logger {
+    override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
+    override def success(message: => String): Unit = scriptedLog.success(message)
+    override def log(level: sbt.util.Level.Value, message: => String): Unit = {
+      val rendered = message
+      rendered.linesIterator.filter(_.startsWith("[inv] ")).foreach(invalidationLines.add)
+      scriptedLog.log(level, rendered)
+    }
+  }
   // val earlyCachedStore = AnalysisStore.cached(fileStore)
   val profiler = new ZincInvalidationProfiler
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
   val (incOptions, scalacOptions) = {
     val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
@@ -436,6 +452,10 @@ case class ProjectStructure(
       assert(count == expected, msg)
       ()
     }
+
+  /** Returns the invalidation-log lines recorded since the last call, and forgets them. */
+  def drainInvalidationLog(): Vector[String] =
+    Iterator.continually(invalidationLines.poll()).takeWhile(_ != null).toVector
 
   def checkRecompilations(i: IncState, step: Int, expected: List[String]): Future[Unit] =
     compile(i).map { analysis =>
@@ -767,7 +787,7 @@ case class ProjectStructure(
       if (exportPipelining) Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       CompileOrder.Mixed,
@@ -779,8 +799,8 @@ case class ProjectStructure(
       stamper
     )
     val result =
-      if (javaOnly) incrementalCompiler.compileAllJava(in, scriptedLog)
-      else incrementalCompiler.compile(in, scriptedLog)
+      if (javaOnly) incrementalCompiler.compileAllJava(in, compilerLog)
+      else incrementalCompiler.compile(in, compilerLog)
     val analysis = result.analysis match { case a: Analysis => a }
     cachedStore.set(AnalysisContents.create(analysis, result.setup))
     val javaOnlyStr = if (javaOnly) "(java-only) " else ""
@@ -873,11 +893,15 @@ case class ProjectStructure(
       Optional.empty[XClassFileManager]
     )
       .withInvalidationProfiler(profiler)
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if (scalaVersion.startsWith("3"))
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions = {
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)
