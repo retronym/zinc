@@ -54,6 +54,9 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit {
    * `2.13.local`: this checkout's 2.13 bridge on a locally built Scala 2.13, whose library,
    * reflect and compiler jars `ZINC_SCRIPTED_SCALA213_JARS` lists (separated by the path
    * separator), with the version `ZINC_SCRIPTED_SCALA213_VERSION`. Absent unless both are set.
+   * `ZINC_SCRIPTED_SCALA213_BRIDGE` names the bridge's classes compiled against that Scala, a
+   * directory or a jar, for a Scala whose binary interface differs from the one this build
+   * compiles the bridge against.
    */
   final val Label213Local = "2.13.local"
   private lazy val localScala213: Option[ScalaBridge] =
@@ -63,7 +66,11 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit {
     } yield ScalaBridge(
       version,
       jars.split(java.io.File.pathSeparator).toList.map(new File(_)),
-      Left(classDirectory213)
+      sys.env.get("ZINC_SCRIPTED_SCALA213_BRIDGE") match {
+        case Some(jar) if jar.endsWith(".jar") => Right(new File(jar))
+        case Some(dir)                         => Left(new File(dir))
+        case None                              => Left(classDirectory213)
+      }
     )
 
   private val bridgeLabels = List(Label210, Label211, Label212, Label213, Label213Bin, Label3Bin)
