@@ -20,9 +20,9 @@ abstract class Compat {
   val global: Global
   import global._
 
-  /** Is `sym` a macro defined as `macro ???`, such as a compiler fast-track macro, whose expansion no class in this project can affect? */
+  /** Is `sym` a compiler fast-track macro, or a macro defined as `macro ???`, whose expansion no class in this project can affect? */
   protected def isStubMacro(sym: Symbol): Boolean =
-    analyzer.loadMacroImplBinding(sym).exists(_.is_???)
+    analyzer.fastTrack.contains(sym) || analyzer.loadMacroImplBinding(sym).exists(_.is_???)
 
   protected def processOriginalTreeAttachment(in: Tree)(func: Tree => Unit): Unit = ()
 
