@@ -14,6 +14,7 @@
 package sbt.internal.inc.consistent
 import java.io.{ ByteArrayOutputStream, FilterOutputStream, OutputStream }
 import java.util.zip.{ CRC32, Deflater, DeflaterOutputStream }
+import sbt.internal.inc.AnalysisCompression
 
 import java.util.concurrent.{ SynchronousQueue, ArrayBlockingQueue, LinkedTransferQueue }
 
@@ -27,12 +28,11 @@ import scala.annotation.tailrec
  */
 object ParallelGzipOutputStream:
   private val blockSize = 64 * 1024
-  private val compression = Deflater.DEFAULT_COMPRESSION
 
   // Holds an input buffer to load data and an output buffer to write
   // the compressed data into.  Compressing clears the input buffer.
   // Compressed data can be retrieved with `output.writeTo(OutputStream)`.
-  private final class Block(var index: Int):
+  private final class Block(var index: Int, compression: Int):
     val input = new Array[Byte](blockSize)
     var inputN = 0
     val output = new ByteArrayOutputStream(blockSize + (blockSize >> 3))
@@ -107,9 +107,13 @@ end ParallelGzipOutputStream
  * has "interior concurrency" (c.f. interior mutability).  In particular, writing
  * concurrent with or after a close operation is not defined.
  */
-final class ParallelGzipOutputStream(out: OutputStream, parallelism: Int)
+final class ParallelGzipOutputStream(out: OutputStream, parallelism: Int, compression: Int)
     extends FilterOutputStream(out):
   import ParallelGzipOutputStream.*
+
+  /** Compresses at the level `sbt.analysis.compression` sets (see [[AnalysisCompression]]). */
+  def this(out: OutputStream, parallelism: Int) =
+    this(out, parallelism, AnalysisCompression.level)
 
   private val crc = new CRC32
   private var totalBlocks = 0
@@ -117,7 +121,7 @@ final class ParallelGzipOutputStream(out: OutputStream, parallelism: Int)
 
   private val bufferLimit = parallelism * 3
   private var bufferCount = 1
-  private var current = new Block(0)
+  private var current = new Block(0, compression)
 
   private val workerCount = math.max(1, parallelism - 1)
   private val workers = new ArrayBlockingQueue[Worker](workerCount)
@@ -153,7 +157,7 @@ final class ParallelGzipOutputStream(out: OutputStream, parallelism: Int)
     current = buffers.poll()
     if current eq null then
       if bufferCount < bufferLimit then
-        current = new Block(totalBlocks)
+        current = new Block(totalBlocks, compression)
         bufferCount += 1
       else
         current = buffers.take()
