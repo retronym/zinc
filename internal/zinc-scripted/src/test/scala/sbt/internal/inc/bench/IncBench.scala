@@ -127,12 +127,10 @@ object IncBench {
       val name = field("name").get
       name -> field("in").map(Paths.get(_)).getOrElse(build.resolve(name))
     }
-    val props = (Map("apiDebug" -> "false") ++ o.incOptions)
-      .map { case (k, v) => s"$k = $v" }
-      .mkString("", "\n", "\n")
+    val overrides = Map("apiDebug" -> "false") ++ o.incOptions
     for ((_, base) <- projects) {
       IO.delete(base.resolve("target").toFile)
-      Compat.writeString(base.resolve("incOptions.properties"), props)
+      writeIncOptions(base, overrides)
     }
     def unescape(t: String) = t.replace("\\n", "\n")
     val lines = Files.readAllLines(editsFile).toArray(Array.empty[String]).toVector
@@ -158,6 +156,32 @@ object IncBench {
     val mirror = Compat.when(o.verify)(copy("-verify", _ => true))
     val binaryJava = Compat.when(o.verify)(copy("-verify-bin", !_.toString.endsWith(".java")))
     run(o, build, projects.map(_._1), edits, shape, mirror = mirror, binaryJava = binaryJava)
+  }
+
+  /**
+   * Writes a project's `incOptions.properties`: the build's own settings, kept the first time
+   * as `incOptions.base.properties`, with `overrides` on top. `scalac.options` in `overrides`
+   * is appended to the build's own rather than replacing them.
+   */
+  def writeIncOptions(base: Path, overrides: Map[String, String]): Unit = {
+    val file = base.resolve("incOptions.properties")
+    val saved = base.resolve("incOptions.base.properties")
+    if (!Files.exists(saved) && Files.exists(file)) Files.copy(file, saved)
+    val props = new java.util.Properties
+    if (Files.exists(saved)) {
+      val in = Files.newInputStream(saved)
+      try props.load(in)
+      finally in.close()
+    }
+    for ((k, v) <- overrides) {
+      val merged =
+        if (k == "scalac.options") Option(props.getProperty(k)).fold(v)(own => s"$own $v")
+        else v
+      props.setProperty(k, merged)
+    }
+    val out = Files.newOutputStream(file)
+    try props.store(out, "written by IncBench")
+    finally out.close()
   }
 
   /** Copies a build without its outputs, pointing its `build.json` at the copy. */
