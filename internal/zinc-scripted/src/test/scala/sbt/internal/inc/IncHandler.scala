@@ -363,12 +363,16 @@ case class ProjectStructure(
   val earlyCacheFile = baseDirectory / "target" / "early" / "inc_compile.zip"
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
   private val invalidationLines = new ConcurrentLinkedQueue[String]()
+  private val timingLines = new ConcurrentLinkedQueue[String]()
   private val compilerLog = new Logger {
     override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
     override def success(message: => String): Unit = scriptedLog.success(message)
     override def log(level: sbt.util.Level.Value, message: => String): Unit = {
       val rendered = message
-      rendered.linesIterator.filter(_.startsWith("[inv] ")).foreach(invalidationLines.add)
+      rendered.linesIterator.foreach { line =>
+        if (line.startsWith("[inv] ")) invalidationLines.add(line)
+        else if (line.startsWith("[zinc-timing]")) timingLines.add(line)
+      }
       scriptedLog.log(level, rendered)
     }
   }
@@ -466,6 +470,10 @@ case class ProjectStructure(
   /** Returns the invalidation-log lines recorded since the last call, and forgets them. */
   def drainInvalidationLog(): Vector[String] =
     Iterator.continually(invalidationLines.poll()).takeWhile(_ != null).toVector
+
+  /** Returns the `[zinc-timing]` lines recorded since the last call, and forgets them. */
+  def drainTimings(): Vector[String] =
+    Iterator.continually(timingLines.poll()).takeWhile(_ != null).toVector
 
   def checkRecompilations(i: IncState, step: Int, expected: List[String]): Future[Unit] =
     compile(i).map { analysis =>
@@ -809,11 +817,18 @@ case class ProjectStructure(
       converter,
       stamper
     )
+    val start = System.nanoTime()
     val result =
       if (javaOnly) incrementalCompiler.compileAllJava(in, compilerLog)
       else incrementalCompiler.compile(in, compilerLog)
+    val compiled = System.nanoTime()
     val analysis = result.analysis match { case a: Analysis => a }
     cachedStore.set(AnalysisContents.create(analysis, result.setup))
+    val stored = System.nanoTime()
+    // The whole call into Zinc, setup and stamping included, and storing its analysis after.
+    timingLines.add(
+      f"[zinc-timing] zincCall=${(compiled - start) / 1e6}%.1fms analysisWrite=${(stored - compiled) / 1e6}%.1fms"
+    )
     val javaOnlyStr = if (javaOnly) "(java-only) " else ""
     scriptedLog.info(s"""[$name] ${javaOnlyStr}compilation done: ${sources.mkString(", ")}""")
     analysis

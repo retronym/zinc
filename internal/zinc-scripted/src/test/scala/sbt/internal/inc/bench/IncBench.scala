@@ -75,6 +75,7 @@ object IncBench {
       verify: Boolean = false,
       only: Option[scala.util.matching.Regex] = None,
       invLog: Option[Path] = None,
+      profile: Boolean = false,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match {
@@ -91,6 +92,10 @@ object IncBench {
     case "--edits" :: v :: rest   => parse(rest, o.copy(edits = Some(Paths.get(v))))
     case "--debug" :: rest        => parse(rest, o.copy(logLevel = Level.Debug))
     case "--verify" :: rest       => parse(rest, o.copy(verify = true))
+    case "--profile" :: rest =>
+      val opts = StepProfile.scalacOptions("[basedir]/" + ScalacProfileFile)
+      val all = (o.incOptions.get("scalac.options").toList :+ opts).mkString(" ")
+      parse(rest, o.copy(profile = true, incOptions = o.incOptions + ("scalac.options" -> all)))
     case "--only" :: v :: rest    => parse(rest, o.copy(only = Some(v.r)))
     case "--inv-log" :: v :: rest => parse(rest, o.copy(invLog = Some(Paths.get(v))))
     case "--scalac-option" :: v :: rest =>
@@ -424,7 +429,14 @@ object IncBench {
 
   final case class ModuleResult(name: String, rounds: Int, recompiled: Int, stored: Stored)
 
-  final case class StepResult(wallMillis: Long, modules: Seq[ModuleResult]) {
+  /** Where each project's compiler runs append their per-phase profile, with `--profile`. */
+  final val ScalacProfileFile = "scalac-profile.csv"
+
+  final case class StepResult(
+      wallMillis: Long,
+      modules: Seq[ModuleResult],
+      profile: Option[String] = None
+  ) {
     def total: Stored = modules.map(_.stored).reduce(_ + _)
     def json: String = {
       val ms = modules.map(m => {
@@ -433,7 +445,7 @@ object IncBench {
       })
       s""""wallMillis":$wallMillis,"rounds":${modules.map(_.rounds).sum},""" +
         s""""recompiled":${modules.map(_.recompiled).sum},${total.json},""" +
-        s""""modules":[${ms.mkString(",")}]"""
+        s""""modules":[${ms.mkString(",")}]""" + profile.fold("")("," + _)
     }
   }
 
@@ -693,7 +705,34 @@ object IncBench {
       val start = System.currentTimeMillis()
       state = handler.apply(s"${moduleNames.last}/compile", Nil, state)
       val wall = System.currentTimeMillis() - start
-      StepResult(wall, moduleNames.map(result(_, start)))
+      StepResult(wall, moduleNames.map(result(_, start)), profile())
+    }
+
+    private val runsSeen = scala.collection.mutable.Map.empty[String, Int].withDefaultValue(0)
+
+    /**
+     * What the last compile did, with `--profile`: scalac's phases and Zinc's own steps summed
+     * over the modules, and each module's incremental run with its invalidation cycles.
+     */
+    private def profile(): Option[String] = {
+      val projects = moduleNames.map(m => m -> handler.lookupProject(m))
+      val phases = projects.flatMap { case (_, p) =>
+        StepProfile.drainScalacProfile(p.baseDirectory.resolve(ScalacProfileFile))
+      }
+      val timings = projects.flatMap(_._2.drainTimings())
+      val runs = projects.flatMap { case (m, p) =>
+        val prof = p.profiler.toProfile
+        // The profiler prepends each run, so the newest come first.
+        val fresh = prof.getRunsList.asScala.take(prof.getRunsCount - runsSeen(m)).reverse
+        runsSeen(m) = prof.getRunsCount
+        StepProfile.runsJson(m, prof, fresh)
+      }
+      if (phases.isEmpty && timings.isEmpty) None
+      else Some(StepProfile.json(
+        StepProfile.mergePhases(phases),
+        StepProfile.zincTimings(timings),
+        runs
+      ))
     }
 
     private def result(module: String, since: Long): ModuleResult = {
