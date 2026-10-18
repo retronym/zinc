@@ -51,6 +51,12 @@ import xsbti.compile.AnalysisContents
  * `-diffs` directory beside the build; `--only REGEX` runs just the edits it matches.
  * `--inv-log DIR` writes each step's invalidation log per module.
  *
+ * `--warmup N` compiles the first edit and its revert N times after the clean build, untimed,
+ * so the first timed step isn't paying for JIT. `--serve` waits before each timed step until
+ * it reads `step` from stdin, and says which step it waits for with a `{"ready":...}` line on
+ * stdout; `shutdown` or the end of stdin stops it. An orchestrator uses it to run several
+ * checkouts in lockstep, one compile at a time.
+ *
  * {{{
  * sbt "publishBridges; zincScripted3/Test/runMain sbt.internal.inc.bench.IncBench \
  *   --dir /tmp/bench --modules 4 --depth 5 --fan-out 2 --reps 3 --out /tmp/bench.jsonl"
@@ -76,6 +82,8 @@ object IncBench {
       only: Option[scala.util.matching.Regex] = None,
       invLog: Option[Path] = None,
       profile: Boolean = false,
+      warmup: Int = 0,
+      serve: Boolean = false,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match {
@@ -97,6 +105,8 @@ object IncBench {
       val all = (o.incOptions.get("scalac.options").toList :+ opts).mkString(" ")
       parse(rest, o.copy(profile = true, incOptions = o.incOptions + ("scalac.options" -> all)))
     case "--only" :: v :: rest    => parse(rest, o.copy(only = Some(v.r)))
+    case "--warmup" :: v :: rest  => parse(rest, o.copy(warmup = v.toInt))
+    case "--serve" :: rest        => parse(rest, o.copy(serve = true))
     case "--inv-log" :: v :: rest => parse(rest, o.copy(invLog = Some(Paths.get(v))))
     case "--scalac-option" :: v :: rest =>
       val all = (o.incOptions.get("scalac.options").toList :+ v).mkString(" ")
@@ -111,10 +121,12 @@ object IncBench {
 
   def main(args: Array[String]): Unit = {
     val o = parse(args.toList)
-    o.build match {
-      case Some(build) => existing(o, build.toAbsolutePath, o.edits.get.toAbsolutePath)
-      case None        => synthetic(o)
-    }
+    try
+      o.build match {
+        case Some(build) => existing(o, build.toAbsolutePath, o.edits.get.toAbsolutePath)
+        case None        => synthetic(o)
+      }
+    catch { case Shutdown => () }
   }
 
   /**
@@ -255,6 +267,24 @@ object IncBench {
       println(line)
       lines += line
     }
+    def finish(): Unit = {
+      o.out.foreach(p => Files.write(p, lines.result().mkString("", "\n", "\n").getBytes("UTF-8")))
+      runner.finish()
+    }
+
+    /** With `--serve`, waits for the orchestrator's `step` before the step `name`. */
+    def await(name: String, rep: Int): Unit =
+      if (o.serve) {
+        println(s"""{"ready":"$name","rep":$rep}""")
+        Console.out.flush()
+        scala.io.StdIn.readLine() match {
+          case "step" => ()
+          case null | "shutdown" =>
+            finish()
+            throw Shutdown
+          case other => sys.error(s"Unknown command $other")
+        }
+      }
     extract.foreach(emit)
     emit(s"""{$shape,"step":"clean",${runner.compileAll().json}}""")
     val base: Outcome = Right(runner.classes())
@@ -304,6 +334,17 @@ object IncBench {
         Files.createDirectories(d)
         Files.write(d.resolve(s"$step-$m.log"), lines.mkString("", "\n", "\n").getBytes("UTF-8"))
       }
+    for (i <- 1 to o.warmup; edit <- edits.headOption) {
+      val file = dir.resolve(edit.file)
+      val original = Compat.readString(file)
+      val noop = runner.tryCompileAll()
+      Compat.writeString(file, edit.content)
+      val edited = runner.tryCompileAll()
+      Compat.writeString(file, original)
+      val reverted = runner.tryCompileAll()
+      val walls = Seq(noop, edited, reverted).map(_.fold(_ => -1L, _.wallMillis))
+      emit(s"""{$shape,"step":"warmup","rep":$i,"wallMillis":${walls.mkString("[", ",", "]")}}""")
+    }
     runner.drainInvalidationLogs()
     for (edit <- edits; rep <- 1 to o.reps) {
       val file = dir.resolve(edit.file)
@@ -315,6 +356,7 @@ object IncBench {
           expectedRoot: String => Path,
           edited: Boolean
       ): Boolean = {
+        await(name, rep)
         val start = System.currentTimeMillis()
         val r = runner.tryCompileAll()
         val v = verifying.fold("") { _ =>
@@ -391,12 +433,15 @@ object IncBench {
       }
     }
     for (rep <- 1 to o.reps) {
+      await("clean-build", rep)
       runner.cleanAll()
       emit(s"""{$shape,"step":"clean-build","rep":$rep,${runner.compileAll().json}}""")
     }
-    o.out.foreach(p => Files.write(p, lines.result().mkString("", "\n", "\n").getBytes("UTF-8")))
-    runner.finish()
+    finish()
   }
+
+  /** The orchestrator asked a `--serve` run to stop. */
+  private object Shutdown extends scala.util.control.ControlThrowable
 
   /**
    * What a module stores. `declared` and `inherited` count the definitions in the stored APIs,
