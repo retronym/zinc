@@ -30,7 +30,7 @@ class ExtractUsedNamesSpecification
       """|package d
                   |class D1 { import a.b._; val x = new X }
                   |class D3 { import a.b.X; import a.c.O._; val x = new X; val z = new Z }
-                  |class D4 { import a.b.{X => Y, _}; import _root_._; val x = new Y }""".stripMargin
+                  |class D4 { import a.b.{X => Y, _}; val x = new Y }""".stripMargin
     val usedNames = extractUsedNamesFromSrc(srcA, srcB)
     assert(usedNames("d.D1").contains("a.b._"))
     assert(usedNames("d.D4").contains("a.b._"))
