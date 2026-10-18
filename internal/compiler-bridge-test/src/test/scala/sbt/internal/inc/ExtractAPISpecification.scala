@@ -5,7 +5,7 @@ package inc
 import hedgehog.{ sbt => _, _ }
 import hedgehog.runner._
 import xsbti.api._
-import xsbt.api.{ SameAPI, ShowAPI }
+import xsbt.api.{ APIUtil, SameAPI, ShowAPI }
 
 object ExtractAPISpecification
     extends Properties
@@ -17,6 +17,7 @@ object ExtractAPISpecification
       stableExistentialNames
     ),
     example("extract children of a sealed class", sealedChildren),
+    example("not count a `macro ???` definition as a macro", macroStub),
     example("extract correctly the definition type of a package object", packageObject),
     example("extract nested classes", nestedClasses),
     example("not extract local classes", localClasses),
@@ -75,6 +76,20 @@ object ExtractAPISpecification
          |case class C2(x: Int) extends Foo
          |""".stripMargin
     Result.assert(!SameAPI(fooClassApi(src1), fooClassApi(src2)))
+  }
+
+  private def macroStub: Result = {
+    val src =
+      """|import scala.language.experimental.macros
+         |import scala.reflect.macros.blackbox
+         |object Impl { def impl(c: blackbox.Context): c.Expr[Int] = c.universe.reify(1) }
+         |object Stub { def m: Int = macro ??? }
+         |object Real { def m: Int = macro Impl.impl }
+         |""".stripMargin
+    val apis = extractApisFromSrc(src).map(c => c.name -> c).toMap
+    Result
+      .assert(!APIUtil.hasMacro(apis("Stub")))
+      .and(Result.assert(APIUtil.hasMacro(apis("Real"))))
   }
 
   private def packageObject: Result =
