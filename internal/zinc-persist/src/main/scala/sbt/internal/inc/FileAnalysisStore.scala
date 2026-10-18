@@ -56,6 +56,7 @@ object FileAnalysisStore:
       val tmpAnalysisFile = Files.createTempFile(tmpDir.toPath, file.getName, ".tmp").toFile
       if !file.getParentFile.exists() then file.getParentFile.mkdirs()
       Using.zipOutputStream(new FileOutputStream(tmpAnalysisFile)) { outputStream =>
+        outputStream.setLevel(AnalysisCompression.level)
         val writer = new BufferedWriter(new OutputStreamWriter(outputStream, IO.utf8))
         outputStream.putNextEntry(new ZipEntry(analysisFileName))
         format.write(writer, analysis, setup)
@@ -70,6 +71,7 @@ object FileAnalysisStore:
           outputStream.closeEntry()
       }
       IO.move(tmpAnalysisFile, file)
+    end set
 
     def get(): Optional[AnalysisContents] =
       import scala.jdk.OptionConverters.*
