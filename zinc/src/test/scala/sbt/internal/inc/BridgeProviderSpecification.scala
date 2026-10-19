@@ -48,7 +48,7 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit {
       scalaJars3Bin.toList.filterNot(_.getName.startsWith("compiler-interface")),
       Right(compilerBridge3Bin)
     ),
-  ) ++ localScala213.map(Label213Local -> _)
+  ) ++ localScala213.map(Label213Local -> _) ++ localScala3.map(Label3Local -> _)
 
   /**
    * `2.13.local`: this checkout's 2.13 bridge on a locally built Scala 2.13, whose library,
@@ -71,6 +71,29 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit {
         case Some(dir)                         => Left(new File(dir))
         case None                              => Left(classDirectory213)
       }
+    )
+
+  /**
+   * `3.local`: a Scala 3 other than the one this build fetches for `3.x`, such as the latest release
+   * or one built locally, with the jars of its compiler and library that `ZINC_SCRIPTED_SCALA3_JARS`
+   * lists (separated by the path separator), the version `ZINC_SCRIPTED_SCALA3_VERSION`, and the
+   * `scala3-sbt-bridge` jar of that version `ZINC_SCRIPTED_SCALA3_BRIDGE`. Absent unless all three
+   * are set.
+   */
+  final val Label3Local = "3.local"
+  private lazy val localScala3: Option[ScalaBridge] =
+    for {
+      jars <- sys.env.get("ZINC_SCRIPTED_SCALA3_JARS")
+      version <- sys.env.get("ZINC_SCRIPTED_SCALA3_VERSION")
+      bridge <- sys.env.get("ZINC_SCRIPTED_SCALA3_BRIDGE")
+    } yield ScalaBridge(
+      version,
+      jars
+        .split(java.io.File.pathSeparator)
+        .toList
+        .map(new File(_))
+        .filterNot(_.getName.startsWith("compiler-interface")),
+      Right(new File(bridge))
     )
 
   private val bridgeLabels = List(Label210, Label211, Label212, Label213, Label213Bin, Label3Bin)
