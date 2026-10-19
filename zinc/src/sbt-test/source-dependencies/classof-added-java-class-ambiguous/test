@@ -1,0 +1,9 @@
+# Client resolves `Foo` to the Java member class `a.W.Foo` through `import a.W._`, and names it
+# only in a classOf literal.
+> compile
+
+# A Java class `a.q.Foo` makes `Foo` ambiguous with `import a.q._`: a clean build fails. Zinc sees
+# the class as added and invalidates the classes that use the name `Foo`, which Client does only
+# if the bridge records the type of its classOf literal.
+$ copy-file changes/Foo.java src/main/java/a/q/Foo.java
+-> compile

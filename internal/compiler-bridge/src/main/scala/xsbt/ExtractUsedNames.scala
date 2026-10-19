@@ -308,6 +308,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
 
         addTypeNames(t.tpe)
       case l: Literal =>
+        if (l.value.tag == ClazzTag) addTypeNames(l.value.typeValue)
         processOriginalTreeAttachment(l)(traverse)
       case _ =>
     }
