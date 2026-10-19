@@ -64,16 +64,34 @@ object APIUtil {
       case c: ClassLike => Array(minimizeClass(c))
       case _            => emptyDefs
     }
-  def minimizeClass(c: ClassLike): ClassLike = {
+  def minimizeClass(c: ClassLike): ClassLike = minimizeClass(c, withStubs = false)
+
+  def minimizeStructure(s: Structure, isModule: Boolean): Structure =
+    Structure.of(
+      lzy(s.parents),
+      filterDefinitions(s.declared, isModule),
+      filterDefinitions(s.inherited, isModule)
+    )
+
+  /**
+   * As [[minimize]], for Merkle hashing: it also keeps the self type, and a stub of each
+   * declaration and abstract inherited member (see [[minimizeStructureWithStubs]]).
+   */
+  def minimizeWithStubs(api: ClassLike): ClassLike = minimizeClass(api, withStubs = true)
+
+  private def minimizeClass(c: ClassLike, withStubs: Boolean): ClassLike = {
     val savedAnnotations = Discovery.defAnnotations(c.structure, (_: Any) => true).toArray[String]
-    val struct = minimizeStructure(c.structure, c.definitionType == DefinitionType.Module)
+    val isModule = c.definitionType == DefinitionType.Module
+    val struct =
+      if (withStubs) minimizeStructureWithStubs(c.structure, isModule)
+      else minimizeStructure(c.structure, isModule)
     ClassLike.of(
       c.name,
       c.access,
       c.modifiers,
       c.annotations,
       c.definitionType,
-      lzy(c.selfType),
+      if (withStubs) lzy(c.selfType) else emptyTypeLzy,
       lzy(struct),
       savedAnnotations,
       c.childrenOfSealedClass,
@@ -88,7 +106,7 @@ object APIUtil {
    * reads which names a class declares, overrides, leaves abstract or annotates, and which names
    * it inherits abstract from library ancestors, which have no stored API of their own.
    */
-  def minimizeStructure(s: Structure, isModule: Boolean): Structure = {
+  def minimizeStructureWithStubs(s: Structure, isModule: Boolean): Structure = {
     val mains = if (isModule) s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
     val stubs = s.declared.filterNot(mains.contains).map(stubDefinition)
     val inheritedMains = filterDefinitions(s.inherited, isModule).get

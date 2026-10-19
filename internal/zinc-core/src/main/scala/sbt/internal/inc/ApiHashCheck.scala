@@ -28,7 +28,7 @@ import xsbti.api.{ ClassLike, DefinitionType }
  * appended to the file named by the `xsbt.api.check.report` system property or the
  * `apiCheckReport` incOption, if set. Within one
  * compile, it also checks that both have the same name-hash keys and macro flag, and that the
- * bridge's thin class is what `APIUtil.minimize` makes of the full one.
+ * bridge's thin class is what `APIUtil.minimizeWithStubs` makes of the full one.
  */
 object ApiHashCheck {
   final case class Hashes(
@@ -91,7 +91,7 @@ object ApiHashCheck {
     }
     if (tree.hasMacro != bridge.hasMacro)
       problems += s"hasMacro: Zinc ${tree.hasMacro}, bridge ${bridge.hasMacro}"
-    thinDifference(APIUtil.minimize(full), thin).foreach(problems += _)
+    thinDifference(APIUtil.minimizeWithStubs(full), thin).foreach(problems += _)
     classesChecked.incrementAndGet()
     val key = s"$outputKey|${full.definitionType}|${full.name}"
     Option(previous.put(key, (tree, bridge))).foreach { case (prevTree, prevBridge) =>

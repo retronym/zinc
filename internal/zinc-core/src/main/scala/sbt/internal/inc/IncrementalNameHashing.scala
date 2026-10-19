@@ -45,6 +45,14 @@ private[inc] class IncrementalNameHashingCommon(
   private val descendantRules = DescendantRules.fromOptions(options)
 
   /**
+   * Under Merkle hashing a descendant's stored API omits what it inherits, so the edges of its
+   * clients are followed from every descendant, recompiled or not, and a header change reaches
+   * them by every name. Under name hashing each descendant recompiles, and a change to its own
+   * API reaches its clients in the next cycle.
+   */
+  private val merkle = Hashing.isMerkle(options)
+
+  /**
    * The APIs a [[DescendantRule]] reads: this subproject's current ones, then those of upstream
    * classes as last recorded. Members inherited from upstream subprojects are no longer
    * materialised, so an upstream ancestor's declarations are only visible here.
@@ -150,7 +158,8 @@ private[inc] class IncrementalNameHashingCommon(
       a: AnalyzedClass,
       b: AnalyzedClass
   ): Option[APIChange] = {
-    val headerChanged = AncestorChange(className, a, b, ModifiedNames(Set.empty)).headerChanged
+    val headerChanged =
+      merkle && AncestorChange(className, a, b, ModifiedNames(Set.empty)).headerChanged
     if (SameAPI(a, b) && !headerChanged) {
       if (SameAPI.hasSameExtraHash(a, b)) None
       else {
@@ -221,7 +230,7 @@ private[inc] class IncrementalNameHashingCommon(
       )
 
     val localInheritance = relations.localInheritance.external.reverse(modifiedBinaryClassName) ++
-      descendants.flatMap(invalidateByLocalInheritance(relations, _))
+      (if (merkle) descendants.flatMap(invalidateByLocalInheritance(relations, _)) else Set.empty)
 
     // Get the member reference dependencies of all classes transitively invalidated by inheritance
     invalidationLog.detail(
@@ -229,7 +238,7 @@ private[inc] class IncrementalNameHashingCommon(
     )
     val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
     val memberRefA =
-      if (ancestorChange.exists(_.headerChanged))
+      if (merkle && ancestorChange.exists(_.headerChanged))
         byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
       else byName
 
@@ -240,13 +249,13 @@ private[inc] class IncrementalNameHashingCommon(
     )
     val memberRefB = {
       val byName = memberRefInv(relations.memberRef.external)(modifiedBinaryClassName)
-      if (ancestorChange.exists(_.headerChanged))
+      if (merkle && ancestorChange.exists(_.headerChanged))
         byName ++ relations.memberRef.external.reverse(modifiedBinaryClassName)
       else byName
     }
 
     val macroExpansion = relations.macroExpansion.external.reverse(modifiedBinaryClassName) ++
-      descendants.flatMap(invalidateByMacroExpansion(relations, _))
+      (if (merkle) descendants.flatMap(invalidateByMacroExpansion(relations, _)) else Set.empty)
 
     val invalidated =
       transitiveInheritance ++ localInheritance ++ memberRefA ++ memberRefB ++ macroExpansion
@@ -334,13 +343,15 @@ private[inc] class IncrementalNameHashingCommon(
 
     val byName = descendants.flatMap(memberRefInv(relations.memberRef.internal))
     val memberRef =
-      if (ancestorChange.exists(_.headerChanged))
+      if (merkle && ancestorChange.exists(_.headerChanged))
         byName ++ descendants.flatMap(relations.memberRef.internal.reverse)
       else byName
     val reason3 = s"The invalidated class names refer directly or transitively to $modifiedClass."
     profiler.registerEvent(MemberReferenceKind, transitiveInheritance, memberRef, reason3)
 
-    val macroExpansion = descendants.flatMap(invalidateByMacroExpansion(relations, _))
+    val macroExpansion =
+      if (merkle) descendants.flatMap(invalidateByMacroExpansion(relations, _))
+      else invalidateByMacroExpansion(relations, modifiedClass)
     val reason4 = s"The invalidated class is touched by macro expansion in ${modifiedClass}"
     profiler.registerEvent(MacroExpansionKind, descendants, macroExpansion, reason4)
 

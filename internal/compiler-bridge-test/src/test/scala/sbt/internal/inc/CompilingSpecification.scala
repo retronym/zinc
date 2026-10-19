@@ -29,6 +29,10 @@ import xsbti.api.DependencyContext._
  * source code using Scala compiler.
  */
 trait CompilingSpecification extends AbstractBridgeProviderTestkit {
+
+  /** Whether the bridge extracts APIs for Merkle hashing (see `sbt.internal.inc.Hashing`). */
+  def merkleHashing: Boolean = false
+
   def scalaVersion =
     sys.props
       .get("zinc.build.compilerbridge.scalaVersion")
@@ -214,7 +218,7 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
     ) ++ localCoursierCache
     val converter = new MappedFileConverter(rootPaths, false)
     val targetDir = baseDir / "target"
-    val analysisCallback = new TestCallback
+    val analysisCallback = new TestCallback(merkleHashing)
     Files.createDirectory(targetDir)
     val files = for {
       (compilationUnit, unitId) <- groupedSrcs.zipWithIndex

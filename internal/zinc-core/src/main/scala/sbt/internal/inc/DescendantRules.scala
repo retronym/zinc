@@ -369,21 +369,27 @@ private[inc] object DescendantRules {
   /**
    * `all` recompiles every descendant (Zinc's behaviour before Merkle hashing); `none` recompiles
    * none, which is unsound and only useful to show the rules are needed. `-r1,-r2` starts from
-   * `strict` and drops rules; `r1,r2` enables exactly those.
+   * `strict` and drops rules; `r1,r2` enables exactly those. Under name hashing (see [[Hashing]])
+   * every descendant recompiles, as with `all`.
    */
   def fromOptions(options: IncOptions): Option[List[DescendantRule]] =
-    Option(options.extra().get(Key)).getOrElse("default").trim match {
-      case "all"     => None
-      case "default" => Some(default)
-      case "strict"  => Some(all)
-      case "none"    => Some(Nil)
-      case spec =>
-        val enabled = spec.split(",").iterator.map(_.trim).toSet
-        val (on, off) =
-          if (enabled.forall(_.startsWith("-")))
-            (all.filterNot(r => enabled(s"-${r.name}")), enabled.map(_.drop(1)) -- all.map(_.name))
-          else (all.filter(r => enabled(r.name)), enabled -- all.map(_.name))
-        require(off.isEmpty, s"Unknown $Key: ${off.mkString(", ")}")
-        Some(on)
-    }
+    if (!Hashing.isMerkle(options)) None
+    else
+      Option(options.extra().get(Key)).getOrElse("default").trim match {
+        case "all"     => None
+        case "default" => Some(default)
+        case "strict"  => Some(all)
+        case "none"    => Some(Nil)
+        case spec =>
+          val enabled = spec.split(",").iterator.map(_.trim).toSet
+          val (on, off) =
+            if (enabled.forall(_.startsWith("-")))
+              (
+                all.filterNot(r => enabled(s"-${r.name}")),
+                enabled.map(_.drop(1)) -- all.map(_.name)
+              )
+            else (all.filter(r => enabled(r.name)), enabled -- all.map(_.name))
+          require(off.isEmpty, s"Unknown $Key: ${off.mkString(", ")}")
+          Some(on)
+      }
 }
