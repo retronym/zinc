@@ -548,20 +548,12 @@ class ExtractAPI[GlobalType <: Global](
         ancestorTypes0
     val decls = info.decls.toList
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
-    val declSet = decls.toSet
     if (merkle) {
       val (inherited, platform) =
-        info.nonPrivateMembers.toList
-          .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
-          .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
-      mkStructure(
-        s,
-        ancestorTypes,
-        declsNoModuleCtor,
-        inherited,
-        (platform ++ overriddenLibraryDecls(info, declSet, inherited ++ platform)).flatMap(stub)
-      )
+        ancestorDecls(info).partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
+      mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited, platform.flatMap(stub))
     } else {
+      val declSet = decls.toSet
       val inherited =
         info.nonPrivateMembers.toList.filterNot(declSet) // private members are not inherited
       mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
@@ -668,32 +660,40 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   /**
-   * Declarations of library ancestors that another ancestor overrides, which `nonPrivateMembers`
-   * leaves out. Descendant invalidation needs them: when `class D extends P with LibT` and `P`
-   * stops implementing `LibT`'s abstract `n`, `D` must recompile, and a library class has no
-   * stored API to show that `n` is abstract there. One stub per name, abstract if any is.
+   * The declarations a class's ancestors contribute to its API: every non-private declaration of
+   * every library base class, and those of a base class in this subproject that discovery reads.
+   * Overridden declarations are included, and no member's type is consulted: a name's hashes
+   * combine all its declarations along the linearization, as Zinc's composition does for ancestors
+   * in this subproject. That is a superset of the inherited members, and it keeps the declarations
+   * of library ancestors that another ancestor overrides, which descendant invalidation needs:
+   * when `class D extends P with LibT` and `P` stops implementing `LibT`'s abstract `n`, `D` must
+   * recompile, and a library class has no stored API to show that `n` is abstract there. Scala 3's
+   * `ExtractAPI` also takes all declarations of each base class. The walk mirrors
+   * `FindMembers.walkBaseClasses`, but without its override checks, which compare member types as
+   * seen from the class.
    */
-  private def overriddenLibraryDecls(
-      info: Type,
-      declSet: Set[Symbol],
-      present: List[Symbol]
-  ): List[Symbol] = {
-    val presentNames = new java.util.HashSet[Name]()
-    present.foreach(m => presentNames.add(m.name))
-    declSet.foreach(m => presentNames.add(m.name))
-    val byName = new java.util.LinkedHashMap[Name, Symbol]()
-    info.baseClasses.drop(1).foreach { bc =>
-      if (!isInternal(bc)) bc.info.decls.foreach { m =>
-        if (!m.isPrivate && !m.isConstructor && !presentNames.contains(m.name)) {
-          val seen = byName.get(m.name)
-          if ((seen eq null) || (!seen.isDeferred && m.isDeferred)) byName.put(m.name, m)
-        }
+  private def ancestorDecls(info: Type): List[Symbol] = {
+    val result = new collection.mutable.ListBuffer[Symbol]
+    val flagMask = phase.flagMask
+    val fastFlags = (flagMask & ~Flags.InitialFlags) == 0
+    var bcs = info.baseClasses
+    if (bcs ne Nil) bcs = bcs.tail
+    while (bcs ne Nil) {
+      val bc = bcs.head
+      val internal = isInternal(bc)
+      var ms = bc.info.decls.toList
+      while (ms ne Nil) {
+        val m = ms.head
+        val flags = if (fastFlags) m.rawflags & flagMask else m.flags & flagMask
+        if (
+          (flags & Flags.BridgeAndPrivateFlags) == 0 && !m.isConstructor &&
+          (!internal || discoveryReadsAnnotations(m))
+        ) result += m
+        ms = ms.tail
       }
+      bcs = bcs.tail
     }
-    var result: List[Symbol] = Nil
-    val it = byName.values.iterator
-    while (it.hasNext) result = it.next() :: result
-    result
+    result.toList
   }
 
   /** Test and main-class discovery read inherited annotations and `main` signatures. */
@@ -1733,14 +1733,10 @@ class ExtractAPI[GlobalType <: Global](
     val decls: List[Symbol] = info.decls.toList
     val declared: List[Symbol] =
       sort((if (sym.isModuleClass) removeConstructors(decls) else decls).toArray).toList
-    private val declSet = decls.toSet
     private val (inherited0, platform) =
-      info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
-        .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
+      ancestorDecls(info).partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
     val inherited: List[Symbol] = sort(inherited0.toArray).toList
-    val stubbed: List[Symbol] =
-      platform ++ overriddenLibraryDecls(info, declSet, inherited0 ++ platform)
+    val stubbed: List[Symbol] = platform
     def ancestorTypes: List[Type] = {
       val ancestorTypes0 = linearizedAncestorTypes(info)
       if (sym.isDerivedValueClass) sym.derivedValueClassUnbox.tpe.finalResultType :: ancestorTypes0
