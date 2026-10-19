@@ -16,7 +16,6 @@ import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 
-import xsbt.api.Discovery
 import xsbti.{ FileConverter, VirtualFileRef }
 import xsbti.api.{ AnalyzedClass, ClassLike, NameHash }
 import xsbti.compile.IncOptions
@@ -57,7 +56,7 @@ private[inc] object LibraryAncestors:
   def invalidates(options: IncOptions): Boolean = value(options) == "names"
 
   /**
-   * The classes of the changed libraries, named as `Discovery.simpleName` renders a reference to
+   * The classes of the changed libraries, named as [[MerkleHashes.typeName]] renders a reference to
    * them. A jar's are read from the jar: the relations keep one representative class per jar.
    */
   def classesOf(
@@ -112,9 +111,9 @@ private[inc] object LibraryAncestors:
     }
     ((apiHash, fingerprint).hashCode, folded)
 
-  /** The names of a class's library ancestors, as `Discovery.simpleName` renders them. */
+  /** The names of a class's ancestors, as [[MerkleHashes.typeName]] renders them. */
   def ancestorNames(sides: List[ClassLike]): List[String] =
-    sides.flatMap(_.structure.parents.iterator.flatMap(Discovery.simpleName)).distinct
+    sides.flatMap(_.structure.parents.iterator.flatMap(MerkleHashes.typeName)).distinct
 
   /** Binary names a class rendered as `name` may have: `a.b.C.D` is `a.b.C$D` if C is a class. */
   def binaryNameCandidates(name: String): List[String] =
@@ -129,7 +128,7 @@ private[inc] object LibraryAncestors:
 
   private def ancestorNames(c: AnalyzedClass): Iterator[String] = ancestorNames(sides(c)).iterator
 
-  /** A binary class name as `Discovery.simpleName` renders a reference to the class. */
+  /** A binary class name as [[MerkleHashes.typeName]] renders a reference to the class. */
   private def sourceName(binaryName: String): String =
     binaryName.stripSuffix("$").replace('$', '.')
 
