@@ -122,10 +122,13 @@ private[inc] object LibraryAncestors {
    */
   def canonical(name: String): String = name.replace("$.", ".")
 
-  /** Binary names a class rendered as `name` may have: `a.b.C.D` is `a.b.C$D` if C is a class. */
+  /**
+   * The names a class rendered as `name` may have: the name itself, which is how this subproject's
+   * classes are keyed, then its binary names, `a.b.C.D` being `a.b.C$D` if C is a class.
+   */
   def binaryNameCandidates(name: String): List[String] = {
     val c = canonical(name)
-    Iterator
+    val binary = Iterator
       .iterate(c)(n => {
         n.lastIndexOf('.') match {
           case -1 => n
@@ -134,6 +137,7 @@ private[inc] object LibraryAncestors {
       })
       .take(c.count(_ == '.') + 1)
       .toList
+    if (c == name) binary else name :: binary
   }
 
   private def ancestorNames(c: AnalyzedClass): Iterator[String] = ancestorNames(sides(c)).iterator
