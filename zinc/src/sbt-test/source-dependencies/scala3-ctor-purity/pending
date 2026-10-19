@@ -1,0 +1,14 @@
+# Pending until the Scala 3 bridge folds constructor purity into <init>'s name hash (PLAN-merkle-bughunt.md finding 7,
+# ANALYSIS-finding7-ctor-purity.md): Namer marks a constructor STABLE when no base class has initializers, the
+# pickler writes the flag and the unpickler reads it back unchanged, and adding an initializer to A changes nothing
+# in its API.
+> p/compile
+
+# A gains an initializer; B, whose constructor was STABLE, is not recompiled
+$ copy-file changes/A.scala p/A.scala
+> p/compile
+
+# A client compiled now must still run A's initializer when it constructs a B
+$ copy-file changes/X.scala p/X.scala
+> p/compile
+> p/run
