@@ -11,7 +11,9 @@
 
 package xsbt
 
-import collection.mutable.Map
+import java.util.{ HashMap => JavaMap }
+
+import scala.collection.generic.Clearable
 
 /**
  * A memoized lookup of an enclosing non local class.
@@ -36,13 +38,14 @@ import collection.mutable.Map
  */
 class LocalToNonLocalClass[G <: CallbackGlobal](val global: G) {
   import global._
-  private val cache: Map[Symbol, Symbol] = perRunCaches.newMap()
+  private final class Cache extends JavaMap[Symbol, Symbol] with Clearable
+  private val cache: Cache = perRunCaches.recordCache(new Cache)
 
   def resolveNonLocal(s: Symbol): Symbol = {
-    assert(
-      phase.id <= sbtDependency.ownPhase.id,
-      s"Tried to resolve ${s.fullName} to a  non local classes but the resolution works up to sbtDependency phase. We're at ${phase.name}"
-    )
+    if (phase.id > sbtDependency.ownPhase.id)
+      throw new AssertionError(
+        s"Tried to resolve ${s.fullName} to a  non local classes but the resolution works up to sbtDependency phase. We're at ${phase.name}"
+      )
     resolveCached(s)
   }
 
@@ -54,12 +57,19 @@ class LocalToNonLocalClass[G <: CallbackGlobal](val global: G) {
    */
   def isLocal(s: Symbol): Option[Boolean] = {
     assert(s.isClass, s"The ${s.fullName} is not a class.")
-    cache.get(s).map(_ != s)
+    val cached = cache.get(s)
+    if (cached eq null) None else Some(cached != s)
   }
 
   private def resolveCached(s: Symbol): Symbol = {
-    assert(s.isClass, s"The ${s.fullName} is not a class.")
-    cache.getOrElseUpdate(s, lookupNonLocal(s))
+    if (!s.isClass) throw new AssertionError(s"The ${s.fullName} is not a class.")
+    val cached = cache.get(s)
+    if (cached ne null) cached
+    else {
+      val nonLocal = lookupNonLocal(s)
+      cache.put(s, nonLocal)
+      nonLocal
+    }
   }
 
   private def lookupNonLocal(s: Symbol): Symbol = {
