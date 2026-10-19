@@ -15,7 +15,7 @@ package inc
 
 import xsbt.api.Discovery
 import xsbti.UseScope
-import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash, Parameterized, Type }
+import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash, Parameterized, Projection, Type }
 
 import scala.util.hashing.MurmurHash3
 
@@ -196,9 +196,17 @@ private[inc] object MerkleHashes {
     parents.iterator.flatMap(typeName).toVector.distinct
   }
 
-  /** The class a parent type names, dropping type arguments. */
+  /**
+   * The class a parent type names, dropping type arguments. A class nested in an object is a
+   * projection on the object's, `Discovery.simpleName` names only top-level classes.
+   */
   def typeName(t: Type): Option[String] = t match {
     case p: Parameterized => typeName(p.baseType)
-    case t                => Discovery.simpleName(t)
+    case p: Projection =>
+      p.prefix match {
+        case q: Projection => typeName(q).map(_ + "." + p.id)
+        case _             => Discovery.simpleName(p)
+      }
+    case t => Discovery.simpleName(t)
   }
 }
