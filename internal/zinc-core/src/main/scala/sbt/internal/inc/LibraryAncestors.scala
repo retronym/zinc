@@ -130,7 +130,7 @@ private[inc] object LibraryAncestors {
   private def ancestorNames(c: AnalyzedClass): Iterator[String] = ancestorNames(sides(c)).iterator
 
   /** A binary class name as [[MerkleHashes.typeName]] renders a reference to the class. */
-  private def sourceName(binaryName: String): String =
+  private[inc] def sourceName(binaryName: String): String =
     binaryName.stripSuffix("$").replace('$', '.')
 
   /** The names a class has only by inheritance: not declared, and not its own. */
