@@ -1,0 +1,8 @@
+# A.x is written `Int`; B.y infers its type from A.x.
+> p/compile
+
+# Without the annotation, x and y infer their types from each other: a clean build reports the
+# cycle. Zinc compiles A alone against B.y: Int from B's classfile, infers x: Int, sees no API
+# change and stops.
+$ copy-file changes/A.scala p/A.scala
+-> p/compile
