@@ -62,18 +62,36 @@ private[inc] object AncestorChange:
  */
 private[inc] final class HierarchyView(
     relations: Relations,
-    val api: String => Option[AnalyzedClass]
+    lookup: String => Option[AnalyzedClass]
 ):
   private val parents = relations.inheritance.internal
 
   /**
+   * A class's API, by its name or, for an upstream class, by its binary name: a stored
+   * linearization names a class nested in an object `a.O.C`, upstream APIs are keyed `a.O$C`.
+   */
+  val api: String => Option[AnalyzedClass] = name =>
+    lookup(name).orElse(
+      LibraryAncestors.binaryNameCandidates(name).iterator.drop(1).flatMap(lookup).nextOption()
+    )
+
+  /**
    * Ancestors through this subproject's inheritance relation, plus those in the stored
-   * linearization, which also names ancestors in upstream subprojects.
+   * linearization, which also names ancestors in upstream subprojects, all by source name. A
+   * parent reached through an object, `extends Inst.B` with `object Inst extends Outer`, is
+   * stored as `Inst.B`, which no class is called; the external inheritance relation has its
+   * class, `Outer$B`, whose own stored linearization names the ancestors above it.
    */
   def ancestors(className: String): Set[String] =
-    IncrementalCommon.transitiveDeps(parents.forward(className), sbt.util.Logger.Null, false)(
-      parents.forward
-    ) ++ api(className).toList.flatMap(MerkleHashes.linearization) - className
+    val internal =
+      IncrementalCommon.transitiveDeps(parents.forward(className), sbt.util.Logger.Null, false)(
+        parents.forward
+      ) + className
+    val upstream =
+      internal.flatMap(relations.inheritance.external.forward).map(LibraryAncestors.sourceName)
+    internal ++ upstream ++ (internal ++ upstream).iterator
+      .flatMap(api)
+      .flatMap(MerkleHashes.linearization) - className
 
   def usedNames(className: String): Set[String] =
     relations.names.toMultiMap.get(className).fold(Set.empty[String])(_.map(_.name).toSet)
@@ -207,7 +225,7 @@ private[inc] object DescendantRules:
    */
   val conflicts: DescendantRule = rule("conflicts") { (view, d, change) =>
     val p = change.className
-    val otherPath = view.ancestors(d) - p -- view.ancestors(p)
+    val otherPath = view.ancestors(d) - p - LibraryAncestors.sourceName(p) -- view.ancestors(p)
     val internal = otherPath.flatMap(view.declaredNames)
     val external = view.externallyInheritedNames(d) --
       view.inheritedNames(change.before) -- view.inheritedNames(change.after)
