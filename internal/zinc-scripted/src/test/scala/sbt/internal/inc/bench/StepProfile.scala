@@ -40,16 +40,32 @@ object StepProfile {
     else {
       val lines = Files.readAllLines(file).asScala.toVector
       Files.write(file, Array.emptyByteArray)
-      // main,startNs,endNs,runId,phaseId,phaseName,purpose,taskCount,threadId,threadName,
-      // runNs,idleNs,cpuTimeNs,userTimeNs,allocatedByte,heapSize
-      val rows =
-        lines.map(_.split(",", -1).map(_.trim)).filter(r => r.length >= 15 && r(0) == "main")
-      val order = rows.map(_(5)).distinct
-      order.map { name =>
-        val rs = rows.filter(_(5) == name)
-        Phase(name, rs.map(_(10).toLong).sum, rs.map(_(14).toLong).sum)
-      }
+      parseScalacProfile(lines)
     }
+
+  /**
+   * Parses the CSV that scalac and Scala 3 write for `-Yprofile-destination`, which share a
+   * format: Scala 3 ported scalac's profiler, though it writes `MAIN` where scalac writes `main`.
+   */
+  def parseScalacProfile(lines: Seq[String]): Seq[Phase] = {
+    // main,startNs,endNs,runId,phaseId,phaseName,purpose,taskCount,threadId,threadName,
+    // runNs,idleNs,cpuTimeNs,userTimeNs,allocatedByte,heapSize
+    val rows = lines
+      .map(_.split(",", -1).map(_.trim))
+      .filter(r => r.length >= 15 && r(0).equalsIgnoreCase("main"))
+    val order = rows.map(_(5)).distinct
+    order.map { name =>
+      val rs = rows.filter(_(5) == name)
+      Phase(phaseName(name), rs.map(_(10).toLong).sum, rs.map(_(14).toLong).sum)
+    }
+  }
+
+  /**
+   * The profiler replaces each comma in a phase name with a space, which turns the `, ` between
+   * the phases of a Scala 3 `MegaPhase{a, b}` into two spaces. Puts the commas back.
+   */
+  private def phaseName(csv: String): String =
+    if (csv.startsWith("MegaPhase{")) csv.replace("  ", ", ") else csv
 
   /** Sums phases by name across modules, keeping the first module's order. */
   def mergePhases(phases: Seq[Phase]): Seq[Phase] =
