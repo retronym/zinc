@@ -1,0 +1,5 @@
+> p/run 1,1
+
+# D's body and App both inline P.m, which App selects through D
+$ copy-file changes/P.scala p/P.scala
+> p/run 2,2

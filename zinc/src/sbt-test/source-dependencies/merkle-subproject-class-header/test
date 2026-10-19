@@ -1,0 +1,5 @@
+> app/run 1
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# N gains x through A's new parent; app sees it only if N's stored linearization is refreshed
+> app/run 0

@@ -1,0 +1,10 @@
+> run
+
+$ copy-file changes/T.scala T.scala
+# Base mixes T in, so its source recompiles, with U beside it. U's own API is unchanged:
+# a public member added to T must not read as a change to U's private members, which would
+# recompile every descendant of U, one level of the trait chain per cycle.
+> run
+> checkRecompilations 1 T
+> checkRecompilations 2 Base U
+> checkIterations 3

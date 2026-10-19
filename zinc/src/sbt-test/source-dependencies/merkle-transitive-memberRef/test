@@ -1,0 +1,10 @@
+# introduces first compile iteration
+> compile
+# adds a new method to A; no descendant declares, uses or must implement it, so
+# neither they nor their clients (X, which uses B) are recompiled
+$ copy-file changes/A1.scala A.scala
+# second iteration
+> compile
+# check in which compile iteration given source file got recompiled
+> checkRecompilations 0 test.X test.Y test.B test.C test.D
+> checkRecompilations 1 test.A

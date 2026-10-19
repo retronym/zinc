@@ -1,0 +1,10 @@
+> compile
+
+# Sub's parent Base is nested, so its binary name is Outer$Base. In the first compile no analysis
+# maps that name to Base yet; Base must still not be taken for a library class found in the output
+# directory, or a library stamp is folded into the names Sub inherits, and they all change when
+# A is recompiled against an analysis that knows Base.
+$ copy-file changes/A.scala A.scala
+> compile
+> checkRecompilations 1 Outer Outer.Base Outer.Sub
+> checkRecompilations 0 C

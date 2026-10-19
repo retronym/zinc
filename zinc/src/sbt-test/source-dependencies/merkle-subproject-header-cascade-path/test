@@ -1,0 +1,5 @@
+> app/run Int
+
+# A's parent changes; C names its parent through a path-dependent prefix
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run String
