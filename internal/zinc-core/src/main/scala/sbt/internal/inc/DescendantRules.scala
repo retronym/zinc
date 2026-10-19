@@ -281,9 +281,22 @@ private[inc] object DescendantRules {
   /** The descendant's own type check reads the changed class's header. */
   val header: DescendantRule = rule("header") { (_, _, change) =>
     if (change.headerChanged) Some(s"header of ${change.className} changed")
-    else if (change.modifiedNameStrings.contains("<init>"))
+    else if (change.modifiedNameStrings.exists(isOwnConstructor(_, change.className)))
       Some(s"constructor of ${change.className} changed")
     else None
+  }
+
+  /**
+   * Whether `name` is the constructor of `className`: `<init>` under Scala 2, the class's name
+   * with `;` for `.` and `;init;` appended under Scala 3 (`p;O$;C;init;`). Scala 3 folds whether
+   * a class has initialization code into its constructor's API, which every descendant's
+   * constructor purity depends on.
+   */
+  private def isOwnConstructor(name: String, className: String): Boolean = {
+    def normal(n: String) = LibraryAncestors.sourceName(LibraryAncestors.canonical(n))
+    name == "<init>" ||
+    name.endsWith(";init;") &&
+    normal(name.stripSuffix(";init;").replace(';', '.')) == normal(className)
   }
 
   /** Classes mixing in a trait get forwarders for its concrete members. */
