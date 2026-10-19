@@ -1676,7 +1676,10 @@ private final class AnalysisCallback(
     val trimmedAnalysis = merged.copy(
       Stamps.empty,
       APIs(merged.apis.internal, Map.empty),
-      Relations.empty.copy(productClassName = merged.relations.productClassName),
+      Relations.empty.copy(
+        productClassName = merged.relations.productClassName,
+        externalDependencies = earlyExternalDependencies(merged.relations),
+      ),
       SourceInfos.empty,
       Compilations.empty,
     )
@@ -1685,6 +1688,20 @@ private final class AnalysisCallback(
     mergeUpdates() // must merge updates each cycle or else scalac will clobber it
     val available = lookup.shouldDoEarlyOutput(merged)
     Incremental.writeEarlyOut(progress, earlyOutput, available, knownProducts(merged), log)
+
+  /**
+   * Under Merkle hashing a downstream subproject composes a class's hashes with those of its
+   * upstream ancestors, which it finds through the external inheritance relation (see
+   * [[MerkleHashes]]), so the early analysis keeps that relation.
+   */
+  private def earlyExternalDependencies(relations: Relations): ExternalDependencies =
+    if !merkle then ExternalDependencies.empty
+    else
+      ExternalDependencies(
+        relations.externalDependencies.dependencies.filter(
+          _._1 == DependencyContext.DependencyByInheritance
+        )
+      )
 
   private def mergeUpdates() =
     pickleJarPair.foreach {
