@@ -1290,7 +1290,7 @@ class ExtractAPI[GlobalType <: Global](
   })
   private def thisPathHash(sym: Symbol): Int = thisPathHashes(sym)
 
-  private[this] val tparamIDHashes = new SymbolIntMemo(s => strHash(refinementRelativeName(s)))
+  private[this] val tparamIDHashes = new SymbolIntMemo(s => strHash(tparamID(s)))
   private def tparamIDHash(s: Symbol): Int =
     existentialRenamings.renaming(s) match {
       case Some(rename) => strHash(rename)
