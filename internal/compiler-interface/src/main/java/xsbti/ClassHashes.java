@@ -29,8 +29,8 @@ public final class ClassHashes {
     /**
      * @param apiHash The hash of the class's non-private API.
      * @param extraHash For a trait, the API hash including the private members that its
-     *                  implementors depend on (fields, objects, super accessors), before Zinc folds
-     *                  in its parents'. For other classes, equal to <code>apiHash</code>.
+     *                  implementors depend on (fields, objects, super accessors). For other
+     *                  classes, equal to <code>apiHash</code>.
      * @param nameHashes One hash per (simple name, scope) of the class's non-private members.
      * @param hasMacro Whether the class declares a macro.
      */

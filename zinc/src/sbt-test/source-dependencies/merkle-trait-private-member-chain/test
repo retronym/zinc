@@ -1,0 +1,9 @@
+> run
+
+$ copy-file changes/T.scala T.scala
+# C holds the field and accessors for T's new private val, through a chain of traits whose
+# own APIs do not change. A private change to a trait recompiles all its descendants at once.
+> run
+> checkRecompilations 1 T
+> checkRecompilations 2 U V W C
+> checkIterations 3
