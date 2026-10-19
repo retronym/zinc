@@ -43,13 +43,14 @@ class MerkleHashesInheritanceSpec extends UnitSpec:
   private def hashes(c: AnalyzedClass) =
     (c.apiHash, c.nameHashes.map(h => (h.name, h.scope, h.hash)).toSet)
 
-  "composed" should "take upstream ancestors reached through an object from the external inheritance relation" in:
-    val c = MerkleHashes.composed(analysis("p.Outer$B"), "p.C", lookup(b("b"))).get
-    MerkleHashes.linearization(c) shouldBe
-      Vector("p.Inst.B", "p.Inst.A", "p.Outer.B", "p.Outer.A")
-    c.nameHashes.map(_.name).toSet should contain allOf ("b", "a")
-    hashes(MerkleHashes.composed(analysis("p.Outer$B"), "p.C", lookup(b("b2"))).get) should not be
-      hashes(c)
+  "composed" should
+    "take upstream ancestors reached through an object from the external inheritance relation" in:
+      val c = MerkleHashes.composed(analysis("p.Outer$B"), "p.C", lookup(b("b"))).get
+      MerkleHashes.linearization(c) shouldBe
+        Vector("p.Inst.B", "p.Inst.A", "p.Outer.B", "p.Outer.A")
+      c.nameHashes.map(_.name).toSet should contain allOf ("b", "a")
+      hashes(MerkleHashes.composed(analysis("p.Outer$B"), "p.C", lookup(b("b2"))).get) should not be
+        hashes(c)
 
   it should "compose the same whichever order the relation lists the ancestors in" in:
     hashes(

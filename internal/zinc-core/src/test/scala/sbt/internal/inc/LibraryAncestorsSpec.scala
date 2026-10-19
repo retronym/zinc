@@ -16,7 +16,8 @@ class LibraryAncestorsSpec extends UnitSpec:
     LibraryAncestors.binaryNameCandidates("a.O.C") shouldBe List("a.O.C", "a.O$C", "a$O$C")
 
   it should "keep a Scala 3 nested name as stored, then its binary names" in:
-    LibraryAncestors.binaryNameCandidates("a.O$.C") shouldBe List("a.O$.C", "a.O.C", "a.O$C", "a$O$C")
+    LibraryAncestors.binaryNameCandidates("a.O$.C") shouldBe
+      List("a.O$.C", "a.O.C", "a.O$C", "a$O$C")
 
   "canonical" should "name the members of objects as Scala 2 does" in:
     LibraryAncestors.canonical("a.O$.P$.C") shouldBe "a.O.P.C"
