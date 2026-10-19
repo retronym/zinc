@@ -133,6 +133,28 @@ class DependencySpecification
     assert(inheritance("B") === Set.empty)
   }
 
+  it should "extract dependencies on the sealed classes below a match's scrutinee" in {
+    val srcA =
+      """sealed trait S
+        |sealed trait T extends S
+        |final class A extends S
+        |final class B extends T""".stripMargin
+    val srcB =
+      """object Client {
+        |  def f(s: S): Int = s match {
+        |    case _: A => 0
+        |    case _: B => 1
+        |  }
+        |}""".stripMargin
+    val srcC = "object Other { def f(s: S): S = s }"
+
+    val classDependencies = extractDependenciesFromSrcs(srcA, srcB, srcC)
+
+    val memberRef = classDependencies.memberRef
+    assert(memberRef("Client") === Set("S", "A", "B", "T"))
+    assert(memberRef("Other") === Set("S"))
+  }
+
   it should "extract class dependency from 'classOf' literal" in {
     val srcA =
       """object A {

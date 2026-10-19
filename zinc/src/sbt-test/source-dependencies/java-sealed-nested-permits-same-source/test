@@ -1,0 +1,8 @@
+# Client matches on the Java sealed interface S, whose leaves are A and, under the sealed T, B. All
+# are in S.java, so their permits are implicit.
+> p/compile
+
+# C joins T: the match is no longer exhaustive, which -Werror makes an error. The children of S
+# (A and T) are unchanged; those of T change, and Client depends on T, a sealed class below S.
+$ copy-file changes/S.java p/src/main/java/a/S.java
+-> p/compile
