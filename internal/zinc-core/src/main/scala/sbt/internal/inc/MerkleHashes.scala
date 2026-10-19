@@ -43,27 +43,68 @@ private[inc] object MerkleHashes:
       elsewhere: String => Option[AnalyzedClass] = _ => None
   ): Option[AnalyzedClass] =
     analysis.apis.internal.get(className).map { own =>
-      val ancestors = linearization(own)
-        .filter(_ != className)
-        .flatMap(a => analysis.apis.internal.get(a).orElse(elsewhere(a)))
-      val forwarded =
-        if isTrait(own) then
-          val traits = (own +: ancestors).filter(isTrait)
-          val fields = traits.map(c => (c.name, c.extraHash)).hashCode
-          compose(traits, ForwarderSuffix) :+ NameHash.of(ForwarderSuffix, UseScope.Default, fields)
-        else Array.empty[NameHash]
-      if ancestors.isEmpty then
-        own
-          .withApiHash((own.apiHash, header(own)).hashCode)
-          .withNameHashes(own.nameHashes ++ forwarded)
-      else
-        val apiHash =
-          (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash, implicits(c))))
-            .hashCode
-        own
-          .withApiHash(apiHash)
-          .withNameHashes(compose(own +: ancestors, "") ++ forwarded)
+      analysis match
+        case a: MAnalysis =>
+          val cached = a.composedCache.get(className)
+          if (cached ne null) && cached.isCurrent(elsewhere) then cached.result
+          else
+            val c = compose(analysis, own, elsewhere)
+            a.composedCache.put(className, c)
+            c.result
+        case _ => compose(analysis, own, elsewhere).result
     }
+
+  /**
+   * Composing every class that a subproject depends on is costly, and it happens on every
+   * compile, to detect changes upstream. An analysis keeps what it composed, with the ancestors
+   * from other analyses that went into it, and the result is reused while those ancestors are
+   * the same instances: an `AnalyzedClass` is immutable, and an analysis is kept in memory
+   * across compiles while it does not change.
+   */
+  private[inc] final class Composed(
+      externalNames: Array[String],
+      externals: Array[AnalyzedClass],
+      val result: AnalyzedClass
+  ):
+    def isCurrent(elsewhere: String => Option[AnalyzedClass]): Boolean =
+      var i = 0
+      while i < externalNames.length do
+        if !(elsewhere(externalNames(i)).orNull eq externals(i)) then return false
+        i += 1
+      true
+
+  private def compose(
+      analysis: Analysis,
+      own: AnalyzedClass,
+      elsewhere: String => Option[AnalyzedClass]
+  ): Composed =
+    val className = own.name
+    val names = linearization(own).filter(_ != className)
+    val externalNames = names.filterNot(analysis.apis.internal.contains).toArray
+    val externals = externalNames.map(elsewhere(_).orNull)
+    val ancestors = names.flatMap { a =>
+      analysis.apis.internal.get(a).orElse(Option(externals(externalNames.indexOf(a))))
+    }
+    new Composed(externalNames, externals, composed(own, ancestors))
+
+  private def composed(own: AnalyzedClass, ancestors: Vector[AnalyzedClass]): AnalyzedClass =
+    val forwarded =
+      if isTrait(own) then
+        val traits = (own +: ancestors).filter(isTrait)
+        val fields = traits.map(c => (c.name, c.extraHash)).hashCode
+        compose(traits, ForwarderSuffix) :+ NameHash.of(ForwarderSuffix, UseScope.Default, fields)
+      else Array.empty[NameHash]
+    if ancestors.isEmpty then
+      own
+        .withApiHash((own.apiHash, header(own)).hashCode)
+        .withNameHashes(own.nameHashes ++ forwarded)
+    else
+      val apiHash =
+        (own.apiHash +: header(own) +: ancestors.map(c => (c.name, c.extraHash, implicits(c))))
+          .hashCode
+      own
+        .withApiHash(apiHash)
+        .withNameHashes(compose(own +: ancestors, "") ++ forwarded)
 
   /** Marks a name hash that covers a trait's mixin forwarders: see the class comment. */
   val ForwarderSuffix = " <forwarders>"

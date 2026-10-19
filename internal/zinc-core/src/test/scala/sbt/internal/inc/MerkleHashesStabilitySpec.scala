@@ -66,7 +66,7 @@ object MerkleHashesStability:
 
   private def lzy[T <: AnyRef](t: T): Lazy[T] = SafeLazyProxy.strict(t)
 
-  private def parent(name: String): Type =
+  def parent(name: String): Type =
     val segments = name.split('.')
     val path = Path.of(segments.init.map(s => Id.of(s): PathComponent) :+ This.of())
     Projection.of(Singleton.of(path), segments.last)
@@ -86,7 +86,7 @@ object MerkleHashesStability:
       Array.empty
     )
 
-  private def analyzed(
+  def analyzed(
       name: String,
       defType: DefinitionType,
       parents: Array[Type],
