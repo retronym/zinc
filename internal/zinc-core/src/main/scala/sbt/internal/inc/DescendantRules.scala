@@ -153,15 +153,24 @@ private[inc] final class HierarchyView(
   /**
    * Whether the object side of `className` has `ancestor` in its linearization. A case class's
    * companion object does not, so it gets no forwarders for the class's inherited members.
+   * Names are compared in [[LibraryAncestors.canonical]] form: an upstream `ancestor` is named by
+   * its binary name, the linearization by source names. A parent reached through another object
+   * (`object O extends Inst.B`) is stored under a name no class has; without a companion class
+   * every inheritance edge of `className` is the object's, so [[ancestors]] finds it.
    */
-  def objectInherits(className: String, ancestor: String): Boolean =
+  def objectInherits(className: String, ancestor: String): Boolean = {
+    val target = LibraryAncestors.canonical(LibraryAncestors.sourceName(ancestor))
     api(className).exists { c =>
       val obj = c.api().objectApi()
-      !isEmpty(obj) &&
-      obj.structure.parents.iterator
-        .flatMap(MerkleHashes.typeName)
-        .contains(ancestor)
+      !isEmpty(obj) && (
+        obj.structure.parents.iterator
+          .flatMap(MerkleHashes.typeName)
+          .exists(n => LibraryAncestors.canonical(n) == target) ||
+          isEmpty(c.api().classApi()) &&
+          ancestors(className).exists(n => LibraryAncestors.canonical(n) == target)
+      )
     }
+  }
 
   /** An absent side is stored as `APIUtil.emptyClassLike`, which claims to be top-level. */
   def isTopLevel(className: String): Boolean =
