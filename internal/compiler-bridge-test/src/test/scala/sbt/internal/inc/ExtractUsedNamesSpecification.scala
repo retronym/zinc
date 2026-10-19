@@ -47,6 +47,16 @@ class ExtractUsedNamesSpecification
     assert(usedNames("b.X") === expectedNames)
   }
 
+  it should "extract the names of the type of a classOf literal" in {
+    val srcA = "package a { object W { class Foo[T] }; class Bar }"
+    val srcB = """|package b
+                  |import a.W._
+                  |class B { val c: Any = classOf[Foo[a.Bar]] }""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB)
+    assert(usedNames("b.B").contains("Foo"))
+    assert(usedNames("b.B").contains("Bar"))
+  }
+
   // test for https://github.com/gkossakowski/sbt/issues/5
   it should "extract symbolic names" in {
     val srcA = """|class A {
