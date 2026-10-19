@@ -402,7 +402,7 @@ object IncBench {
         }
         val json = r.fold(e => s""""ok":false,"errors":${jsonArray(e)}""", _.json)
         emit(s"""{$shape,"step":"$name","rep":$rep,$json$v}""")
-        Seq("same", "signature", "java-context").exists(w => v.contains(s""""verify":"$w"""")) &&
+        Seq("same", "java-context").exists(w => v.contains(s""""verify":"$w"""")) &&
         !v.contains(" java-round")
       }
       Compat.writeString(file, edit.content)
@@ -496,9 +496,10 @@ object IncBench {
 
   /**
    * A classfile's digest, and the digest of it with the type variables of its generic signatures
-   * renamed canonically. scalac names a cloned type variable `A` or `A$` depending on what else
-   * the run compiles, so a static forwarder's signature can differ between an incremental and a
-   * clean build of the same source.
+   * renamed canonically. The second only diagnoses a mismatch: scalac 2.13.18 and earlier name a
+   * forwarder's type variable `A` or `A$` depending on what else the run compiles (fixed by
+   * scala/scala#11289), so a classfile can differ between an incremental and a clean build only
+   * in those names. That is still a mismatch.
    */
   final case class Digest(raw: String, normalized: String)
 
@@ -557,15 +558,17 @@ object IncBench {
 
   /**
    * Compares an incremental build with a clean one, with the conformance harness's verdicts and
-   * two more. `signature` means the classfiles differ only in generic signatures' type variable
-   * names. `java-context` means each differing classfile equals, up to those names, either the
-   * clean build's or that of `bin`, a clean build that saw the Java classes as classfiles. Its
-   * Scala classfiles then match a clean build, as scalac compiles them in a batch without those
-   * Java sources. `bin` is only built when needed. A classfile this compile wrote
-   * (`fresh`) may come from a batch that held some Java sources and not others, so it is also
-   * compared with `byRound`, a clean build per round with that round's Java sources and the
-   * others as classfiles; if one still differs, the verdict is `fresh-mismatch`. A stale, missing or extra classfile is
-   * `bytecode`. Each differing classfile is listed, marked `fresh` if `fresh` has it.
+   * more. `java-context` means each differing classfile equals that of `bin`, a clean build that
+   * saw the Java classes as classfiles. Its Scala classfiles then match a clean build, as scalac
+   * compiles them in a batch without those Java sources. `bin` is only built when needed. A
+   * classfile this compile wrote (`fresh`) may come from a batch that held some Java sources and
+   * not others, so it is also compared with `byRound`, a clean build per round with that round's
+   * Java sources and the others as classfiles. Of the classfiles none of these explain, if each
+   * differs from one of them only in generic signatures' type variable names, the verdict is
+   * `signature`, a failure that names scalac as the culprit; otherwise it is `fresh-mismatch` if
+   * this compile wrote them all, else `bytecode`. A stale, missing or extra classfile is
+   * `bytecode`. Each differing classfile is listed, marked by what explains it, `signature` if it
+   * differs only in type variable names, and `fresh` if `fresh` has it.
    */
   def verdict(
       inc: Outcome,
@@ -576,22 +579,26 @@ object IncBench {
   ): String = {
     lazy val binClasses = bin.flatMap(_.toOption).getOrElse(Map.empty)
     var roundClasses = Map.empty[String, Digest]
+    def eq(a: Map[String, Digest], b: Map[String, Digest], k: String) =
+      a.get(k).map(_.raw) == b.get(k).map(_.raw)
     def sig(a: Map[String, Digest], b: Map[String, Digest], k: String) =
       a.get(k).map(_.normalized) == b.get(k).map(_.normalized)
+    def names(a: Map[String, Digest], b: Map[String, Digest], k: String) =
+      sig(a, b, k) || sig(a, binClasses, k) || sig(a, roundClasses, k)
     val v = (inc, clean) match {
       case (Right(a), Right(b)) =>
         val ks = differing(inc, clean)
         if (ks.isEmpty) "same"
         else if (!ks.forall(k => a.contains(k) && b.contains(k))) "bytecode"
-        else if (ks.forall(sig(a, b, _))) "signature"
-        else if (ks.forall(k => sig(a, b, k) || sig(a, binClasses, k))) "java-context"
         else {
-          val rest = ks.filterNot(k => sig(a, b, k) || sig(a, binClasses, k))
-          if (!rest.forall(fresh)) "bytecode"
-          else {
-            roundClasses = byRound(rest)
-            if (rest.forall(sig(a, roundClasses, _))) "java-context" else "fresh-mismatch"
-          }
+          val rest = ks.filterNot(eq(a, binClasses, _))
+          if (rest.exists(fresh) && rest.forall(k => fresh(k) || names(a, b, k)))
+            roundClasses = byRound(rest.filter(fresh))
+          val unexplained = rest.filterNot(eq(a, roundClasses, _))
+          if (unexplained.isEmpty) "java-context"
+          else if (unexplained.forall(names(a, b, _))) "signature"
+          else if (unexplained.forall(fresh)) "fresh-mismatch"
+          else "bytecode"
         }
       case (Right(_), Left(_)) => "missed-error"
       case (Left(_), Right(_)) => "spurious-error"
@@ -601,9 +608,9 @@ object IncBench {
       case (Right(a), Right(b)) =>
         differing(inc, clean).map { k =>
           val how =
-            if (sig(a, b, k)) " signature"
-            else if (sig(a, binClasses, k)) " java-context"
-            else if (sig(a, roundClasses, k)) " java-round"
+            if (eq(a, binClasses, k)) " java-context"
+            else if (eq(a, roundClasses, k)) " java-round"
+            else if (names(a, b, k)) " signature"
             else ""
           s"$k ${a.contains(k)}/${b.contains(k)}$how${if (fresh(k)) " fresh" else ""}"
         }
