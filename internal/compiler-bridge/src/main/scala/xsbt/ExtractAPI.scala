@@ -1016,8 +1016,21 @@ class ExtractAPI[GlobalType <: Global](
         debuglog(s"Renaming existential type variable ${s.fullName} to $rename")
         rename
       case None =>
-        refinementRelativeName(s)
+        if (ownedByNonClassType(s)) s.nameString
+        else refinementRelativeName(s)
     }
+
+  /**
+   * Is `s` a type parameter of a type alias or abstract type, or one the unpickler gave no owner?
+   * The pickler stores such a parameter as local to the pickle, with an owner of its own
+   * (`nonClassRoot`) rather than the alias, so when the alias is eta-expanded (`F[List]`) its
+   * parameter's full name is `scala.package.A` from source but `<none>.A` once unpickled. Only
+   * the binding within the type lambda matters, so the simple name is enough.
+   */
+  private def ownedByNonClassType(s: Symbol): Boolean = {
+    val owner = s.owner
+    (owner eq NoSymbol) || owner.isNonClassType
+  }
 
   /**
    * `s.fullName` cut at the outermost refinement class. The pickler rewrites that class's
