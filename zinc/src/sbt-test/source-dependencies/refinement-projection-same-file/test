@@ -1,0 +1,10 @@
+# `B` and `C` inherit `sameFile`, whose type is a refinement projection naming `One`, a class
+# declared in `A`'s own source file. Its name hash must be the same whether `A` is typed from
+# source (the first compile) or unpickled (the incremental one), or `D` recompiles.
+
+> compile
+
+$ copy-file changes/B.scala B.scala
+> compile
+> checkIterations 2
+> checkRecompilations 1 p.B p.C
