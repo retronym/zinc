@@ -346,10 +346,15 @@ private[inc] object DescendantRules:
   /**
    * `all` recompiles every descendant (Zinc's behaviour before Merkle hashing); `none` recompiles
    * none, which is unsound and only useful to show the rules are needed. `-r1,-r2` starts from
-   * `strict` and drops rules; `r1,r2` enables exactly those.
+   * `strict` and drops rules; `r1,r2` enables exactly those. Under name hashing (see [[Hashing]])
+   * every descendant recompiles, as with `all`.
    */
   def fromOptions(options: IncOptions): Option[List[DescendantRule]] =
-    Option(options.extra().get(Key)).getOrElse("default").trim match
+    if !Hashing.isMerkle(options) then None
+    else fromSpec(Option(options.extra().get(Key)).getOrElse("default").trim)
+
+  private def fromSpec(value: String): Option[List[DescendantRule]] =
+    value match
       case "all"     => None
       case "default" => Some(default)
       case "strict"  => Some(all)

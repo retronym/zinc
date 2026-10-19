@@ -41,6 +41,8 @@ class LookupImpl(compileConfiguration: CompileConfiguration, previousSetup: Opti
 
   private val entry = MixedAnalyzingCompiler.classPathLookup(compileConfiguration)
 
+  override val hashing: Hashing = Hashing(compileConfiguration.incOptions)
+
   override def lookupAnalysis(binaryClassName: String): Option[CompileAnalysis] =
     analyses.find(_.relations.productClassName._2s.contains(binaryClassName))
 

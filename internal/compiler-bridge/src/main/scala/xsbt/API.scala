@@ -67,8 +67,9 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       case cb: xsbti.AnalysisCallback5 => Some(cb)
       case _                           => None
     }
+    private val merkle: Boolean = callback5.exists(_.merkleHashing())
     private val apiMode: xsbti.AnalysisCallback5.ApiMode =
-      callback5.fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
+      callback5.filter(_ => merkle).fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
     private val optimizedSealed: Boolean = callback5.exists(_.useOptimizedSealed())
     private val materialiseLibraryMembers: String => Boolean =
       callback5.fold((_: String) => true)(cb => cb.materialiseLibraryMembers(_))
@@ -80,6 +81,7 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
         global.outputDirs,
         isSubprojectClass,
         materialiseLibraryMembers,
+        merkle = merkle,
         buildTree = apiMode != ApiMode.HASHES,
         buildHashes = apiMode != ApiMode.TREE,
         optimizedSealed = optimizedSealed

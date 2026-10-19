@@ -58,6 +58,7 @@ class ExtractAPI[GlobalType <: Global](
     outputDirs: Iterable[java.nio.file.Path] = Nil,
     isSubprojectClass: String => Boolean = _ => false,
     materialiseLibraryMembers: String => Boolean = _ => true,
+    merkle: Boolean = true,
     buildTree: Boolean = true,
     buildHashes: Boolean = false,
     optimizedSealed: Boolean = false
@@ -533,6 +534,9 @@ class ExtractAPI[GlobalType <: Global](
    * so we must ensure changes propagate somehow.
    *
    * TODO: can we include hashes for parent classes instead? This seems a bit messy.
+   *
+   * Under Merkle hashing (`merkle`), Zinc does compose them: members inherited from analysed
+   * classes are left out, and library ones may be stubs.
    */
   private def mkStructureWithInherited(info: Type, s: Symbol): xsbti.api.Structure = {
     val ancestorTypes0 = linearizedAncestorTypes(info)
@@ -548,17 +552,23 @@ class ExtractAPI[GlobalType <: Global](
     val decls = info.decls.toList
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
     val declSet = decls.toSet
-    val (inherited, platform) =
-      info.nonPrivateMembers.toList
-        .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
-        .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
-    mkStructure(
-      s,
-      ancestorTypes,
-      declsNoModuleCtor,
-      inherited,
-      (platform ++ overriddenLibraryDecls(info, declSet, inherited ++ platform)).flatMap(stub)
-    )
+    if (merkle) {
+      val (inherited, platform) =
+        info.nonPrivateMembers.toList
+          .filter(m => !declSet(m) && (!isInternal(m.owner) || discoveryReadsAnnotations(m)))
+          .partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
+      mkStructure(
+        s,
+        ancestorTypes,
+        declsNoModuleCtor,
+        inherited,
+        (platform ++ overriddenLibraryDecls(info, declSet, inherited ++ platform)).flatMap(stub)
+      )
+    } else {
+      val inherited =
+        info.nonPrivateMembers.toList.filterNot(declSet) // private members are not inherited
+      mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
+    }
   }
 
   /**
@@ -1053,7 +1063,7 @@ class ExtractAPI[GlobalType <: Global](
 
   /**
    * A class extracted with its hashes: `full` is the full API (when `buildTree`), `thin` the part
-   * Zinc keeps, as `APIUtil.minimize` produces it.
+   * Zinc keeps, as `APIUtil.minimizeWithStubs` produces it.
    */
   final class Extracted(val full: ClassLike, val thin: ClassLike, val hashes: xsbti.ClassHashes)
 
@@ -1878,7 +1888,7 @@ class ExtractAPI[GlobalType <: Global](
     )
   }
 
-  /** What `APIUtil.minimize` keeps of the class `mkClassLike` builds. */
+  /** What `APIUtil.minimizeWithStubs` keeps of the class `mkClassLike` builds. */
   private def thinClass(p: PendingClass, members: Members, isModule: Boolean): ClassLike = {
     val sym = p.sym
     val parents = types(sym, members.ancestorTypes)

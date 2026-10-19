@@ -28,6 +28,18 @@ public interface AnalysisCallback5 extends AnalysisCallback4 {
         CHECK
     }
 
+    /**
+     * Whether Zinc composes the hashes of inherited members from each ancestor's own (Merkle
+     * hashing). If so, the API of a class omits the members it inherits from classes of this
+     * subproject or another one Zinc has analysed, and the bridge may hash it itself, as
+     * {@link #apiMode} says. Otherwise the API of a class includes every member it inherits, and
+     * the bridge sends it in full, through {@link AnalysisCallback#api}.
+     */
+    default boolean merkleHashing() {
+        return false;
+    }
+
+    /** How the bridge reports class APIs in this compilation, under {@link #merkleHashing}. */
     ApiMode apiMode();
 
     /**

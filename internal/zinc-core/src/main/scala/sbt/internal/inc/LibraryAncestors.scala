@@ -46,7 +46,9 @@ import xsbti.compile.IncOptions
 private[inc] object LibraryAncestors:
   val Key = "libraryAncestors"
 
-  private def value(options: IncOptions) = options.extra().getOrDefault(Key, "names").trim
+  private def value(options: IncOptions) =
+    if !Hashing.isMerkle(options) then "members"
+    else options.extra().getOrDefault(Key, "names").trim
 
   /** Whether the bridge records library members as stubs. */
   def coarse(options: IncOptions): Boolean = value(options) != "members"
