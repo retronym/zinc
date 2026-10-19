@@ -1491,9 +1491,24 @@ private final class AnalysisCallback(
             internalBinaryToSourceClassName(n).isDefined || isSubprojectClass(n)
         )
         if internal then None
-        else candidates.iterator.flatMap(lookup.lookupOnClasspath(_)).nextOption()
+        else
+          candidates.iterator
+            .flatMap(lookup.lookupOnClasspath(_))
+            .nextOption()
+            .filterNot(f => ownOutputs(converter.toPath(f).toAbsolutePath.normalize))
       }
     )
+
+  /**
+   * This compile's own outputs, which the classpath holds too. A class found there is one of
+   * this subproject's, whatever name it was looked up by, and not a library: in a clean build
+   * nothing yet records its binary name, and its classfile is already written.
+   */
+  private lazy val ownOutputs: Set[Path] =
+    def paths(o: Output): List[Path] =
+      o.getSingleOutputAsPath.toScala.toList ++
+        o.getMultipleOutput.toScala.toList.flatMap(_.toList.map(_.getOutputDirectoryAsPath))
+    (paths(output) ++ earlyOutput.toList.flatMap(paths)).map(_.toAbsolutePath.normalize).toSet
 
   /** The stamps of the libraries defining a class's library ancestors. See [[LibraryAncestors]]. */
   private def libraryFingerprint(sides: List[ClassLike]): Option[Int] =
