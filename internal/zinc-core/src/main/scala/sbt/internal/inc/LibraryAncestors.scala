@@ -87,7 +87,8 @@ private[inc] object LibraryAncestors:
     if changedClasses.isEmpty then Set.empty
     else
       apis.internal.iterator.collect {
-        case (className, c) if ancestorNames(c).exists(changedClasses) => className
+        case (className, c) if ancestorNames(c).exists(n => changedClasses(canonical(n))) =>
+          className
       }.toSet
 
   /**
@@ -115,15 +116,22 @@ private[inc] object LibraryAncestors:
   def ancestorNames(sides: List[ClassLike]): List[String] =
     sides.flatMap(_.structure.parents.iterator.flatMap(MerkleHashes.typeName)).distinct
 
+  /**
+   * A class name with the members of objects named as Scala 2 names them: Scala 3 keeps the
+   * object's class in the name of a class nested in it, and in a reference to it (`a.O$.C`).
+   */
+  def canonical(name: String): String = name.replace("$.", ".")
+
   /** Binary names a class rendered as `name` may have: `a.b.C.D` is `a.b.C$D` if C is a class. */
   def binaryNameCandidates(name: String): List[String] =
+    val c = canonical(name)
     Iterator
-      .iterate(name)(n =>
+      .iterate(c)(n =>
         n.lastIndexOf('.') match
           case -1 => n
           case i  => n.substring(0, i) + "$" + n.substring(i + 1)
       )
-      .take(name.count(_ == '.') + 1)
+      .take(c.count(_ == '.') + 1)
       .toList
 
   private def ancestorNames(c: AnalyzedClass): Iterator[String] = ancestorNames(sides(c)).iterator

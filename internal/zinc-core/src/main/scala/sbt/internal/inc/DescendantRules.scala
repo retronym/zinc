@@ -72,7 +72,7 @@ private[inc] final class HierarchyView(
    */
   val api: String => Option[AnalyzedClass] = name =>
     lookup(name).orElse(
-      LibraryAncestors.binaryNameCandidates(name).iterator.drop(1).flatMap(lookup).nextOption()
+      LibraryAncestors.binaryNameCandidates(name).iterator.flatMap(lookup).nextOption()
     )
 
   /**
@@ -225,7 +225,10 @@ private[inc] object DescendantRules:
    */
   val conflicts: DescendantRule = rule("conflicts") { (view, d, change) =>
     val p = change.className
-    val otherPath = view.ancestors(d) - p - LibraryAncestors.sourceName(p) -- view.ancestors(p)
+    val onPath = (view.ancestors(p) + p + LibraryAncestors.sourceName(p)).map(
+      LibraryAncestors.canonical
+    )
+    val otherPath = view.ancestors(d).filterNot(a => onPath(LibraryAncestors.canonical(a)))
     val internal = otherPath.flatMap(view.declaredNames)
     val external = view.externallyInheritedNames(d) --
       view.inheritedNames(change.before) -- view.inheritedNames(change.after)
