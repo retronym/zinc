@@ -569,6 +569,14 @@ final class Dependency(val global: CallbackGlobal) extends LocateClassFile with 
         localToNonLocalClass.resolveNonLocal(sym)
         super.traverse(tree)
 
+      case m: Match =>
+        sealedSubclassesBelow(m.selector.tpe).foreach(addDependency)
+        super.traverse(m)
+
+      case vd @ ValDef(mods, _, tpt, _) if mods.isCase && mods.isSynthetic =>
+        sealedSubclassesBelow(tpt.tpe).foreach(addDependency)
+        super.traverse(vd)
+
       case f: Function =>
         processSAMAttachment(f)(symbol => {
           addDependency(symbol)

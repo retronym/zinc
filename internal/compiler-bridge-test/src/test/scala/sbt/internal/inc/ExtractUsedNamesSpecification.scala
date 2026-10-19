@@ -84,6 +84,26 @@ class ExtractUsedNamesSpecification
     assert(usedNames("b.X") === expectedNames)
   }
 
+  it should "extract the sealed classes below a match's scrutinee as pattern-match targets" in {
+    val srcA =
+      """sealed trait S
+        |sealed trait T extends S
+        |final class A extends S
+        |final class B extends T""".stripMargin
+    val srcB =
+      """object Client {
+        |  def f(s: S): Int = s match {
+        |    case _: A => 0
+        |    case _: B => 1
+        |  }
+        |}""".stripMargin
+    val (_, callback) = compileSrcs(List(List(srcA, srcB)))
+    val usages = callback.usedNamesAndScopes("Client")
+    val patMat = usages.filter(_.scopes.contains(UseScope.PatMatTarget)).map(_.name)
+    assert(patMat === Set("S", "T"))
+    assert(usages.exists(u => u.name == "T" && u.scopes.contains(UseScope.Default)))
+  }
+
   it should "extract the names of the type of a classOf literal" in {
     val srcA = "package a { object W { class Foo[T] }; class Bar }"
     val srcB = """|package b

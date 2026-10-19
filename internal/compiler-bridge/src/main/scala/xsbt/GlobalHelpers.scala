@@ -32,6 +32,23 @@ trait GlobalHelpers { self: Compat =>
     symbol == EmptyPackageClass
   }
 
+  /**
+   * The sealed classes strictly below the sealed classes of `tpe`. Their children decide whether a
+   * match on `tpe` is exhaustive as much as the children of `tpe`'s own sealed classes do. A Scala
+   * sealed hierarchy lives in one source, which recompiles as a whole, but a Java sealed class can
+   * permit a sealed class in another source.
+   */
+  def sealedSubclassesBelow(tpe: Type): Set[Symbol] = {
+    val result = Set.newBuilder[Symbol]
+    if (!ignoredType(tpe)) tpe.foreach { t =>
+      val sym = t.widen.typeSymbol
+      if (sym.isSealed) sym.sealedDescendants.foreach { d =>
+        if ((d ne sym) && d.isSealed) result += d
+      }
+    }
+    result.result()
+  }
+
   /** Return true if name is empty, false otherwise. */
   def isEmptyName(name: Name): Boolean = {
     name match {

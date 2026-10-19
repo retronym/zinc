@@ -3,7 +3,7 @@
 
 # C joins the permits of T: the match is no longer exhaustive, which -Werror makes an error. S.java
 # is not edited, so S is not recompiled; the API of T changes (once its permitted subclasses are
-# recorded), but Client depends on S, A and B, not on T.
+# recorded), and Client depends on T, a sealed class below the scrutinee S.
 $ copy-file changes/C.java p/src/main/java/a/C.java
 $ copy-file changes/T.java p/src/main/java/a/T.java
 -> p/compile
