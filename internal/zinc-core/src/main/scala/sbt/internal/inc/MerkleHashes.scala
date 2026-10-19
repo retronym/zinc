@@ -15,15 +15,32 @@ package inc
 
 import xsbt.api.Discovery
 import xsbti.UseScope
-import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash, Parameterized, Projection, Type }
+import xsbti.api.{
+  AnalyzedClass,
+  DefinitionType,
+  Id,
+  NameHash,
+  Parameterized,
+  Path,
+  PathComponent,
+  Projection,
+  SafeLazyProxy,
+  Singleton,
+  This,
+  Type
+}
 
 import scala.util.hashing.MurmurHash3
 
 /**
  * A class's stored API omits the members it inherits from classes of its own subproject. Within
  * that subproject the invalidator walks the hierarchy instead; another subproject only sees the
- * stored API (the analysis it looks up carries no relations), so it is given hashes composed from
- * the class's and its ancestors' own hashes, taking the ancestors from the stored linearization.
+ * stored API (the analysis it looks up carries no relations but the external inheritance one), so
+ * it is given hashes composed from the class's and its ancestors' own hashes, taking the ancestors
+ * from the stored linearization. A parent reached through an object, `extends Inst.B` with
+ * `object Inst extends Outer`, is stored as `Inst.B`, which no class is called; the external
+ * inheritance relation of the class and its ancestors here has its class, `Outer$B`, which is
+ * added after the stored ancestors along with those its own stored linearization lists.
  * Ancestors in other subprojects come from their own analyses: a class does not recompile when
  * an upstream ancestor changes, so the members it materialised from it may be stale.
  * An ancestor contributes its extraHash rather than its apiHash: that covers its class side only,
@@ -86,7 +103,18 @@ private[inc] object MerkleHashes {
       elsewhere: String => Option[AnalyzedClass]
   ): Composed = {
     val className = own.name
-    val names = linearization(own).filter(_ != className)
+    val stored = linearization(own).filter(_ != className)
+    val parents = analysis.relations.inheritance.external
+    val upstream = (className +: stored.filter(analysis.apis.internal.contains))
+      .flatMap(parents.forward)
+      .map(LibraryAncestors.sourceName)
+      .distinct
+      .sorted
+    val known = collection.mutable.Set((className +: stored).map(LibraryAncestors.canonical): _*)
+    val reached = upstream
+      .flatMap(u => u +: elsewhere(u).toVector.flatMap(linearization))
+      .filter(a => known.add(LibraryAncestors.canonical(a)))
+    val names = stored ++ reached
     val externalNames = names.filterNot(analysis.apis.internal.contains).toArray
     val externals = externalNames.map(elsewhere(_).orNull)
     val ancestors = names.flatMap { a =>
@@ -95,7 +123,31 @@ private[inc] object MerkleHashes {
         Option(externals(i))
       }
     }
-    new Composed(externalNames, externals, composed(own, ancestors))
+    new Composed(externalNames, externals, withParents(composed(own, ancestors), reached))
+  }
+
+  /**
+   * A composed class lists the ancestors it was composed with that its stored linearization
+   * misses, so that the descendant rules of a subproject further downstream find them too.
+   */
+  private def withParents(c: AnalyzedClass, names: Vector[String]): AnalyzedClass =
+    if (names.isEmpty) c
+    else {
+      val companions = c.api()
+      val classApi = companions.classApi()
+      val structure = classApi.structure
+      val parents = structure.parents ++ names.map(parentType)
+      val added = classApi.withStructure(
+        SafeLazyProxy.strict(structure.withParents(SafeLazyProxy.strict(parents)))
+      )
+      c.withApi(SafeLazyProxy.strict(companions.withClassApi(added)))
+    }
+
+  /** A type that [[typeName]] renders as `name`. */
+  private def parentType(name: String): Type = {
+    val parts = name.split('.')
+    val path = parts.init.map(p => Id.of(p): PathComponent) :+ This.of()
+    Projection.of(Singleton.of(Path.of(path)), parts.last)
   }
 
   private def composed(own: AnalyzedClass, ancestors: Vector[AnalyzedClass]): AnalyzedClass = {
