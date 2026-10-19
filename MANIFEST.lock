@@ -1,60 +1,16 @@
-# integration/develop, built 2026-10-19T14:56:32Z by build-integration from manifest.toml
+# integration/merkle, built 2026-10-19T22:08:29Z by build-integration from manifest.toml
 
-base	upstream/develop	70ca0c3a2c282b4cabd54314a5a79ffc076803e5
+base	origin/integration/develop	e69ba82ef121a6715a8bfa2ef563d922bfe767a1
 
-sz#1846	refs/pull/1846/head	4fd2cb7a1c004a078c361954cca95759a5494549	clean
-sz#1842	refs/pull/1842/head	cd4743a03f37110c36b3d292d2b611e357cd20bf	clean
-sz#1852	refs/pull/1852/head	f23b6b0cc4e9cd94af8f49e3f55f678fc2bf2081	clean
-rz#27	refs/pull/27/head	39200c8b7238223f3290651ef7dc6b13e2b010ab	clean
-sz#1852+rz#27	fixups/1852-legacy-hashapi-trait-hash.patch	60a66ddfb9a3f825c638c7830cbcbd03a6cd074d	applied
-rz#28	refs/pull/28/head	7908b5d003002d773249d0a27c07b22e70a96a4e	clean
-rz#32	refs/pull/32/head	cfb15cd3dbfa8f4055249ea5b92974b181c67073	clean
-rz#34	refs/pull/34/head	8e8cb5894109bdcd771ed38c76a61596e0dd8200	clean
-rz#35	refs/pull/35/head	0a6f5e67f78fb24319887a85bdeef042d6c42391	clean
-rz#47	refs/pull/47/head	7aadc2a5a414628b7c4b78d834257858b127cfc5	rerere
-rz#43	refs/pull/43/head	46a8832763869c4a51505122f97a4cf54bbde703	clean
-rz#37	refs/pull/37/head	ad92dbfd7367dc4f10e5bc3b0ef10530b92f97c2	clean
-rz#74	refs/pull/74/head	b0a304c2a513dc4d2fb9bce206cdaded8e8a0242	clean
-rz#77	refs/pull/77/head	e887e3496750d4fe03c4f3c98e6fee5cc80cd02c	clean
-rz#33	refs/pull/33/head	d5c8d5aba8af75101d2558f3153b5cf25f90be31	clean
-rz#40	refs/pull/40/head	5c92025b8e3ccc02bedfd69f87262868943d6ea1	clean
-rz#42	refs/pull/42/head	d1b874f47ff47ffcaf4b5ae1f9ad8129ac9ea902	clean
-rz#49	refs/pull/49/head	18a65a76063d7a273570f57614407bd8c491c680	clean
-rz#50	refs/pull/50/head	2fff12daf78b35b85bd51fa07a75d479d91dfb75	clean
-rz#51	refs/pull/51/head	579f02cfc688c59a8c4b42407fe00f79f3df8eef	clean
-rz#52	refs/pull/52/head	d155a64732e88549d07f3b2eb867439ba21d6b17	clean
-rz#53	refs/pull/53/head	a728b570318bf563c939a2eb102e1e1e9b2ad672	clean
-rz#57	refs/pull/57/head	5bb03fb2ebcd6b6da38a27c14fa6b43c10adbc74	clean
-rz#58	refs/pull/58/head	b68c006ff4fd1e0939b6b8458deb54aba4bdea5a	clean
-rz#59	refs/pull/59/head	c4c2a55eab2abcb0206dae3306b7318f355f5a3e	clean
-rz#76	refs/pull/76/head	f009c8f17bf207ae4658783217d5a7d4f24ffe8c	clean
-rz#36	refs/pull/36/head	4db2c04d206d6919a9110b50b4d4fa69f0e17500	clean
-rz#44	refs/pull/44/head	2e39fb6f6f6c32f499d83eb268abf079a0d82d81	clean
-rz#46	refs/pull/46/head	7328fdfdb495b5f9e414810420b30321cc480f8a	clean
-rz#54	refs/pull/54/head	63375c7dff9287d6b388c217a0197591bb178cb6	rerere
-rz#60	refs/pull/60/head	5fb6cbec3d7e4aa5af416ac9ccc7de693dc74b9d	clean
-rz#45	refs/pull/45/head	d59c75547a9effdee6787f377f96ee9d41caa5a0	clean
-rz#71-dcc	fixups/incbench-defines-class-cache.patch	4df035e78a1df0d5db4d65c43587f4a622d61f00	applied
-
-# excluded
-rz#1	2019-era performance work (flat classpath caching); conflicts with UsedName/protobuf
-rz#3	2019-era performance work (analysis deserialization); conflicts with UsedName/protobuf
-rz#4	2019-era performance work (analysis deserialization); conflicts with UsedName/protobuf
-rz#5	2019-era performance work (UseScope bitmask); conflicts with UsedName/protobuf
-rz#6	review branch for feat/classfile-java-api-phase3, not a fix
-rz#12	placeholder (draft)
-rz#26	placeholder
-rz#14	1.x-era pending tests; base of the #15-#23 bridge stack
-rz#15	1.x-era bridge stack (on #14)
-rz#17	1.x-era bridge stack; conflicts with sz#1842
-rz#18	1.x-era bridge stack; conflicts in ExtractAPI with rz#27/#28
-rz#19	superseded by sz#1842
-rz#20	1.x-era bridge stack; conflicts in ExtractAPI with rz#27/#28
-rz#21	1.x-era bridge stack; conflicts in ExtractAPI with rz#27/#28
-rz#23	1.x-era bridge stack; conflicts in ExtractAPI with rz#27/#28
-rz#9	1.12.x backport; see integration/merkle-1.12.x
-rz#48	1.12.x backport; see integration/merkle-1.12.x
-rz#67	the same branch as sz#1852
-rz#66	the same branch as sz#1851
-rz#24	Merkle PoC; see integration/merkle
-rz#30	Merkle PoC; see integration/merkle
+rz#24	refs/pull/24/head	f088e31aed1dc01a3e5b7f37bf47d5c57ec25d9e	rerere
+rz#30	refs/pull/30/head	7608f2001de418fc38910d321b339984995b71d8	clean
+fixup-83-30	fixups/83-30-hashing-mode.patch	aa38ace0481b59fae2789d997f22dce5949b3d58	applied
+rz#63	refs/pull/63/head	614429706620b9cc6d7b7f63e6a305e4493aa26d	rerere
+fixup-83-63	fixups/83-63-hashing-mode.patch	8b559dc140fb4382493396cd57313c39a149c31d	applied
+merkle-composed-cache	fixups/merkle-composed-cache.patch	77e12678f4fe0ccedbf7d8f8b193bddd8edd361c	applied
+merkle-nested-library-ancestors	fixups/merkle-nested-library-ancestors.patch	d6b9ecd35ae4f5bd4cc33dcbdbfe644192814a39	applied
+merkle-upstream-nested-ancestors	fixups/merkle-upstream-nested-ancestors.patch	0f2c650ccce648fb2deba6adc4a62af13a7a1be9	applied
+merkle-scala3-nested-names	fixups/merkle-scala3-nested-names.patch	ebb50f6002ba0a2128d732593015cb44fb675344	applied
+merkle-own-output-not-library	fixups/merkle-own-output-not-library.patch	75abaf44a08b4beba38d265f4478f20d255f7fb7	applied
+merkle3-nested-ancestor-stable-test	fixups/merkle3-nested-ancestor-stable-test.patch	a9d54d9904c09cbc088085adf13387ae947e9c95	applied
+merkle-upstream-instance-composition	fixups/merkle-upstream-instance-composition.patch	96f81b136dd68923f3ba5960ef903ff56600cfbb	applied
