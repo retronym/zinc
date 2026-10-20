@@ -1,0 +1,8 @@
+# A clean build types O.scala first: completing y's type types U.z, whose implicit search skips y
+# while it is being completed and resolves to x.
+> compile
+
+$ copy-file changes/U.scala U.scala
+# An edit to U.scala alone: y's type now comes from the previous compilation, so both x and y are
+# eligible and the search is ambiguous, where a clean build of the same sources succeeds.
+> compile
