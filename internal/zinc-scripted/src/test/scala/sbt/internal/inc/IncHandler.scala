@@ -15,6 +15,7 @@ package inc
 
 import java.io.{ ByteArrayOutputStream, OutputStream, PrintStream }
 import java.nio.file.{ Files, Path, Paths, StandardCopyOption }
+import java.nio.file.attribute.{ BasicFileAttributes, FileTime }
 import java.net.URLClassLoader
 import java.util.jar.Manifest
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -23,7 +24,7 @@ import java.util.zip.ZipFile
 import sbt.util.Logger
 import sbt.util.InterfaceUtil.*
 import xsbt.api.Discovery
-import xsbti.{ FileConverter, Problem, Severity, VirtualFileRef, VirtualFile }
+import xsbti.{ FileConverter, PathBasedFile, Problem, Severity, VirtualFileRef, VirtualFile }
 import xsbti.compile.{
   AnalysisContents,
   AnalysisStore,
@@ -365,20 +366,43 @@ case class ProjectStructure(
 
   val stamper = Stamps.timeWrapBinaryStamps(converter)
   val cacheFile = baseDirectory / "target" / "inc_compile.zip"
+
   val fileStore = FileAnalysisStore.binary(cacheFile.toFile)
   val cachedStore = AnalysisStore.cached(fileStore)
   val earlyCacheFile = baseDirectory / "target" / "early" / "inc_compile.zip"
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
   private val invalidationLines = new ConcurrentLinkedQueue[String]()
+  private val timingLines = new ConcurrentLinkedQueue[String]()
+
+  /** Each incremental run's initial changes and invalidation cycles, for IncBench's `--profile`. */
+  val profiler = new bench.StepProfile.RunRecorder
   private val compilerLog = new Logger:
     override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
     override def success(message: => String): Unit = scriptedLog.success(message)
     override def log(level: sbt.util.Level.Value, message: => String): Unit =
       val rendered = message
-      rendered.linesIterator.filter(_.startsWith("[inv] ")).foreach(invalidationLines.add)
+      rendered.linesIterator.foreach { line =>
+        if line.startsWith("[inv] ") then invalidationLines.add(line)
+        else if line.startsWith("[zinc-timing]") then timingLines.add(line)
+      }
       scriptedLog.log(level, rendered)
   // val earlyCachedStore = AnalysisStore.cached(fileStore)
   // val profiler = new ZincInvalidationProfiler
+
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
+  /**
+   * Whether the compiler's own jars go on the compile classpath, as they do unless
+   * `incOptions.properties` sets `classpath.scalaInstance = false`. A build that compiles the
+   * Scala library and compiler itself, such as scala/scala, needs them off, or the compiler's
+   * classes shadow the ones it is compiling.
+   */
+  val scalaInstanceOnClasspath: Boolean =
+    Option(loadIncProperties(baseDirectory).getProperty("classpath.scalaInstance"))
+      .forall(_.trim != "false")
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
@@ -447,6 +471,14 @@ case class ProjectStructure(
       assert(count == expected, msg)
       ()
     }
+
+  /** Returns the invalidation-log lines recorded since the last call, and forgets them. */
+  def drainInvalidationLog(): Vector[String] =
+    Iterator.continually(invalidationLines.poll()).takeWhile(_ != null).toVector
+
+  /** Returns the `[zinc-timing]` lines recorded since the last call, and forgets them. */
+  def drainTimings(): Vector[String] =
+    Iterator.continually(timingLines.poll()).takeWhile(_ != null).toVector
 
   def checkInvalidationLog(expectedLog: String): Future[Unit] = Future {
     import scala.jdk.CollectionConverters.*
@@ -753,7 +785,7 @@ case class ProjectStructure(
     import i.*
     val sources = scalaSources ++ javaSources
     val vs = sources.map(converter.toVirtualFile)
-    val entryLookup = new PerClasspathEntryLookupImpl(lookupAnalysis, Locate.definesClass)
+    val entryLookup = new PerClasspathEntryLookupImpl(lookupAnalysis, IncHandler.definesClass)
     val reporter = new ManagedLoggedReporter(maxErrors, scriptedLog)
     val extra = Array(t2(("key", "value")))
     val previousResult = prev()
@@ -780,7 +812,8 @@ case class ProjectStructure(
       extra = extra
     )
 
-    val paths = (i.si.allJars.toList.map(_.toPath) ++ (unmanagedJars :+ output) ++ internalCp)
+    val scalaJars = if scalaInstanceOnClasspath then i.si.allJars.toList.map(_.toPath) else Nil
+    val paths = scalaJars ++ (unmanagedJars :+ output) ++ internalCp
     val cp = paths.map(converter.toVirtualFile)
     val in = incrementalCompiler.inputs(
       cp.toArray,
@@ -789,7 +822,7 @@ case class ProjectStructure(
       if exportPipelining then Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       compileOrder,
@@ -800,12 +833,20 @@ case class ProjectStructure(
       converter,
       stamper
     )
+    val start = System.nanoTime()
     val result =
       if javaOnly then incrementalCompiler.compileAllJava(in, compilerLog)
       else incrementalCompiler.compile(in, compilerLog)
+    val compiled = System.nanoTime()
     val analysis = result.analysis match
       case a: Analysis => a
-    cachedStore.set(AnalysisContents.create(analysis, result.setup))
+    // As sbt does, store the analysis only when the compile changed it.
+    if result.hasModified then cachedStore.set(AnalysisContents.create(analysis, result.setup))
+    val stored = System.nanoTime()
+    // The whole call into Zinc, setup and stamping included, and storing its analysis after.
+    val callMillis = (compiled - start) / 1e6
+    val writeMillis = (stored - compiled) / 1e6
+    timingLines.add(f"[zinc-timing] zincCall=$callMillis%.1fms analysisWrite=$writeMillis%.1fms")
     val javaOnlyStr = if javaOnly then "(java-only) " else ""
     scriptedLog.info(s"""[$name] ${javaOnlyStr}compilation done: ${sources.mkString(", ")}""")
     analysis
@@ -887,12 +928,16 @@ case class ProjectStructure(
     val externalHooks = new DefaultExternalHooks(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
-    )
-    val base = IncOptions
+    ).withInvalidationProfiler(profiler)
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if scalaVersion.startsWith("3") then
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions =
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)
@@ -968,6 +1013,30 @@ object IncHandler:
 
   private[internal] final val classLoaderCache =
     Some(new ClassLoaderCache(new URLClassLoader(Array())))
+
+  private final val jarDefinesClassCache =
+    new java.util.concurrent.ConcurrentHashMap[Path, (FileTime, Long, DefinesClass)]
+
+  /**
+   * What a classpath entry defines, as sbt looks it up: sbt caches each jar's index across
+   * compiles (`classpathDefinesClassCache`), keyed by the file and its stamp. `Locate.entry` asks
+   * for the index of every entry before the one that defines a class, on every lookup, so without
+   * the cache each lookup on the classpath reopens those jars.
+   */
+  def definesClass(entry: VirtualFile): DefinesClass =
+    entry match
+      case p: PathBasedFile if Files.isRegularFile(p.toPath) =>
+        val path = p.toPath
+        val attrs = Files.readAttributes(path, classOf[BasicFileAttributes])
+        val (time, size) = (attrs.lastModifiedTime, attrs.size)
+        val cached = jarDefinesClassCache.get(path)
+        if (cached ne null) && cached._1 == time && cached._2 == size then cached._3
+        else
+          val defines = Locate.definesClass(entry)
+          jarDefinesClassCache.put(path, (time, size, defines))
+          defines
+      case _ => Locate.definesClass(entry)
+end IncHandler
 
 /**
  * Lets each thread send `System.out` to a stream of its own, so that tests running at once can

@@ -11,6 +11,7 @@
 
 package sbt.internal.inc
 
+import java.io.File
 import java.nio.file.Path
 import sbt.inc.{ ScalaBridge, ConstantBridgeProvider }
 import sbt.util.Logger
@@ -63,7 +64,52 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit:
       scalaJars3Bin.toList.filterNot(_.getName.startsWith("compiler-interface")),
       Right(compilerBridge3Bin)
     ),
-  )
+  ) ++ localScala213.map(Label213Local -> _) ++ localScala3.map(Label3Local -> _)
+
+  /**
+   * `2.13.local`: this checkout's 2.13 bridge on a locally built Scala 2.13, whose library,
+   * reflect and compiler jars `ZINC_SCRIPTED_SCALA213_JARS` lists (separated by the path
+   * separator), with the version `ZINC_SCRIPTED_SCALA213_VERSION`. Absent unless both are set.
+   * `ZINC_SCRIPTED_SCALA213_BRIDGE` names the bridge's classes compiled against that Scala, a
+   * directory or a jar, for a Scala whose binary interface differs from the one this build
+   * compiles the bridge against.
+   */
+  final val Label213Local = "2.13.local"
+  private lazy val localScala213: Option[ScalaBridge] =
+    for
+      jars <- sys.env.get("ZINC_SCRIPTED_SCALA213_JARS")
+      version <- sys.env.get("ZINC_SCRIPTED_SCALA213_VERSION")
+    yield ScalaBridge(
+      version,
+      jars.split(File.pathSeparator).toList.map(new File(_)),
+      sys.env.get("ZINC_SCRIPTED_SCALA213_BRIDGE") match
+        case Some(jar) if jar.endsWith(".jar") => Right(new File(jar))
+        case Some(dir)                         => Left(List(new File(dir)))
+        case None                              => Left(classDirectory213 +: resourceDirectories213)
+    )
+
+  /**
+   * `3.local`: a Scala 3 other than the one this build fetches for `3.x`, such as the latest release
+   * or one built locally, with the jars of its compiler and library that `ZINC_SCRIPTED_SCALA3_JARS`
+   * lists (separated by the path separator), the version `ZINC_SCRIPTED_SCALA3_VERSION`, and the
+   * `scala3-sbt-bridge` jar of that version `ZINC_SCRIPTED_SCALA3_BRIDGE`. Absent unless all three
+   * are set.
+   */
+  final val Label3Local = "3.local"
+  private lazy val localScala3: Option[ScalaBridge] =
+    for
+      jars <- sys.env.get("ZINC_SCRIPTED_SCALA3_JARS")
+      version <- sys.env.get("ZINC_SCRIPTED_SCALA3_VERSION")
+      bridge <- sys.env.get("ZINC_SCRIPTED_SCALA3_BRIDGE")
+    yield ScalaBridge(
+      version,
+      jars
+        .split(File.pathSeparator)
+        .toList
+        .map(new File(_))
+        .filterNot(_.getName.startsWith("compiler-interface")),
+      Right(new File(bridge))
+    )
 
   private val bridgeLabels = List(Label210, Label211, Label212, Label213, Label213Bin, Label3Bin)
 
@@ -80,7 +126,7 @@ trait BridgeProviderTestkit extends AbstractBridgeProviderTestkit:
         bridgeLabels
           .find(bridgesByLabel(_).version == version)
           .getOrElse(sys.error(s"No bridge for Scala $version in ${bridges.map(_.version)}"))
-      case None => Label212
+      case None => sys.env.getOrElse("ZINC_SCRIPTED_DEFAULT_LABEL", Label212)
 
   // Create a provider that uses the bridges from the classes directory of the projects
   def getZincProvider(targetDir: Path, log: Logger): CompilerBridgeProvider =
