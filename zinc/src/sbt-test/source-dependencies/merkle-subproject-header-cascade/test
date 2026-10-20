@@ -1,0 +1,5 @@
+> app/run Int
+
+# A's parent changes; B's and C's own extends clauses do not
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run String

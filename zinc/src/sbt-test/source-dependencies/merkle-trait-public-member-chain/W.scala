@@ -1,0 +1,1 @@
+trait W extends V

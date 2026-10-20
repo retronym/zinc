@@ -1,0 +1,2 @@
+package p
+final class A { def m: Int = 0 }

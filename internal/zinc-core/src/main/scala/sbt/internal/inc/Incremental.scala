@@ -355,6 +355,7 @@ object Incremental {
       override val modifiedClasses = initialChanges.external.allModified.toArray
       def isEmpty = modifiedLibraries.isEmpty && modifiedClasses.isEmpty
     }
+    incremental.previousAPIs = previous.apis
     val (initialInvClasses, initialInvSources0) =
       incremental.invalidateInitial(previous.relations, initialChanges)
 
@@ -851,15 +852,28 @@ private final class AnalysisCallback(
       actions = l2jl(Nil),
     )
 
+  /**
+   * A class's dependencies on itself are dropped, except by local inheritance: a local or
+   * anonymous subclass of a trait, declared in the trait or its companion, is charged to the
+   * trait's own name. It mixes the trait in, so it holds forwarders and fields for members the
+   * trait inherits, and under Merkle hashing the edge is how invalidation finds it when the trait
+   * itself is not recompiled.
+   */
   private[this] def internalClassDependency(
       onClassName: String,
       sourceClass: ClassRef,
       context: DependencyContext
   ): Unit = {
     val sourceClassName = sourceClass.name
-    if (onClassName != sourceClassName) {
+    if (
+      onClassName != sourceClassName ||
+      merkle && context == DependencyContext.LocalDependencyByInheritance
+    ) {
       add(intSrcDeps, sourceClassName, InternalDependency.of(sourceClassName, onClassName, context))
-      if (context == DependencyContext.DependencyByInheritance && sourceClass.kind == NameKind.Type)
+      if (
+        onClassName != sourceClassName && context == DependencyContext.DependencyByInheritance &&
+        sourceClass.kind == NameKind.Type
+      )
         add(typeParents, sourceClassName, onClassName)
     }
   }

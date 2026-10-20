@@ -1,0 +1,7 @@
+> compile
+
+$ copy-file changes/A.scala A.scala
+> compile
+# N is nested in a class: it has no mirror class, so no static forwarders for k
+> checkRecompilations 1 A
+> checkRecompilations 0 G G.N
