@@ -1,0 +1,6 @@
+> run 0
+
+$ copy-file changes/T.scala T.scala
+# C mixes T in through U (scalac's mixinClasses: every trait outside the superclass's
+# linearization), so C has the mixin forwarder for T.m
+> run s

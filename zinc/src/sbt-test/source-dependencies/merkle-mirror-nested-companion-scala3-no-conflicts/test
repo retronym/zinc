@@ -1,0 +1,6 @@
+> p/run 0
+
+$ copy-file changes/A.scala p/A.scala
+# Scala 3 gives a companion class nested in an object (a static one) static forwarders, as for a
+# top-level one: Top$N.m forwards to the inherited A.m, whose result type changed
+> p/run s

@@ -1,0 +1,9 @@
+> run true
+
+$ copy-file changes/P1.scala P.scala
+# The companion class C now inherits k from P, so C gets no static forwarder for object C's k
+# (scalac's conflictingNames is every term member of the companion class, inherited ones too)
+> run false
+
+$ copy-file changes/P2.scala P.scala
+> run true
