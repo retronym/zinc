@@ -148,6 +148,11 @@ private class MAnalysis(
     val infos: SourceInfos,
     val compilations: Compilations
 ) extends Analysis:
+
+  /** [[MerkleHashes.composed]] results for this analysis's classes. */
+  private[inc] lazy val composedCache =
+    new java.util.concurrent.ConcurrentHashMap[String, MerkleHashes.Composed]
+
   def ++(o: Analysis): Analysis =
     new MAnalysis(
       stamps ++ o.stamps,

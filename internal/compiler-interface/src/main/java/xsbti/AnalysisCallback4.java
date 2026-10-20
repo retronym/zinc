@@ -90,4 +90,13 @@ public interface AnalysisCallback4 extends AnalysisCallback3 {
                   String name,
                   EnumSet<NameKind> qualifierKinds,
                   EnumSet<UseScope> useScopes);
+
+    /**
+     * Whether the class with this binary name is defined by another subproject that Zinc has
+     * analysed, rather than by a plain library. The bridge does not materialise members
+     * inherited from such classes: Zinc composes their hashes from that subproject's analysis.
+     */
+    default boolean isSubprojectClass(String binaryClassName) {
+        return false;
+    }
 }
