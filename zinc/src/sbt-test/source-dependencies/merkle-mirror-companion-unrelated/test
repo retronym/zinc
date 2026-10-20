@@ -1,0 +1,7 @@
+> compile
+
+$ copy-file changes/P.scala P.scala
+# P gains j, a name C's companion object does not have: C's static forwarders are as they were,
+# so mirror leaves C alone (it would for any ancestor of a case class otherwise)
+> compile
+> checkRecompilations 1 P

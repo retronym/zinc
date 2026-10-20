@@ -1,0 +1,6 @@
+> p/compile
+
+$ copy-file changes/A.scala p/A.scala
+# Top.N has no companion class: a nested object gets no mirror class, so no static forwarders
+> p/compile
+> p/checkRecompilations 1 p.A

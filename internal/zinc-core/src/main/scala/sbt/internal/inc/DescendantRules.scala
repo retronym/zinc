@@ -161,9 +161,63 @@ private[inc] final class HierarchyView(
       )
     }
 
+  /**
+   * Whether the class side of `className` has `ancestor` in its linearization, compared as in
+   * [[objectInherits]].
+   */
+  def classInherits(className: String, ancestor: String): Boolean =
+    val target = LibraryAncestors.canonical(LibraryAncestors.sourceName(ancestor))
+    api(className).exists { c =>
+      val cls = c.api().classApi()
+      !isEmpty(cls) &&
+      cls.structure.parents.iterator
+        .flatMap(MerkleHashes.typeName)
+        .exists(n => LibraryAncestors.canonical(n) == target)
+    }
+
+  /**
+   * The term names the object side of `className` has: declared, inherited from library
+   * ancestors (its stubs and name hashes), and declared by the ancestors in its linearization.
+   * Over-approximates with both sides of an ancestor that is itself a companion pair.
+   */
+  def objectNames(className: String): Set[String] =
+    api(className).fold(Set.empty[String]) { c =>
+      val obj = c.api().objectApi()
+      if isEmpty(obj) then Set.empty
+      else
+        obj.structure.declared.iterator.map(_.name).toSet ++
+          obj.structure.inherited.iterator.map(_.name) ++
+          obj.structure.parents.iterator
+            .flatMap(MerkleHashes.typeName)
+            .flatMap(n => declaredNames(n) ++ api(n).fold(Set.empty[String])(inheritedNames))
+    }
+
   /** An absent side is stored as `APIUtil.emptyClassLike`, which claims to be top-level. */
   def isTopLevel(className: String): Boolean =
     classLikes(className).exists(c => !isEmpty(c) && c.topLevel)
+
+  /**
+   * Scala 3: whether `className` is nested in objects only, each of them top-level or itself
+   * nested so. The Scala 3 bridge names a member of an object `p.O$.N`; the Scala 2 bridge
+   * names it `p.O.N`, which never matches, as scalac gives a nested class no static forwarders.
+   */
+  def isStaticNested(className: String): Boolean =
+    val i = className.lastIndexOf("$.")
+    i > 0 && {
+      val owner = className.substring(0, i)
+      isObject(owner) && (isTopLevel(owner) || isStaticNested(owner))
+    }
+
+  /**
+   * Whether `className` has static forwarders for its object's members: a top-level object
+   * (in its mirror class or companion class), or, in Scala 3, an object with a companion class
+   * nested in objects only (dotc's `lmoc.isStatic`; scalac requires a top-level one).
+   */
+  def hasStaticForwarders(className: String): Boolean =
+    isObject(className) && (
+      isTopLevel(className) ||
+        isStaticNested(className) && api(className).exists(c => !isEmpty(c.api().classApi()))
+    )
 
   def isTrait(className: String): Boolean =
     api(className).exists(_.api().classApi().definitionType == DefinitionType.Trait)
@@ -302,11 +356,19 @@ private[inc] object DescendantRules:
 
   /**
    * A top-level object's mirror or companion class has static forwarders for every member,
-   * including those it inherits from the changed class.
+   * including those it inherits from the changed class (Scala 3 also for a companion pair nested
+   * in objects). A forwarder is left out for a name the companion class has, its own or
+   * inherited (scalac's `conflictingNames`), so a change to an ancestor of the class side that
+   * touches a name the object has adds or removes one.
    */
   val mirror: DescendantRule = rule("mirror") { (view, d, change) =>
-    if view.isTopLevel(d) && view.objectInherits(d, change.className) then
-      Some("static forwarders")
+    if !view.hasStaticForwarders(d) then None
+    else if view.objectInherits(d, change.className) then Some("static forwarders")
+    else if view.classInherits(d, change.className) then
+      onNames(
+        change.modifiedNameStrings.intersect(view.objectNames(d)),
+        "static forwarders, which the companion class's names decide, for"
+      )
     else None
   }
 
