@@ -38,6 +38,8 @@ moves to a new Scala patch release. The label picks both the compiler (versions 
 | `2.13.y` | `scala213ForBridge` | `scala2-sbt-bridge`, which ships with Scala 2.13 |
 | `3.x` | `scala3ForBridge` | `scala3-sbt-bridge`, which ships with Scala 3 |
 
+To run the `3.x` tests against a locally published Scala 3, start sbt with `-Dzinc.scala3ForBridge=<version>`, and `-Dzinc.scala3Repo=<ivy repository>` unless it was published to the Ivy home that sbt uses.
+
 The default is `2.12.x`. `y` only marks a second 2.13 variant: since Scala 2.13.12 and 3 ship their
 own bridges, sbt uses those for real builds, so `2.13.y` and `3.x` are how a test checks Zinc
 against them. A test can also give a full version, which selects the first label built for it.
