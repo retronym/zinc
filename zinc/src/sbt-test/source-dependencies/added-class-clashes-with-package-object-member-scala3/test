@@ -1,0 +1,7 @@
+# `package object b` has a member Foo.
+> p/compile
+# A new file adds the class a.b.Foo: Scala 3 reports "Foo is already defined" only when it compiles
+# both files together, so a clean build fails. Zinc compiles the added source, and the package object
+# has a member of the added class's name, so Zinc recompiles both together: the incremental build fails too.
+$ copy-file changes/Inner.scala p/Inner.scala
+-> p/compile

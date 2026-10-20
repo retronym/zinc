@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, resolves Foo to a.Foo; `package object b` extends a.PT.
+> p/compile
+# PT gains Foo, which the package object inherits, and its v is a String: a clean build fails.
+# The package object gains the name in the cycle after PT, when inheritance invalidates it; Client uses the
+# name, so Zinc recompiles it and the incremental build fails too.
+$ copy-file changes/PT.scala p/PT.scala
+-> p/compile
