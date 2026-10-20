@@ -103,6 +103,8 @@ object Incremental {
      * @return true when the compilation cycle is compiling all the sources; false, otherwise.
      */
     def isFullCompilation: Boolean
+
+    def timings: PhaseTimings = new PhaseTimings
   }
 
   sealed trait CompileCycle {
@@ -352,8 +354,10 @@ object Incremental {
   )(implicit equivS: Equiv[XStamp]): (Boolean, Analysis) = {
     log.debug("IncrementalCompile.incrementalCompile")
     val previous = previous0 match { case a: Analysis => a }
-    val initialChanges =
+    val timings = incremental.timings
+    val initialChanges = timings.time("initialChanges") {
       incremental.detectInitialChanges(sources, previous, current, lookup, converter, output)
+    }
     val binaryChanges = new DependencyChanges {
       override def modifiedBinaries: Array[File] =
         modifiedLibraries.map(converter.toPath(_).toFile)
@@ -365,8 +369,9 @@ object Incremental {
     incremental.changedLibraryClasses =
       if (!LibraryAncestors.invalidates(options)) Set.empty
       else LibraryAncestors.classesOf(initialChanges.libraryDeps, previous.relations, converter)
-    val (initialInvClasses, initialInvSources0) =
+    val (initialInvClasses, initialInvSources0) = timings.time("invalidateInitial") {
       incremental.invalidateInitial(previous.relations, initialChanges)
+    }
 
     // During early output, if there's any compilation at all, invalidate all Java sources too, so the downstream Scala subprojects would have type information via early output (pickle jar).
     val javaSources: Set[VirtualFileRef] = sources.collect {
@@ -472,6 +477,7 @@ object Incremental {
           analysis
         }
     }
+    timings.report(log)
     (hasModified || hasSubprojectChange, analysis)
   }
 
@@ -497,7 +503,7 @@ object Incremental {
       // in order to rollback entirely if transaction fails. `AnalysisCallback` is used by each cycle
       // to report its own analysis individually.
       val callback = callbackBuilder.build(incHandler)
-      compile(srcs, changes, callback, classFileManager)
+      incHandler.timings.time("compile")(compile(srcs, changes, callback, classFileManager))
       callback.getCycleResultOnce
     }
   }
@@ -1181,7 +1187,7 @@ private final class AnalysisCallback(
       if (earlyOutput.isDefined && !writtenEarlyArtifacts)
         mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
-      val partialAnalysis = getAnalysis
+      val partialAnalysis = incHandler.timings.time("analysis")(getAnalysis)
       // Scala 3 calls `apiPhaseCompleted` only when pipelining, so report here as well.
       if (Incremental.apiCheck(options))
         ApiHashCheck.reportSummary(Incremental.apiCheckReport(options), log)
