@@ -1,5 +1,5 @@
 # Scala 3 variant of added-class-inner-package: Client, in `package a; package b`, resolves Foo to a.Foo; adding a.b.Foo shadows it.
 > p/compile
 $ copy-file changes/Added.scala p/Added.scala
-# A clean build now fails; Zinc compiles only Added.scala, so the incremental build succeeds.
+# A clean build now fails. Client uses the added name, so Zinc recompiles it and the incremental build fails too.
 -> p/compile
