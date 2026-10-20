@@ -34,7 +34,10 @@ private[inc] class APIDiff:
   ): String =
     val api1Str = DefaultShowAPI(api1.classApi) + "\n" + DefaultShowAPI(api1.objectApi)
     val api2Str = DefaultShowAPI(api2.classApi) + "\n" + DefaultShowAPI(api2.objectApi)
-    DiffUtil.mkColoredCodeDiff(api2Str, api1Str, printDiffDel = true)
+    APIDiff.DiffUtil.mkColoredCodeDiff(api2Str, api1Str, printDiffDel = true)
+end APIDiff
+
+private[inc] object APIDiff:
 
   /**
    * This class was directly copied from Dotty
@@ -65,7 +68,7 @@ private[inc] class APIDiff:
    * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
    * OF THE POSSIBILITY OF SUCH DAMAGE.
    */
-  private object DiffUtil:
+  private[inc] object DiffUtil:
 
     import scala.annotation.tailrec
     import scala.collection.mutable
