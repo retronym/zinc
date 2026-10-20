@@ -11,6 +11,7 @@ object Scripted {
   val publishLocalBinAll = taskKey[Unit]("")
   val scriptedSource = settingKey[File]("")
   val scriptedCompileToJar = settingKey[Boolean]("Compile directly to jar in scripted tests")
+  val scriptedParallelism = settingKey[Int]("Number of scripted tests to run at once")
 
   import sbt.complete._
   import DefaultParsers._
@@ -65,6 +66,7 @@ object Scripted {
         baseDir: File,
         bufferLog: Boolean,
         compileToJar: Boolean,
+        parallelism: Int,
         testSpecs: Array[String],
     ): Unit
   }
@@ -76,6 +78,7 @@ object Scripted {
       args: Seq[String],
       bufferLog: Boolean,
       compileToJar: Boolean,
+      parallelism: Int,
   ): Unit = {
     val noJLine =
       new classpath.FilteredLoader(scriptedSbtInstance.loader, "xsbti." :: "jline." :: Nil)
@@ -83,7 +86,7 @@ object Scripted {
     val bridgeClass = Class.forName("sbt.inc.ScriptedMain$", true, loader)
     val bridge = bridgeClass.getField("MODULE$").get(null).asInstanceOf[ScriptedMain]
     try {
-      bridge.run(sourcePath, bufferLog, compileToJar, args.toArray)
+      bridge.run(sourcePath, bufferLog, compileToJar, parallelism, args.toArray)
     } catch { case ite: java.lang.reflect.InvocationTargetException => throw ite.getCause }
   }
 }
