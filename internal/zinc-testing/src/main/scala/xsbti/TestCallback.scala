@@ -21,7 +21,8 @@ import xsbti.compile.analysis.ReadSourceInfos
 import scala.collection.mutable.ArrayBuffer
 
 /**
- * @param merkle whether the bridge extracts APIs for Merkle hashing (see `AnalysisCallback5`).
+ * @param merkle whether the bridge extracts APIs for Merkle hashing (see `AnalysisCallback5`); it
+ *               always sends the full API tree.
  */
 class TestCallback(merkle: Boolean) extends AnalysisCallback5 {
   def this() = this(false)
@@ -155,6 +156,20 @@ class TestCallback(merkle: Boolean) extends AnalysisCallback5 {
   }
 
   override def merkleHashing(): Boolean = merkle
+
+  override def apiMode(): AnalysisCallback5.ApiMode = AnalysisCallback5.ApiMode.TREE
+
+  override def useOptimizedSealed(): Boolean = false
+
+  override def api(source: VirtualFileRef, thinClass: ClassLike, hashes: ClassHashes): Unit =
+    api(source, thinClass)
+
+  override def apiCheck(
+      source: VirtualFileRef,
+      fullClass: ClassLike,
+      thinClass: ClassLike,
+      hashes: ClassHashes
+  ): Unit = api(source, fullClass)
 
   override def mainClass(source: File, className: String): Unit = ()
 

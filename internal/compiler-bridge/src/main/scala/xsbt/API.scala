@@ -68,16 +68,23 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       case _                           => None
     }
     private val merkle: Boolean = callback5.exists(_.merkleHashing())
+    private val apiMode: xsbti.AnalysisCallback5.ApiMode =
+      callback5.filter(_ => merkle).fold(xsbti.AnalysisCallback5.ApiMode.TREE)(_.apiMode())
+    private val optimizedSealed: Boolean = callback5.exists(_.useOptimizedSealed())
     private val materialiseLibraryMembers: String => Boolean =
       callback5.fold((_: String) => true)(cb => cb.materialiseLibraryMembers(_))
 
+    import xsbti.AnalysisCallback5.ApiMode
     private val extractApi =
       new ExtractAPI[global.type](
         global,
         global.outputDirs,
         isSubprojectClass,
         materialiseLibraryMembers,
-        merkle
+        merkle = merkle,
+        buildTree = apiMode != ApiMode.HASHES,
+        buildHashes = apiMode != ApiMode.TREE,
+        optimizedSealed = optimizedSealed
       )
 
     private def processScalaUnit(unit: CompilationUnit): Unit = {
@@ -91,15 +98,19 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       val extractUsedNames = new ExtractUsedNames[global.type](global)
       extractUsedNames.extractAndReport(unit)
 
-      val classApis = traverser.allNonLocalClasses
-      val mainClasses = traverser.mainClasses
-
-      // Use of iterators make this code easier to profile
-
-      val classApisIt = classApis.iterator
-      while (classApisIt.hasNext) {
-        callback.api(sourceFile, classApisIt.next())
+      (apiMode, callback5) match {
+        case (ApiMode.HASHES, Some(cb)) =>
+          extractApi.allExtracted.foreach(e => cb.api(sourceFile, e.thin, e.hashes))
+        case (ApiMode.CHECK, Some(cb)) =>
+          extractApi.allExtracted.foreach(e => cb.apiCheck(sourceFile, e.full, e.thin, e.hashes))
+        case _ =>
+          // Use of iterators make this code easier to profile
+          val classApisIt = traverser.allNonLocalClasses.iterator
+          while (classApisIt.hasNext) {
+            callback.api(sourceFile, classApisIt.next())
+          }
       }
+      val mainClasses = traverser.mainClasses
 
       val mainClassesIt = mainClasses.iterator
       while (mainClassesIt.hasNext) {
