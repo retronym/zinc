@@ -103,6 +103,7 @@ class ExtractAPI[GlobalType <: Global](
     pending.clear()
     allNonLocalClassSymbols.clear()
     allNonLocalClassesInSrc.clear()
+    ancestorNames.clear()
     _mainClasses.clear()
     fullClasses.clear()
     pendingHashes.clear()
@@ -1110,6 +1111,25 @@ class ExtractAPI[GlobalType <: Global](
    */
   private[this] val fullClasses = perRunCaches.newMap[(String, Boolean), ClassLike]()
   private[this] val pendingHashes = collection.mutable.ArrayBuffer[PendingClass]()
+  private[this] val ancestorNames = perRunCaches.newMap[(String, Boolean), Array[String]]()
+
+  /**
+   * Under `merkle`, the binary names of each extracted class's base classes, in linearization
+   * order, keyed like `fullClasses`. They come from the class symbols, not from parent types, so a
+   * parent reached through a path names its class, and no class without a class file of its own
+   * (`Any`, `AnyRef`) or the class file every class has (`Object`) is listed.
+   */
+  def allAncestors: Iterator[((String, Boolean), Array[String])] = ancestorNames.iterator
+
+  private def binaryAncestors(sym: Symbol): Array[String] =
+    sym.info.baseClasses.iterator
+      .drop(1)
+      .filterNot(bc =>
+        bc == definitions.AnyClass || bc == definitions.AnyRefClass ||
+          bc == definitions.ObjectClass
+      )
+      .map(bc => flatclassName(bc, '.', dollarRequired = false))
+      .toArray
   private[this] val extracted = collection.mutable.LinkedHashMap[(String, Boolean), Extracted]()
 
   /** The classes extracted from this unit, each with its thin API and hashes (`buildHashes`). */
@@ -2066,6 +2086,7 @@ class ExtractAPI[GlobalType <: Global](
         tParams
       )
     allNonLocalClassSymbols += sym
+    if (merkle) ancestorNames((name, isModuleDefType(defType))) = binaryAncestors(sym)
 
     if (isJava25Plus) {
       if (hasJava25MainMethod(sym)) {

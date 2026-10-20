@@ -89,6 +89,31 @@ class MerkleExtractAPISpecification
   }
 
   /**
+   * Ancestors are reported by the binary names of the base classes, whatever path the parent type
+   * takes to them: `Inst.B` is `p.Outer$B`, a class nested in an object is `p.O$N`, and a value
+   * class's underlying type, which its API lists among the parents, is not an ancestor.
+   */
+  it should "report ancestors by binary name" in {
+    val src =
+      """|package p
+         |class Outer { abstract class A; class B extends A }
+         |object Inst extends Outer
+         |object O { abstract class N; trait T }
+         |class C extends Inst.B with O.T
+         |class D extends O.N
+         |object M extends O.N
+         |class V(val x: Int) extends AnyVal
+         |""".stripMargin
+    val (_, callback) = compileSrcs(src)
+    val ancestors = callback.ancestorsOf
+    assert(ancestors(("p.C", false)) === List("p.O$T", "p.Outer$B", "p.Outer$A"))
+    assert(ancestors(("p.D", false)) === List("p.O$N"))
+    assert(ancestors(("p.M", true)) === List("p.O$N"))
+    assert(ancestors(("p.O.N", false)) === Nil)
+    assert(ancestors(("p.V", false)) === List("scala.AnyVal"))
+  }
+
+  /**
    * `Object.wait(long)` is read from a classfile, and scalac attaches its `@throws` annotation
    * only when its type is completed. A class inheriting it must get the same API whether or not
    * another unit in the run forced that type first, or its hashes change from one run to the next.

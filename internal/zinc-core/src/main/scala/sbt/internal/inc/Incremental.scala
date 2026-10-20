@@ -823,6 +823,8 @@ private final class AnalysisCallback(
   private val objectApis = new TrieMap[String, ApiInfo]
   private val classPublicNameHashes = new TrieMap[String, Array[NameHash]]
   private val objectPublicNameHashes = new TrieMap[String, Array[NameHash]]
+  private val classAncestors = new TrieMap[String, Array[String]]
+  private val objectAncestors = new TrieMap[String, Array[String]]
   private val usedNames = new TrieMap[String, mutable.Set[UsedName]]
   private val unreporteds = new TrieMap[VirtualFileRef, ConcurrentLinkedQueue[Problem]]
   private val reporteds = new TrieMap[VirtualFileRef, ConcurrentLinkedQueue[Problem]]
@@ -1155,6 +1157,9 @@ private final class AnalysisCallback(
       log
     )
     storeApi(sourceFile, if Incremental.apiDebug(options) then fullClass else thinClass, hashes)
+
+  override def ancestors(className: String, module: Boolean, binaryNames: Array[String]): Unit =
+    (if module then objectAncestors else classAncestors) (className) = binaryNames
 
   private def storeApi(sourceFile: VirtualFileRef, classApi: ClassLike, hashes: ClassHashes): Unit =
     val className = classApi.name
@@ -1535,8 +1540,12 @@ private final class AnalysisCallback(
       provenance,
       bytecodeHash,
       0,
+      classAncestors.getOrElse(name, NoAncestors),
+      objectAncestors.getOrElse(name, NoAncestors),
     )
   end analyzeClass
+
+  private val NoAncestors = new Array[String](0)
 
   private def addProductsAndDeps(
       base: Analysis,
