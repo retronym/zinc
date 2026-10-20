@@ -64,16 +64,34 @@ object APIUtil {
       case c: ClassLike => Array(minimizeClass(c))
       case _            => emptyDefs
     }
-  def minimizeClass(c: ClassLike): ClassLike = {
+  def minimizeClass(c: ClassLike): ClassLike = minimizeClass(c, withStubs = false)
+
+  def minimizeStructure(s: Structure, isModule: Boolean): Structure =
+    Structure.of(
+      lzy(s.parents),
+      filterDefinitions(s.declared, isModule),
+      filterDefinitions(s.inherited, isModule)
+    )
+
+  /**
+   * As [[minimize]], for Merkle hashing: it also keeps the self type, and a stub of each
+   * declaration and abstract inherited member (see [[minimizeStructureWithStubs]]).
+   */
+  def minimizeWithStubs(api: ClassLike): ClassLike = minimizeClass(api, withStubs = true)
+
+  private def minimizeClass(c: ClassLike, withStubs: Boolean): ClassLike = {
     val savedAnnotations = Discovery.defAnnotations(c.structure, (_: Any) => true).toArray[String]
-    val struct = minimizeStructure(c.structure, c.definitionType == DefinitionType.Module)
+    val isModule = c.definitionType == DefinitionType.Module
+    val struct =
+      if (withStubs) minimizeStructureWithStubs(c.structure, isModule)
+      else minimizeStructure(c.structure, isModule)
     ClassLike.of(
       c.name,
       c.access,
       c.modifiers,
       c.annotations,
       c.definitionType,
-      emptyTypeLzy,
+      if (withStubs) lzy(c.selfType) else emptyTypeLzy,
       lzy(struct),
       savedAnnotations,
       c.childrenOfSealedClass,
@@ -82,12 +100,40 @@ object APIUtil {
     )
   }
 
-  def minimizeStructure(s: Structure, isModule: Boolean): Structure =
+  /**
+   * Keeps the parents, main methods, a stub (name, access, modifiers, annotations) of every
+   * other declaration, and a stub of each abstract inherited member: descendant invalidation
+   * reads which names a class declares, overrides, leaves abstract or annotates, and which names
+   * it inherits abstract from library ancestors, which have no stored API of their own.
+   */
+  def minimizeStructureWithStubs(s: Structure, isModule: Boolean): Structure = {
+    val mains = if (isModule) s.declared.filter(Discovery.isMainMethod) else emptyClassDefs
+    val stubs = s.declared.filterNot(mains.contains).map(stubDefinition)
+    val inheritedMains = filterDefinitions(s.inherited, isModule).get
+    val abstractInherited =
+      s.inherited.filter(d => d.modifiers.isAbstract && !inheritedMains.contains(d))
     Structure.of(
       lzy(s.parents),
-      filterDefinitions(s.declared, isModule),
-      filterDefinitions(s.inherited, isModule)
+      lzy(mains ++ stubs),
+      lzy(inheritedMains ++ abstractInherited.map(stubDefinition))
     )
+  }
+
+  /** Drops the bridge's erased-signature witness, which only feeds the hash. */
+  def stubDefinition(d: ClassDefinition): ClassDefinition = {
+    val annotations = d.annotations.filterNot(isErasedSignature)
+    Def.of(d.name, d.access, d.modifiers, annotations, Array.empty, Array.empty, emptyType)
+  }
+
+  private def isErasedSignature(a: Annotation): Boolean =
+    a.base match {
+      case s: Singleton =>
+        s.path.components match {
+          case Array(id: Id) => id.id == "<erased-signature>"
+          case _             => false
+        }
+      case _ => false
+    }
   def filterDefinitions(
       ds: Array[ClassDefinition],
       isModule: Boolean

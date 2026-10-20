@@ -1,0 +1,6 @@
+> compile
+
+$ copy-file changes/B.scala B.scala
+> compile
+> checkRecompilations 1 B
+> checkRecompilations 2 C X Y Z
