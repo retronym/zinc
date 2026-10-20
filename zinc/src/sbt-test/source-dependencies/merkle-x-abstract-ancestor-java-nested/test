@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/B.scala lib/B.scala
+# As merkle-x-abstract-ancestor, with A a Java class nested in a Java class, binary name p.J$A: C no longer implements m
+-> app/compile
