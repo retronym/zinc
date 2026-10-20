@@ -1,0 +1,18 @@
+# integration/develop-1.12.x, built 2026-10-20T09:49:20Z by build-integration from manifest.toml
+
+base	upstream/1.12.x	db2a2f35fe499d0179b78fe0d292aa74e9fb2a6e
+
+rz#9	refs/pull/9/head	7ca22a75de572610bff2bd34aa489e575167ff14	clean
+sz#1765	fixups/1765-invalidation-debug-logs.patch	8c2908300bffeaf9c6a1172014cc625a08af781d	applied
+rz#68	refs/pull/68/head	363c4672669507d56831fe79e108ea7f002a0b9e	clean
+rz#73	refs/pull/73/head	9c42e2db2b105c2e8b9e6ab0df88be0aa3db5032	clean
+rz#79	refs/pull/79/head	f42d65ee5818d25242d941e861bf2dcc1a35c4cf	clean
+rz#71	refs/pull/71/head	764fb493d3edf0bb3d3bb0df10a6cd9508223a15	rerere
+rz#75	refs/pull/75/head	aab10acc525910fa419fcd1c21259957604b231c	clean
+classof-used-name	fixups/classof-used-name.patch	4be17b62af2084a409de84bb9c912897af21ab51	applied
+java-sealed-permits	fixups/java-sealed-permits.patch	07ec1a9df7c5385f02f3a82373754252401b2869	applied
+
+# excluded
+rz#48	Merkle; see integration/merkle-1.12.x
+backport/1.12.x-z1-overcompilation	not in integration/merkle-1.12.x either
+backport/1.12.x-z2-name-kinds	not in integration/merkle-1.12.x either
