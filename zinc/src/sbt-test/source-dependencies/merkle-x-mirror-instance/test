@@ -1,0 +1,5 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# As merkle-x-mirror, with A a member class of Outer inherited through object Inst: O's mirror class has a static forwarder for the inherited m
+> app/run s
