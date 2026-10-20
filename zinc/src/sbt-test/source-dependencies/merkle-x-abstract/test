@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# B is concrete and no longer implements m
+-> app/compile
