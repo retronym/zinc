@@ -15,7 +15,7 @@ import java.io.{ File, FileInputStream }
 import java.util.Arrays
 import org.scalatest.funsuite.AnyFunSuite
 import sbt.internal.inc.consistent.ConsistentFileAnalysisStore
-import sbt.internal.inc.{ Analysis, FileAnalysisStore }
+import sbt.internal.inc.{ Analysis, AnalysisCompression, FileAnalysisStore }
 import sbt.io.{ IO, Using }
 import xsbti.compile.{ AnalysisContents, AnalysisStore }
 import xsbti.compile.analysis.ReadWriteMappers
@@ -71,6 +71,38 @@ class ConsistentAnalysisFormatIntegrationSuite extends AnyFunSuite:
       val compressionRatio = compressedSize.toDouble / uncompressedSize.toDouble
       assert(compressionRatio < 0.85)
       // compression rate for each data: 0.8185090254676337, 0.7247774786370688, 0.8346021341469837
+  }
+
+  test("sbt.analysis.compression sets the deflate level of both stores") {
+    def withLevel[A](level: String)(body: => A): A =
+      val old = System.getProperty(AnalysisCompression.Property)
+      System.setProperty(AnalysisCompression.Property, level)
+      try body
+      finally
+        if old == null then System.clearProperty(AnalysisCompression.Property)
+        else System.setProperty(AnalysisCompression.Property, old)
+        ()
+    for d <- data do
+      val api = read(FileAnalysisStore.text(d))
+      def sizes(level: String) = withLevel(level) {
+        val text = File.createTempFile("analysis", ".zip")
+        FileAnalysisStore.text(text).set(api)
+        val consistent = write("cbin-level.zip", api)
+        read(FileAnalysisStore.text(text))
+        (text.length, consistent.length)
+      }
+      val (text0, consistent0) = sizes("0")
+      val (text9, consistent9) = sizes("9")
+      assert(text0 > 2 * text9, s"text store, $d")
+      assert(consistent0 > 2 * consistent9, s"consistent store, $d")
+  }
+
+  test("sbt.analysis.compression rejects a level out of range") {
+    System.setProperty(AnalysisCompression.Property, "12")
+    try assertThrows[IllegalArgumentException](AnalysisCompression.level)
+    finally
+      System.clearProperty(AnalysisCompression.Property)
+      ()
   }
 
   def read(store: AnalysisStore): AnalysisContents =
