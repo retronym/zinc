@@ -1,0 +1,6 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# As merkle-x-member-type, with the upstream ancestor nested in an object
+> app/run s
+> app/checkRecompilations 1 p.X

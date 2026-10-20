@@ -1,0 +1,5 @@
+trait Outer {
+  trait Base
+  class Sub extends Base
+}
+// a comment
