@@ -1,0 +1,6 @@
+# K's mixin forwarder for T.m erases W & Z: to W while Z is a trait.
+> p/run a.W
+# Z becomes a class, so W & Z erases to Z. T names Z and recompiles, but its API renders W & Z by
+# name and does not move; K records nothing of Z and keeps m(LW;)V. A clean build has m(LZ;)V.
+$ copy-file changes/Z.scala p/Z.scala
+> p/run a.Z
