@@ -1,0 +1,5 @@
+> app/run a(x)
+
+# The macro reads the members of the types of Box's fields, like a recursive derivation would
+$ copy-file app/changes/A.scala app/A.scala
+> app/run a(x,y)

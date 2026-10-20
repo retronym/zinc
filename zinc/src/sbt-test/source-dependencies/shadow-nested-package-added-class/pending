@@ -1,0 +1,5 @@
+> p/run 1
+
+# a.b.Foo is a new class that shadows a.Foo in Main, which only depends on a.Foo
+$ copy-file changes/Foo.scala p/FooB.scala
+> p/run 2
