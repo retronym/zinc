@@ -50,20 +50,34 @@ object APIDiffBench {
     println(f"  $name%-10s $ms%10.3f ms/op $mb%10.2f MB/op")
   }
 
+  private def run(label: String, after: String, before: String, members: Int): Unit = {
+    val withReference = before.length <= 40000
+    if (withReference) {
+      val expected = ReferenceDiffUtil.mkColoredCodeDiff(after, before, printDiffDel = true)
+      val actual = APIDiff.DiffUtil.mkColoredCodeDiff(after, before, printDiffDel = true)
+      assert(actual == expected, s"output differs for $label $members members")
+    }
+    println(s"$label members=$members chars=${before.length}")
+    if (withReference)
+      measure("reference", () => ReferenceDiffUtil.mkColoredCodeDiff(after, before, true))
+    measure("current", () => APIDiff.DiffUtil.mkColoredCodeDiff(after, before, true))
+    measure("unbanded", () => APIDiff.DiffUtil.mkColoredCodeDiff(after, before, true, Int.MaxValue))
+  }
+
   def main(args: Array[String]): Unit = {
-    val sizes = if (args.isEmpty) Seq(10, 50, 200) else args.toSeq.map(_.toInt)
+    val sizes = if (args.isEmpty) Seq(10, 50, 200, 1000) else args.toSeq.map(_.toInt)
     for (members <- sizes) {
       val before = api(members, _ => "")
-      val after = api(
+      val edited = api(
         members,
         i => if (i == members / 2) "  def added(z: scala.Long): scala.Unit\n" else ""
       ).replace("def m1(x: scala.Int", "def m1(x: scala.Long")
-      val expected = ReferenceDiffUtil.mkColoredCodeDiff(after, before, printDiffDel = true)
-      val actual = APIDiff.DiffUtil.mkColoredCodeDiff(after, before, printDiffDel = true)
-      assert(actual == expected, s"output differs for $members members")
-      println(s"members=$members chars=${before.length}")
-      measure("reference", () => ReferenceDiffUtil.mkColoredCodeDiff(after, before, true))
-      measure("current", () => APIDiff.DiffUtil.mkColoredCodeDiff(after, before, true))
+      run("edited", edited, before, members)
+      val lines = before.split("\n").toVector
+      val reordered = (lines.head +: lines.tail.init.reverse :+ lines.last).mkString("\n")
+      run("reordered", reordered, before, members)
+      val unrelated = new scala.util.Random(members).shuffle(before.split("\\b").toVector).mkString
+      run("unrelated", unrelated, before, members)
     }
   }
 }

@@ -36,20 +36,26 @@ class APIDiffSpec extends UnitSpec {
 
   it should "colour an added member" in {
     val api2 = api1.replace("  def bar", "  def baz: scala.Long\n  def bar")
-    assert(show(diff(api2, api1)) ==
-      "class A extends java.lang.Object {\n  def foo(x: scala.Int): java.lang.String\n  def <+baz><+:><+ ><+scala><+.><+Long><+\n><+ ><+ ><+def><+ >bar: scala.Unit\n}")
+    assert(
+      show(diff(api2, api1)) ==
+        "class A extends java.lang.Object {\n  def foo(x: scala.Int): java.lang.String\n  def <+baz><+:><+ ><+scala><+.><+Long><+\n><+ ><+ ><+def><+ >bar: scala.Unit\n}"
+    )
   }
 
   it should "colour a removed member" in {
     val api2 = api1.replace("  def foo(x: scala.Int): java.lang.String\n", "")
-    assert(show(diff(api2, api1)) ==
-      "class A extends java.lang.Object {<-\n><-  def><- foo(x: ><-scala><-.><-Int><-)><-:><- ><-java><-.><-lang><-.><-String>\n  def bar: scala.Unit\n}")
+    assert(
+      show(diff(api2, api1)) ==
+        "class A extends java.lang.Object {<-\n><-  def><- foo(x: ><-scala><-.><-Int><-)><-:><- ><-java><-.><-lang><-.><-String>\n  def bar: scala.Unit\n}"
+    )
   }
 
   it should "colour a changed type" in {
     val api2 = api1.replace("x: scala.Int", "x: scala.Long")
-    assert(show(diff(api2, api1)) ==
-      "class A extends java.lang.Object {\n  def foo(x: scala.<+Long><-Int>): java.lang.String\n  def bar: scala.Unit\n}")
+    assert(
+      show(diff(api2, api1)) ==
+        "class A extends java.lang.Object {\n  def foo(x: scala.<+Long><-Int>): java.lang.String\n  def bar: scala.Unit\n}"
+    )
   }
 
   it should "colour a single token replacement" in {
@@ -82,18 +88,23 @@ class APIDiffSpec extends UnitSpec {
     "→"
   )
   private val text: Gen[String] = Gen.listOf(pieces).map(_.take(40).mkString)
-  private def edited(base: String): Gen[String] =
+  private def edited(base: String, maxLen: Int = Int.MaxValue): Gen[String] =
     for {
       cut <- Gen.choose(0, base.length)
-      len <- Gen.choose(0, base.length - cut)
+      len <- Gen.choose(0, math.min(maxLen, base.length - cut))
       ins <- text.map(_.take(8))
     } yield base.substring(0, cut) + ins + base.substring(cut + len)
 
-  private def agreeOn(pairs: Gen[(String, String)]): Unit =
-    for (i <- 0 until 2000) {
+  private def agreeOn(pairs: Gen[(String, String)], cases: Int = 2000): Unit =
+    for (i <- 0 until cases) {
       val (code, lastCode) = pairs.pureApply(Gen.Parameters.default, Seed(i.toLong))
-      val expected = ReferenceDiffUtil.mkColoredCodeDiff(code, lastCode, printDiffDel = true)
-      assert(show(diff(code, lastCode)) == show(expected), s"code=$code lastCode=$lastCode")
+      for (printDiffDel <- Seq(true, false)) {
+        val expected = show(ReferenceDiffUtil.mkColoredCodeDiff(code, lastCode, printDiffDel))
+        for (band <- Seq(1, 2, 5, 16, 1000)) {
+          val actual = APIDiff.DiffUtil.mkColoredCodeDiff(code, lastCode, printDiffDel, band)
+          assert(show(actual) == expected, s"band=$band code=$code lastCode=$lastCode")
+        }
+      }
     }
 
   it should "agree with the reference implementation on unrelated inputs" in {
@@ -106,5 +117,18 @@ class APIDiffSpec extends UnitSpec {
       e1 <- edited(base)
       e2 <- edited(e1)
     } yield (base, e2))
+  }
+
+  it should "agree with the reference implementation on long edited inputs" in {
+    val long = Gen.listOfN(400, pieces).map(_.mkString)
+    agreeOn(
+      for {
+        base <- long
+        e1 <- edited(base, 40)
+        e2 <- edited(e1, 40)
+        e3 <- edited(e2)
+      } yield (base, e3),
+      cases = 100
+    )
   }
 }
