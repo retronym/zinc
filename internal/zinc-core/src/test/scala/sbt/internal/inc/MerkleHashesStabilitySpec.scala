@@ -49,7 +49,7 @@ object MerkleHashesStability:
     val analysis = Analysis.empty.copy(apis =
       APIs(
         Map(
-          "p.A" -> analyzed("p.A", DefinitionType.ClassDef, Array(parent("p.B")), "a"),
+          "p.A" -> analyzed("p.A", DefinitionType.ClassDef, Array("p.B"), "a"),
           "p.B" -> analyzed("p.B", DefinitionType.Trait, Array.empty, "b"),
           "p.O" -> analyzed("p.O", DefinitionType.Module, Array.empty, "o"),
         ),
@@ -86,18 +86,34 @@ object MerkleHashesStability:
       Array.empty
     )
 
+  /** A class whose stored ancestors, by binary name, are `ancestors`. */
   def analyzed(
       name: String,
       defType: DefinitionType,
-      parents: Array[Type],
+      ancestors: Array[String],
       member: String
   ): AnalyzedClass =
     val isModule = defType == DefinitionType.Module
+    val parents = ancestors.map(a => parent(a.replace('$', '.')))
     val classSide = side(name, if isModule then DefinitionType.ClassDef else defType, parents)
     val objectSide = side(name, DefinitionType.Module, Array.empty)
     val nameHashes = Array(
       NameHash.of(member, UseScope.Default, member.hashCode),
       NameHash.of("wait", UseScope.Default, 42)
     )
-    AnalyzedClass.of(0L, name, lzy(Companions.of(classSide, objectSide)), 1, nameHashes, false, 2)
+    AnalyzedClass.of(
+      0L,
+      name,
+      lzy(Companions.of(classSide, objectSide)),
+      1,
+      nameHashes,
+      false,
+      2,
+      "",
+      0L,
+      0L,
+      ancestors,
+      Array.empty[String]
+    )
+  end analyzed
 end MerkleHashesStability

@@ -174,12 +174,15 @@ private[inc] object PackageScope:
    * @param changes The classes whose API changed, before and after.
    * @param api The API of a class that did not change.
    * @param packageObjects This subproject's package objects.
+   * @param relations This subproject's relations, which name its classes.
    */
   def changes(
       changes: collection.Map[String, AncestorChange],
       api: String => Option[AnalyzedClass],
-      packageObjects: Iterable[String]
+      packageObjects: Iterable[String],
+      relations: Relations
   ): List[Change] =
+    val key = BinaryName.key(relations)
     def lookup(side: AncestorChange => AnalyzedClass)(name: String) =
       changes.get(name) match
         case Some(change) => Some(side(change)).filter(_ ne APIs.emptyAnalyzedClass)
@@ -188,13 +191,13 @@ private[inc] object PackageScope:
     val after = lookup(_.after)
     def affected(p: String) =
       changes.contains(p) || List(before, after).exists(
-        _(p).exists(c => MerkleHashes.linearization(c).exists(changes.contains))
+        _(p).exists(c => BinaryName.ancestors(c).exists(a => changes.contains(key(a))))
       )
     (packageObjects.iterator ++ changes.keysIterator.filter(isPackageObject)).toSet.toList.sorted
       .filter(affected)
       .flatMap { p =>
-        val (namesBefore, implicitsBefore) = members(p, before)
-        val (namesAfter, implicitsAfter) = members(p, after)
+        val (namesBefore, implicitsBefore) = members(p, before, key)
+        val (namesAfter, implicitsAfter) = members(p, after, key)
         val added = (namesAfter -- namesBefore).filterNot(ignored)
         val implicitsChanged = implicitsBefore != implicitsAfter
         if added.isEmpty && !implicitsChanged then None
@@ -283,7 +286,7 @@ private[inc] object PackageScope:
         val name = cls.substring(cls.lastIndexOf('.') + 1)
         byPackage
           .getOrElse(packageOf(cls), Nil)
-          .filter(p => members(p, after)._1(name))
+          .filter(p => members(p, after, BinaryName.key(relations))._1(name))
           .filterNot(p => compiled(p) && compiled(cls))
           .flatMap(p => List(cls, p))
       }.toSet
@@ -295,12 +298,14 @@ private[inc] object PackageScope:
   /** A package object's member names, and those of its implicit members. */
   private def members(
       packageObject: String,
-      api: String => Option[AnalyzedClass]
+      api: String => Option[AnalyzedClass],
+      key: BinaryName => String
   ): (Set[String], Set[String]) =
     api(packageObject) match
       case None      => (Set.empty, Set.empty)
       case Some(own) =>
-        val hashes = (own +: MerkleHashes.linearization(own).flatMap(api)).flatMap(_.nameHashes)
+        val ancestors = BinaryName.ancestors(own).toVector.flatMap(a => api(key(a)))
+        val hashes = (own +: ancestors).flatMap(_.nameHashes)
         (
           hashes.iterator.map(_.name).toSet,
           hashes.iterator.filter(_.scope == UseScope.Implicit).map(_.name).toSet

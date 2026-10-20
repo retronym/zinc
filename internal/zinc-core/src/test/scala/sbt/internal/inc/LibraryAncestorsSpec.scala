@@ -11,13 +11,25 @@
 
 package sbt.internal.inc
 
+import xsbti.VirtualFileRef
+import xsbti.api.DefinitionType
+import MerkleHashesStability.analyzed
+
 class LibraryAncestorsSpec extends UnitSpec:
-  "binaryNameCandidates" should "list a Scala 2 nested name's binary names" in:
-    LibraryAncestors.binaryNameCandidates("a.O.C") shouldBe List("a.O.C", "a.O$C", "a$O$C")
+  private val apis = APIs(
+    Map(
+      "p.D" -> analyzed("p.D", DefinitionType.ClassDef, Array("lib.O$L"), "d"),
+      "p.E" -> analyzed("p.E", DefinitionType.ClassDef, Array("lib.M"), "e")
+    ),
+    Map.empty
+  )
 
-  it should "keep a Scala 3 nested name as stored, then its binary names" in:
-    LibraryAncestors.binaryNameCandidates("a.O$.C") shouldBe
-      List("a.O$.C", "a.O.C", "a.O$C", "a$O$C")
+  "descendants" should "match a library class nested in an object by its binary name" in:
+    LibraryAncestors.descendants(Set(BinaryName("lib.O$L")), apis) shouldBe Set("p.D")
 
-  "canonical" should "name the members of objects as Scala 2 does" in:
-    LibraryAncestors.canonical("a.O$.P$.C") shouldBe "a.O.P.C"
+  "BinaryName.key" should "name this subproject's classes by source name, others by binary name" in:
+    val relations =
+      Relations.empty.addClasses(VirtualFileRef.of("O.scala"), Seq("p.O.A" -> "p.O$A"))
+    val key = BinaryName.key(relations)
+    key(BinaryName("p.O$A")) shouldBe "p.O.A"
+    key(BinaryName("q.O$A")) shouldBe "q.O$A"

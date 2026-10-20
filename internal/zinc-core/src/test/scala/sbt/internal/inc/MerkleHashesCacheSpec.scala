@@ -12,13 +12,13 @@
 package sbt.internal.inc
 
 import xsbti.api.*
-import MerkleHashesStability.{ analyzed, parent }
+import MerkleHashesStability.analyzed
 
 class MerkleHashesCacheSpec extends UnitSpec:
   private def analysis = Analysis.empty.copy(apis =
     APIs(
       Map(
-        "p.A" -> analyzed("p.A", DefinitionType.ClassDef, Array(parent("p.B"), parent("q.C")), "a"),
+        "p.A" -> analyzed("p.A", DefinitionType.ClassDef, Array("p.B", "q.C"), "a"),
         "p.B" -> analyzed("p.B", DefinitionType.Trait, Array.empty, "b")
       ),
       Map.empty
@@ -26,9 +26,8 @@ class MerkleHashesCacheSpec extends UnitSpec:
   )
   private val c1 = analyzed("q.C", DefinitionType.Trait, Array.empty, "c")
   private val c2 = analyzed("q.C", DefinitionType.Trait, Array.empty, "c2")
-  private def lookup(c: AnalyzedClass): String => Option[AnalyzedClass] =
-    case "q.C" => Some(c)
-    case _     => None
+  private def lookup(c: AnalyzedClass): BinaryName => Option[AnalyzedClass] =
+    b => if b.value == "q.C" then Some(c) else None
   private def hashes(c: AnalyzedClass) =
     (c.apiHash, c.nameHashes.map(h => (h.name, h.scope, h.hash)).toSet)
 

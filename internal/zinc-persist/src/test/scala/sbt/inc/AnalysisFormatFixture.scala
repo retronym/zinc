@@ -184,7 +184,10 @@ object AnalysisFormatFixture:
     // The 8-arg overload defaults both of these to 0, which would make transposing the two
     // adjacent `out.long` writes in writeAnalyzedClass invisible.
     15L,
-    16L
+    16L,
+    // Distinct, for the same reason.
+    Array("p.O$Ancestor"),
+    Array("p.ModuleAncestor", "p.Other")
   )
 
   private def position(sourcePath: String, sourceFile: String) = InterfaceUtil.position(

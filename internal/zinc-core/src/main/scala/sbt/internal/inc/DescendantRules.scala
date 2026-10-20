@@ -14,7 +14,7 @@ package internal
 package inc
 
 import xsbt.api.{ Discovery, HashAPI }
-import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType, Parameterized, Projection, Type }
+import xsbti.api.{ AnalyzedClass, ClassLike, DefinitionType }
 import xsbti.compile.IncOptions
 
 /**
@@ -65,33 +65,25 @@ private[inc] final class HierarchyView(
     lookup: String => Option[AnalyzedClass]
 ):
   private val parents = relations.inheritance.internal
+  private val key = BinaryName.key(relations)
+
+  /** A class's API, by the name this subproject knows it by (see [[BinaryName.key]]). */
+  val api: String => Option[AnalyzedClass] = lookup
+
+  /** The ancestors a class's stored API lists, in linearization order, named as [[api]] takes. */
+  def stored(className: String): Vector[String] =
+    api(className).toVector.flatMap(c => BinaryName.ancestors(c).iterator.map(key))
 
   /**
-   * A class's API, by its name or, for an upstream class, by its binary name: a stored
-   * linearization names a class nested in an object `a.O.C`, upstream APIs are keyed `a.O$C`.
-   */
-  val api: String => Option[AnalyzedClass] = name =>
-    lookup(name).orElse(
-      LibraryAncestors.binaryNameCandidates(name).iterator.flatMap(lookup).nextOption()
-    )
-
-  /**
-   * Ancestors through this subproject's inheritance relation, plus those in the stored
-   * linearization, which also names ancestors in upstream subprojects, all by source name. A
-   * parent reached through an object, `extends Inst.B` with `object Inst extends Outer`, is
-   * stored as `Inst.B`, which no class is called; the external inheritance relation has its
-   * class, `Outer$B`, whose own stored linearization names the ancestors above it.
+   * Ancestors through this subproject's inheritance relation, plus those that each of them
+   * stores, which include the ancestors in upstream subprojects and libraries.
    */
   def ancestors(className: String): Set[String] =
     val internal =
       IncrementalCommon.transitiveDeps(parents.forward(className), sbt.util.Logger.Null, false)(
         parents.forward
       ) + className
-    val upstream =
-      internal.flatMap(relations.inheritance.external.forward).map(LibraryAncestors.sourceName)
-    internal ++ upstream ++ (internal ++ upstream).iterator
-      .flatMap(api)
-      .flatMap(MerkleHashes.linearization) - className
+    internal ++ internal.iterator.flatMap(stored) - className
 
   def usedNames(className: String): Set[String] =
     relations.names.toMultiMap.get(className).fold(Set.empty[String])(_.map(_.name).toSet)
@@ -143,22 +135,10 @@ private[inc] final class HierarchyView(
   /**
    * Whether the object side of `className` has `ancestor` in its linearization. A case class's
    * companion object does not, so it gets no forwarders for the class's inherited members.
-   * Names are compared in [[LibraryAncestors.canonical]] form: an upstream `ancestor` is named by
-   * its binary name, the linearization by source names. A parent reached through another object
-   * (`object O extends Inst.B`) is stored under a name no class has; without a companion class
-   * every inheritance edge of `className` is the object's, so [[ancestors]] finds it.
    */
   def objectInherits(className: String, ancestor: String): Boolean =
-    val target = LibraryAncestors.canonical(LibraryAncestors.sourceName(ancestor))
     api(className).exists { c =>
-      val obj = c.api().objectApi()
-      !isEmpty(obj) && (
-        obj.structure.parents.iterator
-          .flatMap(MerkleHashes.typeName)
-          .exists(n => LibraryAncestors.canonical(n) == target) ||
-          isEmpty(c.api().classApi()) &&
-          ancestors(className).exists(n => LibraryAncestors.canonical(n) == target)
-      )
+      !isEmpty(c.api().objectApi()) && BinaryName.moduleAncestors(c).exists(key(_) == ancestor)
     }
 
   /** An absent side is stored as `APIUtil.emptyClassLike`, which claims to be top-level. */
@@ -174,8 +154,7 @@ private[inc] final class HierarchyView(
       cls.definitionType == DefinitionType.ClassDef && !isEmpty(cls)
     }
 
-  private def linearization(className: String): Vector[String] =
-    api(className).toVector.flatMap(MerkleHashes.linearization)
+  private def linearization(className: String): Vector[String] = stored(className)
 
   /**
    * Does `className` mix `trt` in itself, and so get mixin forwarders for its members? Only a
@@ -233,10 +212,8 @@ private[inc] object DescendantRules:
    */
   val conflicts: DescendantRule = rule("conflicts") { (view, d, change) =>
     val p = change.className
-    val onPath = (view.ancestors(p) + p + LibraryAncestors.sourceName(p)).map(
-      LibraryAncestors.canonical
-    )
-    val otherPath = view.ancestors(d).filterNot(a => onPath(LibraryAncestors.canonical(a)))
+    val onPath = view.ancestors(p) + p
+    val otherPath = view.ancestors(d) -- onPath
     val internal = otherPath.flatMap(view.declaredNames)
     val external = view.externallyInheritedNames(d) --
       view.inheritedNames(change.before) -- view.inheritedNames(change.after)
@@ -276,10 +253,11 @@ private[inc] object DescendantRules:
    * Whether `name` is the constructor of `className`: `<init>` under Scala 2, the class's name
    * with `;` for `.` and `;init;` appended under Scala 3 (`p;O$;C;init;`). Scala 3 folds whether
    * a class has initialization code into its constructor's API, which every descendant's
-   * constructor purity depends on.
+   * constructor purity depends on. The constructor's name has the source name in Scala 3's form,
+   * `className` may be a binary name: both are compared with every `$` taken for a `.`.
    */
   private def isOwnConstructor(name: String, className: String): Boolean =
-    def normal(n: String) = LibraryAncestors.sourceName(LibraryAncestors.canonical(n))
+    def normal(n: String) = n.replace("$.", ".").stripSuffix("$").replace('$', '.')
     name == "<init>" ||
     name.endsWith(";init;") &&
     normal(name.stripSuffix(";init;").replace(';', '.')) == normal(className)
@@ -346,20 +324,12 @@ private[inc] object DescendantRules:
    * An inheritance edge without subclassing. Scala 3 records a wildcard `export` as an inheritance
    * dependency on the exported class, because the exporting class has a forwarder for each of its
    * members, new ones included. The other rules reason about inherited members, which such a class
-   * does not have, so it always recompiles. Its stored parents do not name the changed class.
-   * A parent nested in a class is stored as a projection with only its simple name, so a parent
-   * with the changed class's simple name counts as naming it.
+   * does not have, so it always recompiles. Its stored ancestors do not include the changed class,
+   * unlike [[HierarchyView.ancestors]], which follows the inheritance relation.
    */
   val exports: DescendantRule = rule("exports") { (view, d, change) =>
-    def simple(name: String) = name.stripSuffix("$").split('.').last.split('$').last
-    def parentNames(t: Type): Iterator[String] = t match
-      case p: Parameterized => parentNames(p.baseType)
-      case p: Projection    => Iterator(p.id) ++ MerkleHashes.typeName(p).iterator
-      case t                => MerkleHashes.typeName(t).iterator
-    val stored =
-      view.classLikes(d).iterator.flatMap(_.structure.parents.iterator.flatMap(parentNames)).toSet
     val p = change.className
-    if view.api(d).isDefined && !stored.contains(p) && !stored.contains(simple(p)) then
+    if view.api(d).isDefined && !view.stored(d).contains(p) then
       Some(s"forwards the members of $p")
     else None
   }
