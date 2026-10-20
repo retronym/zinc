@@ -1,0 +1,19 @@
+# integration/merkle-1.12.x, built 2026-10-20T12:19:08Z by build-integration from manifest.toml
+
+base	upstream/1.12.x	db2a2f35fe499d0179b78fe0d292aa74e9fb2a6e
+
+rz#48	refs/pull/48/head	15082c35d0138beb2472ab29e10d52db140b7e93	clean
+rz#89	refs/pull/89/head	4c6cc2ba9e0ee80e05aeeee1b4ad2cb1199ac219	clean
+merkle-typed-class-identity-1.12.x	refs/heads/backport/1.12.x-merkle-typed-class-identity	aba5f2845920de588e2d97956df1b78337b324f9	clean
+rz#68	refs/pull/68/head	363c4672669507d56831fe79e108ea7f002a0b9e	clean
+rz#68+rz#48	fixups/68-legacy-hashapi-trait-hash.patch	0de6ec8278f97c4511886d21f30990bdae39a43b	applied
+rz#73	refs/pull/73/head	9c42e2db2b105c2e8b9e6ab0df88be0aa3db5032	clean
+rz#79	refs/pull/79/head	f42d65ee5818d25242d941e861bf2dcc1a35c4cf	clean
+rz#71	refs/pull/71/head	764fb493d3edf0bb3d3bb0df10a6cd9508223a15	rerere
+rz#75	refs/pull/75/head	aab10acc525910fa419fcd1c21259957604b231c	clean
+classof-used-name	fixups/classof-used-name.patch	736637bb460f65b932dd4a6977acf15ce086c1db	applied
+java-sealed-permits	fixups/java-sealed-permits.patch	503c881e1037122774692112a194ca7e9d5ab79c	applied
+
+# excluded
+backport/1.12.x-z1-overcompilation	not Merkle (decision 5)
+backport/1.12.x-z2-name-kinds	not Merkle (decision 5)
