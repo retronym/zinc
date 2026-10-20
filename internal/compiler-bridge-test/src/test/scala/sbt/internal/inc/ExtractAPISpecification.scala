@@ -298,8 +298,18 @@ class ExtractAPISpecification
     val apis = extractApisFromSrc(src)
     val c = apis.find(_.name == "C").get
     val f = c.structure.declared.find(_.name == "f").get
-    val printed =
-      f.annotations.toList.map(a => a.arguments.toList.map(arg => (arg.name, arg.value)))
+    // Leave out the annotation that carries the member's erased signature.
+    def isErasedSignature(a: xsbti.api.Annotation) = a.base match {
+      case s: xsbti.api.Singleton =>
+        s.path.components.exists {
+          case id: xsbti.api.Id => id.id == "<erased-signature>"
+          case _                => false
+        }
+      case _ => false
+    }
+    val printed = f.annotations.toList
+      .filterNot(isErasedSignature)
+      .map(a => a.arguments.toList.map(arg => (arg.name, arg.value)))
     assert(printed === List(List(("", "(1,\"s\")")), List(("", "()")), List(("", "(-2,\"t\")"))))
   }
 }
