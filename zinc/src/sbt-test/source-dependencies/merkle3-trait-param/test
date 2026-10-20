@@ -1,0 +1,5 @@
+> p/compile
+
+# D passes the trait parameter, whose type changed
+$ copy-file changes/P.scala p/P.scala
+-> p/compile
