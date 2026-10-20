@@ -1,0 +1,7 @@
+# C imports a.q._ and resolves t.m through T's companion.
+> p/compile
+
+# An implicit class added to package object q comes in through the wildcard import and wins
+# over the companion: a clean build rejects C. Zinc records nothing for an import of a package.
+$ copy-file changes/Q.scala p/Q.scala
+-> p/compile
