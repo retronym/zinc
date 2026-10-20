@@ -9,8 +9,21 @@ Design note, for review before code. Applies to the Merkle series (`claude/merkl
 - CHANGED Scala 3 isn't refused. Merkle supports the stock Scala 3 bridge, which will never report ancestors, so `LegacyAncestors` recovers them from parent types, once, in the callback, with the old candidates. The guessing lives there only, and everything downstream reads one form.
 - DONE Tests: bridge spec (`Inst.B` → `p.Outer$B`, value class → `scala.AnyVal` only), `merkle-x-mirror-dollar` (fails before with `NoSuchMethodError`), `merkle-x-abstract-ancestor-java-nested`; all of `source-dependencies/*` and `pipelining/*` pass.
 - TODO Scala 3's `sbt-bridge` (scala3-merkle) reports ancestors, so `LegacyAncestors` only serves stock bridges.
-- TODO IncBench replays with `--verify` (scala/scala `SubComponent` add-member, pekko `timeout-add-implicit` under Scala 3) on `integration/merkle`.
-- TODO Port to the 1.12.x line.
+- DONE IncBench replays with `--verify` on both lines: no change in what recompiles (table below).
+- DONE Ported to the 1.12.x line as `[1.x]` commits (`backport/1.12.x-merkle-typed-class-identity`, onto rz#89): `BinaryName` is an abstract type member with its ops in the `inc` package object, as Scala 2 has no opaque types, and the protobuf store, which 1.12.x's scripted and IncBench use, keeps the ancestors too. 1.12.x `source-dependencies/*` and `pipelining/*` pass.
+
+### Replays (2026-10-20)
+
+`hashing=merkle`, `--verify`, `--profile`, one repetition, no warmup. Before is the integration branch without this series, after is with it. Develop runs IncBench through sbt, one build at a time; 1.12.x runs the two in `lockstep`. Sources per cycle are listed in order, per subproject.
+
+| Line | Replay | Compiler | Before | After |
+|---|---|---|---|---|
+| develop (`integration/merkle` 6a94b2a47 → d2c01a40e) | scala/scala `subcomponent-add-member` and revert | 2.13.16, this branch's bridge | compiler 1, 6 (72 classes); cycle 2 changes no names; `same` | identical |
+| develop | pekko `timeout-add-implicit` and revert | `integration/scala3-merkle` 865b3caf2c (no ancestors reported, so `LegacyAncestors`) | actor 1, 14; actor-typed 6 (156 classes, 3 cycles); cycles after the first change no names; `fresh-mismatch` | identical, with the same differing classfiles |
+| 1.12.x (`integration/merkle-1.12.x` 1b03bb6ed → 7f0d233f1) | scala/scala `subcomponent-add-member` and revert | `integration/2.13.x` STARR 2.13.19-bin-317eba4 | compiler 1, 6 (72 classes); `same` | identical |
+| 1.12.x | pekko `timeout-add-implicit` and revert | `integration/scala3-merkle` 865b3caf2c | actor 1, 14; actor-typed 6 (156 classes); `fresh-mismatch` | identical, with the same differing classfiles |
+
+The clean builds compile the same classes before and after (scala/scala 4452, pekko 1420). The scala/scala replays run with `recompileOnMacroDef=false`, the pekko ones with sbt's default. scala/scala's figures are the 1 → 6 of `165a9dbce`, and pekko's the 156 in 3 cycles of `768771b18`. The pekko `fresh-mismatch` is in classes that two clean compiles of the same sources also produce differently (`fresh`), on both sides. The replays show no regression, and nothing new either: before this series the guessing already gave these numbers, and now they come without it. The 1.12.x before cell is 1b03bb6ed plus a corrected `IncHandler.scala`: rz#71's recorded merge resolution there predated rz#87 and dropped `ThreadLocalOut`, so scripted and IncBench didn't compile on `integration/merkle-1.12.x`. The resolution is re-recorded in talks' rr-cache.
 
 ## Problem
 
