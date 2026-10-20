@@ -270,6 +270,9 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkClasses") {
       case (p, src :: products, i) => p.checkClasses(i, dropRightColon(src), products)
     },
+    onArgs("checkAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
+    },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
         p.checkMainClasses(i, javaV, dropRightColon(src), products)
@@ -393,11 +396,17 @@ case class ProjectStructure(
         xsbti.compile.TransactionalManagerType
           .of((targetDir / "classes.bak").toFile, sbt.util.Logger.Null)
       )
+    // As sbt does for Scala 3: delete and restore a class's TASTy file with its classfile.
+    val auxiliary: Array[xsbti.compile.AuxiliaryClassFiles] =
+      if scalaVersion.startsWith("3") then Array(xsbti.compile.TastyFiles.instance())
+      else incOptions0.auxiliaryClassFiles()
     val incO =
       incOptions0
         .withClassfileManagerType(transactional)
         .withStoreApis(storeApis)
+        .withAuxiliaryClassFiles(auxiliary)
     (incO, sco)
+  end val
   val exportPipelining = incOptions.pipelining
 
   def prev(useCachedAnalysis: Boolean = true) =
@@ -507,6 +516,15 @@ case class ProjectStructure(
         assert(expected == actual, msg)
       assertClasses(expected.toSet, classes(src))
       ()
+    }
+
+  /** Test discovery, as sbt does it: does `cls` have a public method annotated `annotation`? */
+  def checkAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.nonEmpty, s"$cls has no method annotated $annotation")
     }
 
   def checkMainClasses(
