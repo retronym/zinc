@@ -688,6 +688,8 @@ final class ProtobufWriters(mapper: WriteMapper) {
       .setProvenance(provenance)
 
     analyzedClass.nameHashes().foreach(h => builder.addNameHashes(toNameHash(h)))
+    analyzedClass.ancestors().foreach(builder.addAncestors)
+    analyzedClass.moduleAncestors().foreach(builder.addModuleAncestors)
     builder.build
   }
 

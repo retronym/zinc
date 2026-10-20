@@ -39,7 +39,7 @@ import Compat._
 class ConsistentAnalysisFormat(val mappers: ReadWriteMappers, reproducible: Boolean) {
   import ConsistentAnalysisFormat._
 
-  private[this] final val VERSION = 1100029
+  private[this] final val VERSION = 1100030
   private[this] final val readMapper = mappers.getReadMapper
   private[this] final val writeMapper = mappers.getWriteMapper
 
@@ -171,6 +171,8 @@ class ConsistentAnalysisFormat(val mappers: ReadWriteMappers, reproducible: Bool
       out.writeArray("nameHashes.name", nh) { h => out.string(h.name()) }
       out.writeArray("nameHashes.scope", nh) { h => out.byte(h.scope().ordinal().toByte) }
       out.writeArray("nameHashes.hash", nh) { h => out.int(h.hash()) }
+      out.writeStringArray("ancestors", ac.ancestors())
+      out.writeStringArray("moduleAncestors", ac.moduleAncestors())
       if (storeApis) {
         val comp = ac.api()
         writeClassLike(out, comp.classApi())
@@ -190,6 +192,8 @@ class ConsistentAnalysisFormat(val mappers: ReadWriteMappers, reproducible: Bool
       val nhNames = in.readStringArray()
       val nhScopes = in.readArray[UseScope]() { UseScope.values()(in.byte().toInt) }
       val nhHashes = in.readArray[Int]() { in.int() }
+      val ancestors = in.readStringArray()
+      val moduleAncestors = in.readStringArray()
       val nameHashes = new Array[NameHash](nhNames.length)
       var i = 0
       while (i < nameHashes.length) {
@@ -199,7 +203,18 @@ class ConsistentAnalysisFormat(val mappers: ReadWriteMappers, reproducible: Bool
       val comp =
         if (storeApis) Companions.of(readClassLike(in), readClassLike(in))
         else APIs.emptyCompanions
-      AnalyzedClass.of(ts, name, SafeLazyProxy.strict(comp), ah, nameHashes, hm, eh, p)
+      AnalyzedClass.of(
+        ts,
+        name,
+        SafeLazyProxy.strict(comp),
+        ah,
+        nameHashes,
+        hm,
+        eh,
+        p,
+        ancestors,
+        moduleAncestors
+      )
     }
   }
 

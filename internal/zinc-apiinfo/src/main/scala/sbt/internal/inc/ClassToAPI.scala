@@ -252,6 +252,20 @@ object ClassToAPI {
   private val lzyEmptyTpeArray = lzyS(emptyTypeArray)
   private val lzyEmptyDefArray = lzyS(new Array[xsbti.api.ClassDefinition](0))
 
+  /**
+   * The binary names of a class's supertypes, superclasses first, as `AnalysisCallback5.ancestors`
+   * reports them: without `java.lang.Object`, which every class has.
+   */
+  def ancestorNames(c: Class[?]): Array[String] =
+    allSuperTypes(c).iterator
+      .map {
+        case p: ParameterizedType => p.getRawType
+        case t                    => t
+      }
+      .collect { case a: Class[?] if a != classOf[Object] => a.getName }
+      .toArray
+      .distinct
+
   private def allSuperTypes(t: Type): Seq[Type] = {
     @tailrec def accumulate(t: Type, accum: Seq[Type] = Seq.empty): Seq[Type] = t match {
       case c: Class[?] =>

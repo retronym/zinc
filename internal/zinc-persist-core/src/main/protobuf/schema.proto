@@ -423,6 +423,8 @@ message AnalyzedClass {
     bool hasMacro = 6;
     sint32 extraHash = 7;
     string provenance = 8;
+    repeated string ancestors = 9;
+    repeated string moduleAncestors = 10;
 }
 
 message APIs {

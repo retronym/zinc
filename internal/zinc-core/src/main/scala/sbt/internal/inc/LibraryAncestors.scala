@@ -55,14 +55,14 @@ private[inc] object LibraryAncestors {
   def invalidates(options: IncOptions): Boolean = value(options) == "names"
 
   /**
-   * The classes of the changed libraries, named as [[MerkleHashes.typeName]] renders a reference to
-   * them. A jar's are read from the jar: the relations keep one representative class per jar.
+   * The classes of the changed libraries. A jar's are read from the jar: the relations keep one
+   * representative class per jar.
    */
   def classesOf(
       changedLibraries: Iterable[VirtualFileRef],
       relations: Relations,
       converter: FileConverter
-  ): Set[String] =
+  ): Set[BinaryName] =
     changedLibraries.iterator.flatMap { lib =>
       val path = converter.toPath(lib)
       if (path.toString.endsWith(".jar") && Files.isRegularFile(path)) {
@@ -71,10 +71,10 @@ private[inc] object LibraryAncestors {
           zip.entries.asScala
             .map(_.getName)
             .filter(n => n.endsWith(".class") && !n.startsWith("META-INF/"))
-            .map(n => sourceName(n.stripSuffix(".class").replace('/', '.')))
+            .map(n => BinaryName(n.stripSuffix(".class").replace('/', '.')))
             .toList
         finally zip.close()
-      } else relations.libraryClassNames(lib).iterator.map(sourceName).toList
+      } else relations.libraryClassNames(lib).iterator.map(BinaryName(_)).toList
     }.toSet
 
   /**
@@ -82,12 +82,11 @@ private[inc] object LibraryAncestors {
    * first cycle, as for a header change: the library's members may change their bridges and
    * forwarders, and their APIs no longer show what changed.
    */
-  def descendants(changedClasses: Set[String], apis: APIs): Set[String] =
+  def descendants(changedClasses: Set[BinaryName], apis: APIs): Set[String] =
     if (changedClasses.isEmpty) Set.empty
     else
       apis.internal.iterator.collect {
-        case (className, c) if ancestorNames(c).exists(n => changedClasses(canonical(n))) =>
-          className
+        case (className, c) if ancestors(c).exists(changedClasses) => className
       }.toSet
 
   /**
@@ -112,39 +111,8 @@ private[inc] object LibraryAncestors {
     ((apiHash, fingerprint).hashCode, folded)
   }
 
-  /** The names of a class's ancestors, as [[MerkleHashes.typeName]] renders them. */
-  def ancestorNames(sides: List[ClassLike]): List[String] =
-    sides.flatMap(_.structure.parents.iterator.flatMap(MerkleHashes.typeName)).distinct
-
-  /**
-   * A class name with the members of objects named as Scala 2 names them: Scala 3 keeps the
-   * object's class in the name of a class nested in it, and in a reference to it (`a.O$.C`).
-   */
-  def canonical(name: String): String = name.replace("$.", ".")
-
-  /**
-   * The names a class rendered as `name` may have: the name itself, which is how this subproject's
-   * classes are keyed, then its binary names, `a.b.C.D` being `a.b.C$D` if C is a class.
-   */
-  def binaryNameCandidates(name: String): List[String] = {
-    val c = canonical(name)
-    val binary = Iterator
-      .iterate(c)(n => {
-        n.lastIndexOf('.') match {
-          case -1 => n
-          case i  => n.substring(0, i) + "$" + n.substring(i + 1)
-        }
-      })
-      .take(c.count(_ == '.') + 1)
-      .toList
-    if (c == name) binary else name :: binary
-  }
-
-  private def ancestorNames(c: AnalyzedClass): Iterator[String] = ancestorNames(sides(c)).iterator
-
-  /** A binary class name as [[MerkleHashes.typeName]] renders a reference to the class. */
-  private[inc] def sourceName(binaryName: String): String =
-    binaryName.stripSuffix("$").replace('$', '.')
+  /** A class's ancestors, both sides': a library may define either side's. */
+  def ancestors(c: AnalyzedClass): Iterator[BinaryName] = BinaryName.bothSides(c)
 
   /** The names a class has only by inheritance: not declared, and not its own. */
   private def inheritedNames(className: String, sides: List[ClassLike]): String => Boolean = {
@@ -153,7 +121,4 @@ private[inc] object LibraryAncestors {
     name => !declared(name) && name != own
   }
 
-  private def sides(c: AnalyzedClass) =
-    if (c eq APIs.emptyAnalyzedClass) Nil
-    else List(c.api().classApi(), c.api().objectApi())
 }
