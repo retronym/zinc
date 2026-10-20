@@ -1,0 +1,6 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# As merkle-x-mirror, with an upstream ancestor whose source name has a `$`, A$B, the same as its binary name,
+# and a companion class, which holds O's static forwarder for the inherited m
+> app/run s

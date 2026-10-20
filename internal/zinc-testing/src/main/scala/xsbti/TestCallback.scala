@@ -46,6 +46,9 @@ class TestCallback(merkle: Boolean) extends AnalysisCallback5:
   val apis: scala.collection.mutable.Map[VirtualFileRef, Set[ClassLike]] =
     scala.collection.mutable.Map.empty
 
+  /** Keyed by class name and whether the ancestors are the object's. */
+  val ancestorsOf = scala.collection.mutable.Map.empty[(String, Boolean), List[String]]
+
   def usedNames = usedNamesAndScopes.view.mapValues(_.map(_.name))
 
   override def startSource(source: File): Unit = ???
@@ -152,6 +155,9 @@ class TestCallback(merkle: Boolean) extends AnalysisCallback5:
   override def apiMode(): AnalysisCallback5.ApiMode = AnalysisCallback5.ApiMode.TREE
 
   override def useOptimizedSealed(): Boolean = false
+
+  override def ancestors(className: String, module: Boolean, binaryNames: Array[String]): Unit =
+    ancestorsOf((className, module)) = binaryNames.toList
 
   override def api(source: VirtualFileRef, thinClass: ClassLike, hashes: ClassHashes): Unit =
     api(source, thinClass)

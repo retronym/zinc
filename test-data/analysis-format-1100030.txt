@@ -1,4 +1,4 @@
-1100029
+1100030
 MiniSetup {
   classpathHash [
     2
@@ -194,6 +194,15 @@ internal [
     nameHashes.hash [
       1
       13
+    ]
+    ancestors [
+      1
+      p.O$Ancestor
+    ]
+    moduleAncestors [
+      2
+      p.ModuleAncestor
+      p.Other
     ]
     ClassLike {
       A
@@ -876,6 +885,15 @@ external [
       1
       13
     ]
+    ancestors [
+      1
+      p.O$Ancestor
+    ]
+    moduleAncestors [
+      2
+      p.ModuleAncestor
+      p.Other
+    ]
     ClassLike {
       C
       Access {
@@ -968,6 +986,15 @@ external [
     nameHashes.hash [
       1
       13
+    ]
+    ancestors [
+      1
+      p.O$Ancestor
+    ]
+    moduleAncestors [
+      2
+      p.ModuleAncestor
+      p.Other
     ]
     ClassLike {
       ExtInherit
@@ -1062,6 +1089,15 @@ external [
       1
       13
     ]
+    ancestors [
+      1
+      p.O$Ancestor
+    ]
+    moduleAncestors [
+      2
+      p.ModuleAncestor
+      p.Other
+    ]
     ClassLike {
       ExtLocalInherit
       Access {
@@ -1154,6 +1190,15 @@ external [
     nameHashes.hash [
       1
       13
+    ]
+    ancestors [
+      1
+      p.O$Ancestor
+    ]
+    moduleAncestors [
+      2
+      p.ModuleAncestor
+      p.Other
     ]
     ClassLike {
       ExtMacro
@@ -1279,4 +1324,4 @@ sourceInfos [
     }
   ]
 ]
-1100029
+1100030

@@ -30,6 +30,12 @@ public final class AnalyzedClass implements java.io.Serializable {
     public static AnalyzedClass of(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance, long _bytecodeHash, long _transitiveBytecodeHash) {
         return new AnalyzedClass(_compilationTimestamp, _name, _api, _apiHash, _nameHashes, _hasMacro, _extraHash, _provenance, _bytecodeHash, _transitiveBytecodeHash);
     }
+    public static AnalyzedClass create(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance, long _bytecodeHash, long _transitiveBytecodeHash, String[] _ancestors, String[] _moduleAncestors) {
+        return new AnalyzedClass(_compilationTimestamp, _name, _api, _apiHash, _nameHashes, _hasMacro, _extraHash, _provenance, _bytecodeHash, _transitiveBytecodeHash, _ancestors, _moduleAncestors);
+    }
+    public static AnalyzedClass of(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance, long _bytecodeHash, long _transitiveBytecodeHash, String[] _ancestors, String[] _moduleAncestors) {
+        return new AnalyzedClass(_compilationTimestamp, _name, _api, _apiHash, _nameHashes, _hasMacro, _extraHash, _provenance, _bytecodeHash, _transitiveBytecodeHash, _ancestors, _moduleAncestors);
+    }
     private long compilationTimestamp;
     private String name;
     private xsbti.api.Lazy<Companions> api;
@@ -40,6 +46,8 @@ public final class AnalyzedClass implements java.io.Serializable {
     private String provenance;
     private long bytecodeHash;
     private long transitiveBytecodeHash;
+    private String[] ancestors;
+    private String[] moduleAncestors;
     protected AnalyzedClass(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro) {
         super();
         compilationTimestamp = _compilationTimestamp;
@@ -52,6 +60,8 @@ public final class AnalyzedClass implements java.io.Serializable {
         provenance = "";
         bytecodeHash = 0;
         transitiveBytecodeHash = 0;
+        ancestors = new String[0];
+        moduleAncestors = new String[0];
     }
     protected AnalyzedClass(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash) {
         super();
@@ -65,6 +75,8 @@ public final class AnalyzedClass implements java.io.Serializable {
         provenance = "";
         bytecodeHash = 0;
         transitiveBytecodeHash = 0;
+        ancestors = new String[0];
+        moduleAncestors = new String[0];
     }
     protected AnalyzedClass(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance) {
         super();
@@ -78,6 +90,8 @@ public final class AnalyzedClass implements java.io.Serializable {
         provenance = _provenance;
         bytecodeHash = 0;
         transitiveBytecodeHash = 0;
+        ancestors = new String[0];
+        moduleAncestors = new String[0];
     }
     protected AnalyzedClass(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance, long _bytecodeHash, long _transitiveBytecodeHash) {
         super();
@@ -91,6 +105,23 @@ public final class AnalyzedClass implements java.io.Serializable {
         provenance = _provenance;
         bytecodeHash = _bytecodeHash;
         transitiveBytecodeHash = _transitiveBytecodeHash;
+        ancestors = new String[0];
+        moduleAncestors = new String[0];
+    }
+    protected AnalyzedClass(long _compilationTimestamp, String _name, xsbti.api.Lazy<Companions> _api, int _apiHash, NameHash[] _nameHashes, boolean _hasMacro, int _extraHash, String _provenance, long _bytecodeHash, long _transitiveBytecodeHash, String[] _ancestors, String[] _moduleAncestors) {
+        super();
+        compilationTimestamp = _compilationTimestamp;
+        name = _name;
+        api = _api;
+        apiHash = _apiHash;
+        nameHashes = _nameHashes;
+        hasMacro = _hasMacro;
+        extraHash = _extraHash;
+        provenance = _provenance;
+        bytecodeHash = _bytecodeHash;
+        transitiveBytecodeHash = _transitiveBytecodeHash;
+        ancestors = _ancestors;
+        moduleAncestors = _moduleAncestors;
     }
     
     public long compilationTimestamp() {
@@ -130,35 +161,55 @@ public final class AnalyzedClass implements java.io.Serializable {
     public long transitiveBytecodeHash() {
         return this.transitiveBytecodeHash;
     }
+    /**
+     * Under Merkle hashing, the binary names of the class side's base classes in
+     * linearization order, without the class itself; empty if it has no class side.
+     */
+    public String[] ancestors() {
+        return this.ancestors;
+    }
+    /**
+     * Under Merkle hashing, the binary names of the object side's base classes in
+     * linearization order, without the object itself; empty if it has no object side.
+     */
+    public String[] moduleAncestors() {
+        return this.moduleAncestors;
+    }
     public AnalyzedClass withCompilationTimestamp(long compilationTimestamp) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withName(String name) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withApi(xsbti.api.Lazy<Companions> api) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withApiHash(int apiHash) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withNameHashes(NameHash[] nameHashes) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withHasMacro(boolean hasMacro) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withExtraHash(int extraHash) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withProvenance(String provenance) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withBytecodeHash(long bytecodeHash) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     public AnalyzedClass withTransitiveBytecodeHash(long transitiveBytecodeHash) {
-        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash);
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
+    }
+    public AnalyzedClass withAncestors(String[] ancestors) {
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
+    }
+    public AnalyzedClass withModuleAncestors(String[] moduleAncestors) {
+        return new AnalyzedClass(compilationTimestamp, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance, bytecodeHash, transitiveBytecodeHash, ancestors, moduleAncestors);
     }
     @Override
     public boolean equals(Object obj) {
