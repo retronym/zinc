@@ -26,4 +26,13 @@ public interface AnalysisCallback5 extends AnalysisCallback4 {
     default boolean merkleHashing() {
         return false;
     }
+
+    /**
+     * Whether the API of a class inheriting from the library class with this binary name should
+     * include its members in full. Otherwise they are stubs (name, access, modifiers), and Zinc
+     * invalidates by the names a class inherits from the library when the library changes.
+     */
+    default boolean materialiseLibraryMembers(String binaryClassName) {
+        return true;
+    }
 }
