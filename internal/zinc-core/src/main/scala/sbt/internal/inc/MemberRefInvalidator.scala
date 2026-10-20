@@ -64,7 +64,9 @@ private[inc] class MemberRefInvalidator(
       memberRef: Relation[String, String],
       usedNames: Relations.UsedNames,
       apiChange: APIChange,
-      isScalaClass: String => Boolean
+      isScalaClass: String => Boolean,
+      sameSource: String => Set[String] = _ => Set.empty,
+      addedNames: Set[String] = Set.empty
   ): String => Set[String] = apiChange match
     case _: TraitPrivateMembersModified   => NoInvalidation
     case _: APIChangeDueToMacroDefinition =>
@@ -74,7 +76,14 @@ private[inc] class MemberRefInvalidator(
     case NamesChange(_, modifiedNames) if modifiedNames.in(UseScope.Implicit).nonEmpty =>
       new InvalidateUnconditionally(memberRef)
     case NamesChange(_, modifiedNames) =>
-      new NameHashFilteredInvalidator(usedNames, memberRef, modifiedNames, isScalaClass)
+      new NameHashFilteredInvalidator(
+        usedNames,
+        memberRef,
+        modifiedNames,
+        isScalaClass,
+        sameSource,
+        addedNames
+      )
 
   def invalidationReason(apiChange: APIChange): String = apiChange match
     case TraitPrivateMembersModified(modifiedClass) =>
@@ -123,12 +132,38 @@ private[inc] class MemberRefInvalidator(
       usedNames: Relations.UsedNames,
       memberRef: Relation[String, String],
       modifiedNames: ModifiedNames,
-      isScalaClass: String => Boolean
+      isScalaClass: String => Boolean,
+      sameSource: String => Set[String],
+      addedNames: Set[String]
   ) extends (String => Set[String]):
 
+    /**
+     * The dependents of `to` that use a modified name, and the classes of their sources that use
+     * an added one. A dependency introduced by a top-level import is charged to one class of the
+     * source, but every class of the source resolves names through the import: one that uses a
+     * name `to` now has may resolve it to the new member. One that uses an existing member of
+     * `to` records its own dependency.
+     */
     def apply(to: String): Set[String] =
       val dependent = memberRef.reverse(to)
-      filteredDependencies(dependent)
+      filteredDependencies(dependent) ++ siblingsUsingAddedNames(dependent)
+
+    private def siblingsUsingAddedNames(dependent: Set[String]): Set[String] =
+      if addedNames.isEmpty then Set.empty
+      else
+        val names = usedNames.toMultiMap
+        val siblings = dependent.filter(isScalaClass).flatMap(sameSource) -- dependent
+        val invalidated = siblings.filter(c =>
+          isScalaClass(c) && names.get(c).exists(_.exists(u => addedNames(u.name)))
+        )
+        if invalidated.nonEmpty then
+          invalidationLog.debug(
+            InvalidationLog.section(
+              "Classes using an added name through another class's import",
+              Seq("invalidated classes" -> invalidated)
+            )
+          )
+        invalidated
 
     private def filteredDependencies(dependent: Set[String]): Set[String] =
       dependent.filter {
