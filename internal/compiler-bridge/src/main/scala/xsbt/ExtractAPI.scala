@@ -546,7 +546,7 @@ class ExtractAPI[GlobalType <: Global](
       s.hasFlag(SEALED),
       isImplicit(s),
       s.hasFlag(LAZY),
-      s.hasFlag(MACRO) || hasInline,
+      (s.hasFlag(MACRO) && !isStubMacro(s)) || hasInline,
       s.hasFlag(SUPERACCESSOR)
     )
   }
