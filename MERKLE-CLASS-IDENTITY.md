@@ -2,6 +2,16 @@
 
 Design note, for review before code. Applies to the Merkle series (`claude/merkle-bridge-hash`, rz#24 + rz#88) and its 1.12.x line.
 
+## Status
+
+- DONE Scala 2 bridge and Java (`ClassToAPI`) report ancestors by binary name (`AnalysisCallback5.ancestors`); `AnalyzedClass.ancestors`/`moduleAncestors`, format 1100030.
+- DONE Merkle core reads them through `BinaryName` (opaque) and `BinaryName.key`; `canonical`, `sourceName`, `typeName`, the external-inheritance fallbacks and the early analysis's inheritance relation are gone.
+- CHANGED Scala 3 isn't refused. Merkle supports the stock Scala 3 bridge, which will never report ancestors, so `LegacyAncestors` recovers them from parent types, once, in the callback, with the old candidates. The guessing lives there only, and everything downstream reads one form.
+- DONE Tests: bridge spec (`Inst.B` → `p.Outer$B`, value class → `scala.AnyVal` only), `merkle-x-mirror-dollar` (fails before with `NoSuchMethodError`), `merkle-x-abstract-ancestor-java-nested`; all of `source-dependencies/*` and `pipelining/*` pass.
+- TODO Scala 3's `sbt-bridge` (scala3-merkle) reports ancestors, so `LegacyAncestors` only serves stock bridges.
+- TODO IncBench replays with `--verify` (scala/scala `SubComponent` add-member, pekko `timeout-add-implicit` under Scala 3) on `integration/merkle`.
+- TODO Port to the 1.12.x line.
+
 ## Problem
 
 Seven fixes in two days had the same cause. Merkle code compared one class's name in two encodings, both typed `String`:
