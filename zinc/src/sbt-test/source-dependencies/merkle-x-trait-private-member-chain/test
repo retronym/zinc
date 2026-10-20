@@ -1,0 +1,6 @@
+> main/run
+
+$ copy-file a/changes/A.scala a/A.scala
+# c.C holds the field and accessors for A's new private val, through two traits in b whose own
+# APIs do not change.
+> main/run
