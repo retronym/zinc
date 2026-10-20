@@ -1,0 +1,11 @@
+# `B` and `C` inherit `sameFile`, an annotated member, so the bridge hashes it into their own name
+# hashes rather than composing it from `A`'s. Its type eta-expands the alias `List`, whose type
+# parameter is owned by the alias when `A` is typed from source and by nothing once unpickled.
+# The hash must not depend on which, or `D` recompiles.
+
+> compile
+
+$ copy-file changes/B.scala B.scala
+> compile
+> checkIterations 2
+> checkRecompilations 1 p.B p.C

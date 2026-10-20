@@ -1,0 +1,7 @@
+# e.Leaf, a case class, extends TreeNode through Expression. Its class side's stored parents name TreeNode only if the
+# bridge stores the class side as well as its companion's: with the class side lost, the `exports` rule took Leaf
+# for a class forwarding TreeNode's members and recompiled it.
+> p/compile
+$ copy-file changes/TreeNode.scala p/TreeNode.scala
+> p/compile
+> p/checkRecompilations 1 t.TreeNode

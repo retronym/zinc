@@ -27,6 +27,7 @@ import scala.jdk.OptionConverters.*
 import scala.collection.mutable
 import scala.util.control.NonFatal
 import xsbti.{
+  ClassHashes,
   ClassRef,
   FileConverter,
   NameKind,
@@ -516,6 +517,23 @@ object Incremental:
     }.toSet
     if implicits.isEmpty then None else Some(implicits.hashCode)
 
+  /**
+   * The bridge sends the full API and its own hashes, and Zinc checks that the two hashings agree
+   * on which classes and names changed (see [[ApiHashCheck]]).
+   */
+  private[inc] val apiCheckProp = "xsbt.api.check"
+  private[inc] def apiCheck(options: IncOptions): Boolean =
+    java.lang.Boolean.getBoolean(apiCheckProp) ||
+      options.extra().getOrDefault("apiCheck", "false").trim == "true"
+
+  private[inc] def apiCheckReport(options: IncOptions): Option[String] =
+    Option(System.getProperty("xsbt.api.check.report"))
+      .orElse(Option(options.extra().get("apiCheckReport")).map(_.trim))
+
+  /** Whether a bridge that can hash APIs itself should, rather than send the full API. */
+  private[inc] def bridgeHashing(options: IncOptions): Boolean =
+    options.extra().getOrDefault("bridgeHashing", "true").trim != "false"
+
   private[sbt] def prune(
       invalidatedSrcs: Set[VirtualFile],
       previous0: CompileAnalysis,
@@ -771,11 +789,6 @@ private final class AnalysisCallback(
       binaryClassName,
       lookup.lookupAnalysis(binaryClassName).isDefined
     )
-
-  override def merkleHashing(): Boolean = merkle
-
-  override def materialiseLibraryMembers(binaryClassName: String): Boolean =
-    !LibraryAncestors.coarse(options)
   import Incremental.CompileCycleResult
 
   // This must have a unique value per AnalysisCallback
@@ -1099,33 +1112,65 @@ private final class AnalysisCallback(
     api(converter.toVirtualFile(sourceFile.toPath), classApi)
 
   override def api(sourceFile: VirtualFileRef, classApi: ClassLike): Unit =
-    import xsbt.api.{ APIUtil, HashAPI }
-    val className = classApi.name
-    if APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.hasMacro(classApi) then
-      macroClasses.add(className)
-    // sbt/zinc#630
-    if !APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.isAnnotationDefinition(classApi) then
-      annotationClasses.add(className)
     val shouldMinimize = !Incremental.apiDebug(options)
     val savedClassApi =
       if !shouldMinimize then classApi
       else if merkle then APIUtil.minimizeWithStubs(classApi)
       else APIUtil.minimize(classApi)
-    val apiHash: HashAPI.Hash = HashAPI(classApi)
-    val nameHashes = (new xsbt.api.NameHashing(options.useOptimizedSealed())).nameHashes(classApi)
-    classApi.definitionType match
-      case d @ (DefinitionType.ClassDef | DefinitionType.Trait) =>
-        // Only the trait's own members; ExtraHashes folds in the parents' later.
-        val extraApiHash =
-          if d != DefinitionType.Trait then apiHash
-          else HashAPI(_.hashAPI(classApi), includePrivateDefsInTrait = true)
+    val hashes = ApiHashCheck.treeHashes(classApi, options.useOptimizedSealed())
+    storeApi(sourceFile, savedClassApi, hashes)
 
-        classApis(className) = ApiInfo(apiHash, extraApiHash, savedClassApi)
-        classPublicNameHashes(className) = nameHashes
+  override def merkleHashing(): Boolean = merkle
+
+  /** The bridge hashes the Merkle API only: under name hashing it sends the full tree. */
+  override def apiMode(): xsbti.AnalysisCallback5.ApiMode =
+    import xsbti.AnalysisCallback5.ApiMode
+    if !merkle then ApiMode.TREE
+    else if Incremental.apiCheck(options) then ApiMode.CHECK
+    else if Incremental.apiDebug(options) || !Incremental.bridgeHashing(options) then ApiMode.TREE
+    else ApiMode.HASHES
+
+  override def useOptimizedSealed(): Boolean = options.useOptimizedSealed()
+
+  override def materialiseLibraryMembers(binaryClassName: String): Boolean =
+    !LibraryAncestors.coarse(options)
+
+  override def api(sourceFile: VirtualFileRef, thinClass: ClassLike, hashes: ClassHashes): Unit =
+    storeApi(sourceFile, thinClass, hashes)
+
+  override def apiCheck(
+      sourceFile: VirtualFileRef,
+      fullClass: ClassLike,
+      thinClass: ClassLike,
+      hashes: ClassHashes
+  ): Unit =
+    val key = jo2o(output.getSingleOutputAsPath).fold("")(_.toString)
+    ApiHashCheck.check(
+      key,
+      fullClass,
+      thinClass,
+      hashes,
+      options.useOptimizedSealed(),
+      Incremental.apiCheckReport(options),
+      log
+    )
+    storeApi(sourceFile, if Incremental.apiDebug(options) then fullClass else thinClass, hashes)
+
+  private def storeApi(sourceFile: VirtualFileRef, classApi: ClassLike, hashes: ClassHashes): Unit =
+    val className = classApi.name
+    if APIUtil.isScalaSourceName(sourceFile.id) && hashes.hasMacro then macroClasses.add(className)
+    // sbt/zinc#630
+    if !APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.isAnnotationDefinition(classApi) then
+      annotationClasses.add(className)
+    val info = ApiInfo(hashes.apiHash, hashes.extraHash, classApi)
+    classApi.definitionType match
+      case DefinitionType.ClassDef | DefinitionType.Trait =>
+        classApis(className) = info
+        classPublicNameHashes(className) = hashes.nameHashes
       case DefinitionType.Module | DefinitionType.PackageModule =>
-        objectApis(className) = ApiInfo(apiHash, apiHash, savedClassApi)
-        objectPublicNameHashes(className) = nameHashes
-  end api
+        objectApis(className) = info
+        objectPublicNameHashes(className) = hashes.nameHashes
+  end storeApi
 
   // Called by sbt-dotty
   override def mainClass(sourceFile: File, className: String): Unit =
@@ -1170,6 +1215,9 @@ private final class AnalysisCallback(
         mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
       val partialAnalysis = getAnalysis
+      // Scala 3 calls `apiPhaseCompleted` only when pipelining, so report here as well.
+      if Incremental.apiCheck(options) then
+        ApiHashCheck.reportSummary(Incremental.apiCheckReport(options), log)
       val hasScala = Analysis.sources(partialAnalysis).scala.nonEmpty
       // If we had early output and scala sources, then the cycle has already been registered
       val shouldRegisterCycle = earlyOutput.isEmpty || !hasScala
@@ -1572,7 +1620,9 @@ private final class AnalysisCallback(
       case Some(prevAnalysis) => prevAnalysis.infos ++ sourceInfoFromCurrentRun
       case None               => sourceInfoFromCurrentRun
 
-  override def apiPhaseCompleted(): Unit = ()
+  override def apiPhaseCompleted(): Unit =
+    if Incremental.apiCheck(options) then
+      ApiHashCheck.reportSummary(Incremental.apiCheckReport(options), log)
 
   val phaseListener = CompilerPhaseListener(
     waitForInlining = currentSetup.compilerVersion.startsWith("3."),
