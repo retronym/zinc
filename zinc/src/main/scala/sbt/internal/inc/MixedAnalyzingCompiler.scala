@@ -333,7 +333,7 @@ object MixedAnalyzingCompiler {
       scalac.scalaInstance.actualVersion,
       compileOrder,
       incrementalCompilerOptions.storeApis(),
-      (extra map InterfaceUtil.t2).toArray
+      ((extra ++ Hashing.setupExtra(incrementalCompilerOptions)) map InterfaceUtil.t2).toArray
     )
     config(
       sources,
