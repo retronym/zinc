@@ -45,6 +45,9 @@ import sjsonnew.support.scalajson.unsafe.Parser
  * Cases run in [[ConformanceOrder]]'s order (`--order covering|reversed|enum`), so bugs show
  * early; `--sample N` runs the first N of a shard. `--print-order` writes the order and stops.
  *
+ * At most `--jobs N` (default 2) runs share the machine: each holds a lock on one of N files under
+ * `$TMPDIR/zinc-conformance`, and waits for a free one, whichever checkout started it.
+ *
  * {{{
  * sbt "publishBridges; zincScripted/Test/runMain sbt.internal.inc.bench.Conformance \
  *   --cases flat.jsonl --dir /tmp/conf --sample 100 --out /tmp/conf.jsonl"
@@ -76,6 +79,7 @@ object Conformance:
       incOptions: Map[String, String] = Map.empty,
       out: Option[Path] = None,
       logLevel: Option[Level.Value] = None,
+      jobs: Int = 2,
   )
 
   def parse(args: List[String], o: Options = Options()): Options = args match
@@ -98,6 +102,7 @@ object Conformance:
     case "--pause" :: v :: rest       => parse(rest, o.copy(pause = v.toLong))
     case "--stop" :: rest             => parse(rest, o.copy(stop = true))
     case "--debug" :: rest            => parse(rest, o.copy(logLevel = Some(Level.Debug)))
+    case "--jobs" :: v :: rest        => parse(rest, o.copy(jobs = v.toInt))
     case "--inc-option" :: kv :: rest =>
       val Array(k, v) = kv.split("=", 2)
       parse(rest, o.copy(incOptions = o.incOptions + (k -> v)))
@@ -138,8 +143,9 @@ object Conformance:
 
   /**
    * A base program, as a `prog` or as source `files`. A file's tier places it: 0 in a `macros`
-   * subproject upstream of everything, 1 upstream in the `split` layout, 2 downstream.
-   * `scalacOptions` apply to every subproject.
+   * subproject upstream of everything, 1 upstream in the `split` layout, 2 downstream. A base of
+   * source `files` lists in `tiers` every file an edit can create too, or the file goes by the
+   * flat space's names. `scalacOptions` apply to every subproject.
    */
   final case class Base(
       space: String,
@@ -551,8 +557,36 @@ object Conformance:
       case Some(p) =>
         val lines = items.map(it => s"${it.layout}\t${it.base.id}\t${it.edit.cfg}")
         Files.write(p, lines.mkString("", "\n", "\n").getBytes("UTF-8"))
-      case None => run(o, items)
+      case None => withSlot(o.jobs)(run(o, items))
   end main
+
+  /** Runs `body` holding one of `jobs` machine-wide slots, waiting for one to be free. */
+  def withSlot[A](jobs: Int)(body: => A): A =
+    val dir = Paths.get(sys.props("java.io.tmpdir")).resolve("zinc-conformance")
+    Files.createDirectories(dir)
+    def acquire(waited: Boolean): (java.nio.channels.FileChannel, java.nio.channels.FileLock) =
+      val held = (0 until jobs).iterator.map { i =>
+        val ch = java.nio.channels.FileChannel.open(
+          dir.resolve(s"slot-$i.lock"),
+          java.nio.file.StandardOpenOption.CREATE,
+          java.nio.file.StandardOpenOption.WRITE
+        )
+        val lock = ch.tryLock()
+        if lock == null then
+          ch.close(); None
+        else Some((ch, lock))
+      }.collectFirst { case Some(x) => x }
+      held match
+        case Some(x) => x
+        case None    =>
+          if !waited then Console.err.println(s"waiting for one of $jobs slots in $dir")
+          Thread.sleep(5000)
+          acquire(true)
+    val (ch, lock) = acquire(false)
+    try body
+    finally
+      lock.release(); ch.close()
+  end withSlot
 
   private def run(o: Options, items: Seq[ConformanceOrder.Item]): Unit =
     val dir = o.dir.toAbsolutePath
