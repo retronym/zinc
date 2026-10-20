@@ -276,7 +276,7 @@ object Incremental {
     // val profiler = options.externalHooks.getInvalidationProfiler
     // val runProfiler = new AdaptedRunProfiler(profiler.profileRun)
     // val incremental: IncrementalCommon = new IncrementalNameHashing(log, options, runProfiler)
-    val callback = builder.build()
+    val callback = builder.build(previous)
     try {
       val analysis = withClassfileManager(options, converter, output, outputJarContent) {
         classFileManager =>
@@ -618,11 +618,18 @@ private object AnalysisCallback {
     def build(incHandler: Incremental.IncrementalCallback): AnalysisCallback =
       buildImpl(Some(incHandler))
 
-    // Create an AnalysisCallback without IncHandler for Java compilation purpose.
-    def build(): AnalysisCallback = buildImpl(None)
+    /**
+     * An AnalysisCallback without IncHandler, for compiling Java alone (with pipelining, after
+     * Scala). Its dependencies on classes of `previous` are internal: without the lookup they were
+     * recorded as dependencies on another subproject, through this one's own analysis.
+     */
+    def build(previous: Analysis): AnalysisCallback = buildImpl(None, Some(previous))
 
-    private def buildImpl(incHandlerOpt: Option[Incremental.IncrementalCallback]) = {
-      val previousAnalysisOpt = incHandlerOpt.map(_.previousAnalysisPruned)
+    private def buildImpl(
+        incHandlerOpt: Option[Incremental.IncrementalCallback],
+        previous: Option[Analysis] = None
+    ) = {
+      val previousAnalysisOpt = incHandlerOpt.map(_.previousAnalysisPruned).orElse(previous)
       val binaryToSourceLookup: String => Option[String] = previousAnalysisOpt match {
         case Some(analysis) => (binaryClassName: String) =>
             analysis.relations.productClassName.reverse(binaryClassName).headOption
