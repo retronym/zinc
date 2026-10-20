@@ -97,7 +97,7 @@ private[inc] class IncrementalNameHashingCommon(
           (name: String) => previousAPIs.internal.get(name).orElse(currentAPI(name))
         else currentAPI
       val packageObjects = relations.classes._2s.filter(PackageScope.isPackageObject)
-      val changes = PackageScope.changes(ancestorChanges, api, packageObjects)
+      val changes = PackageScope.changes(ancestorChanges, api, packageObjects, relations)
       val reach = new PackageScope.Reach(
         relations,
         IncrementalCommon.comesFromScalaSource(relations) _,
