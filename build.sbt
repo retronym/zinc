@@ -158,6 +158,7 @@ lazy val zincRoot: Project = (project in file("."))
     scripted / watchTriggers += baseDirectory.value.toGlob / "zinc" / "src" / "sbt-test" / **,
     Scripted.scriptedSource := (zinc212 / sourceDirectory).value / "sbt-test",
     Scripted.scriptedCompileToJar := false,
+    Scripted.scriptedParallelism := java.lang.Runtime.getRuntime.availableProcessors(),
     publish / skip := true,
     commands += Command.command("release") { state =>
       "clean" :: "+compile" :: "+publishSigned" :: "reload" :: state
@@ -753,5 +754,6 @@ def scriptedTask: Def.Initialize[InputTask[Unit]] = Def.inputTask {
     result,
     scriptedBufferLog.value,
     scriptedCompileToJar.value,
+    scriptedParallelism.value,
   )
 }
