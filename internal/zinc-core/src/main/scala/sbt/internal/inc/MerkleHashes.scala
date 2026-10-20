@@ -13,22 +13,8 @@ package sbt
 package internal
 package inc
 
-import xsbt.api.Discovery
 import xsbti.UseScope
-import xsbti.api.{
-  AnalyzedClass,
-  DefinitionType,
-  Id,
-  NameHash,
-  Parameterized,
-  Path,
-  PathComponent,
-  Projection,
-  SafeLazyProxy,
-  Singleton,
-  This,
-  Type
-}
+import xsbti.api.{ AnalyzedClass, DefinitionType, NameHash }
 
 import scala.util.hashing.MurmurHash3
 
@@ -37,11 +23,7 @@ import scala.util.hashing.MurmurHash3
  * that subproject the invalidator walks the hierarchy instead; another subproject only sees the
  * stored API (the analysis it looks up carries no relations but the external inheritance one), so
  * it is given hashes composed from the class's and its ancestors' own hashes, taking the ancestors
- * from the stored linearization. A parent reached through an object, `extends Inst.B` with
- * `object Inst extends Outer`, is stored as `Inst.B`, which no class is called; the external
- * inheritance relation of the class and its ancestors here has its class, `Outer$B`, which is
- * added after the stored ancestors along with those its own stored linearization lists.
- * Ancestors in other subprojects come from their own analyses: a class does not recompile when
+ * from the stored linearization (see [[BinaryName.ancestors]]). Ancestors in other subprojects come from their own analyses: a class does not recompile when
  * an upstream ancestor changes, so the members it materialised from it may be stale.
  * An ancestor contributes its extraHash rather than its apiHash: that covers its class side only,
  * since members of a companion object are not inherited. Its implicit members are added from both
@@ -65,7 +47,7 @@ private[inc] object MerkleHashes {
   def composed(
       analysis: Analysis,
       className: String,
-      elsewhere: String => Option[AnalyzedClass] = _ => None
+      elsewhere: BinaryName => Option[AnalyzedClass] = _ => None
   ): Option[AnalyzedClass] =
     analysis.apis.internal.get(className).map { own =>
       analysis match {
@@ -83,11 +65,11 @@ private[inc] object MerkleHashes {
 
   /** A composed class, and the ancestors it took from outside its own analysis. */
   private[inc] final class Composed(
-      externalNames: Array[String],
+      externalNames: Array[BinaryName],
       externals: Array[AnalyzedClass],
       val result: AnalyzedClass
   ) {
-    def isCurrent(elsewhere: String => Option[AnalyzedClass]): Boolean = {
+    def isCurrent(elsewhere: BinaryName => Option[AnalyzedClass]): Boolean = {
       var i = 0
       while (i < externalNames.length) {
         if (!(elsewhere(externalNames(i)).orNull eq externals(i))) return false
@@ -100,54 +82,16 @@ private[inc] object MerkleHashes {
   private def compose(
       analysis: Analysis,
       own: AnalyzedClass,
-      elsewhere: String => Option[AnalyzedClass]
+      elsewhere: BinaryName => Option[AnalyzedClass]
   ): Composed = {
-    val className = own.name
-    val stored = linearization(own).filter(_ != className)
-    val parents = analysis.relations.inheritance.external
-    val upstream = (className +: stored.filter(analysis.apis.internal.contains))
-      .flatMap(parents.forward)
-      .map(LibraryAncestors.sourceName)
-      .distinct
-      .sorted
-    val known = collection.mutable.Set((className +: stored).map(LibraryAncestors.canonical): _*)
-    val reached = upstream
-      .flatMap(u => u +: elsewhere(u).toVector.flatMap(linearization))
-      .filter(a => known.add(LibraryAncestors.canonical(a)))
-    val names = stored ++ reached
-    val externalNames = names.filterNot(analysis.apis.internal.contains).toArray
+    val key = BinaryName.key(analysis.relations)
+    val names = BinaryName.ancestors(own).toVector
+    val externalNames = names.filterNot(b => analysis.apis.internal.contains(key(b))).toArray
     val externals = externalNames.map(elsewhere(_).orNull)
-    val ancestors = names.flatMap { a =>
-      analysis.apis.internal.get(a).orElse {
-        val i = externalNames.indexOf(a)
-        Option(externals(i))
-      }
+    val ancestors = names.flatMap { b =>
+      analysis.apis.internal.get(key(b)).orElse(Option(externals(externalNames.indexOf(b))))
     }
-    new Composed(externalNames, externals, withParents(composed(own, ancestors), reached))
-  }
-
-  /**
-   * A composed class lists the ancestors it was composed with that its stored linearization
-   * misses, so that the descendant rules of a subproject further downstream find them too.
-   */
-  private def withParents(c: AnalyzedClass, names: Vector[String]): AnalyzedClass =
-    if (names.isEmpty) c
-    else {
-      val companions = c.api()
-      val classApi = companions.classApi()
-      val structure = classApi.structure
-      val parents = structure.parents ++ names.map(parentType)
-      val added = classApi.withStructure(
-        SafeLazyProxy.strict(structure.withParents(SafeLazyProxy.strict(parents)))
-      )
-      c.withApi(SafeLazyProxy.strict(companions.withClassApi(added)))
-    }
-
-  /** A type that [[typeName]] renders as `name`. */
-  private def parentType(name: String): Type = {
-    val parts = name.split('.')
-    val path = parts.init.map(p => Id.of(p): PathComponent) :+ This.of()
-    Projection.of(Singleton.of(Path.of(path)), parts.last)
+    new Composed(externalNames, externals, composed(own, ancestors))
   }
 
   private def composed(own: AnalyzedClass, ancestors: Vector[AnalyzedClass]): AnalyzedClass = {
@@ -237,28 +181,4 @@ private[inc] object MerkleHashes {
       .map(cl => (cl.modifiers.raw, cl.access, cl.annotations.toSeq, cl.definitionType.ordinal))
       .hashCode
 
-  /**
-   * The ancestors a class's stored API lists, as class names, in linearization order. An
-   * object's ancestors only count when there is no class side: a subclass inherits from the class.
-   */
-  def linearization(c: AnalyzedClass): Vector[String] = {
-    val classParents = c.api().classApi().structure.parents
-    val parents =
-      if (classParents.nonEmpty) classParents else c.api().objectApi().structure.parents
-    parents.iterator.flatMap(typeName).toVector.distinct
-  }
-
-  /**
-   * The class a parent type names, dropping type arguments. A class nested in an object is a
-   * projection on the object's, `Discovery.simpleName` names only top-level classes.
-   */
-  def typeName(t: Type): Option[String] = t match {
-    case p: Parameterized => typeName(p.baseType)
-    case p: Projection =>
-      p.prefix match {
-        case q: Projection => typeName(q).map(_ + "." + p.id)
-        case _             => Discovery.simpleName(p)
-      }
-    case t => Discovery.simpleName(t)
-  }
 }
