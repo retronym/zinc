@@ -72,6 +72,10 @@ private[inc] class IncrementalNameHashingCommon(
     ancestorChanges.clear()
     super.detectAPIChanges(recompiledClasses, oldAPI, newAPI)
 
+  override protected def libraryDescendants(relations: Relations): Set[String] =
+    if !LibraryAncestors.invalidates(options) then Set.empty
+    else LibraryAncestors.descendants(changedLibraryClasses, previousAPIs)
+
   private def sameSource(relations: Relations)(className: String): Set[String] =
     relations.definesClass(className).flatMap(relations.classNames)
 

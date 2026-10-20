@@ -1,0 +1,14 @@
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+
+# done this way because last modified times often have ~1s resolution
+> use/compile
+$ sleep 2000
+
+$ copy-file changes/L.scala dep/L.scala
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+
+# E does not refer to the jar, and D's API records only that m is abstract; E's override no longer
+# conforms, which it finds out because D reports the names it inherits from the changed jar
+-> use/compile
