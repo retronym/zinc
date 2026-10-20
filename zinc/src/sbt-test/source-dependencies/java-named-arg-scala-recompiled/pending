@@ -1,0 +1,11 @@
+# Without javac -parameters, class files carry no parameter names, so Zinc cannot see a rename
+# and scalac cannot resolve named arguments when it recompiles a caller without the Java
+# source. Projects that call Java methods with named arguments should compile Java with
+# -parameters; the *-parameters variant of this test covers that.
+
+> p/run 1x2
+
+# Only S changes, so scalac recompiles it without J.java and sees J.f's parameters
+# through the class file, which has no names without javac -parameters
+$ copy-file changes/S.scala p/S.scala
+> p/run 1x2
