@@ -1,0 +1,5 @@
+> p/run 1
+
+# the opaque type's representation, and so the erased signatures App calls, change
+$ copy-file changes/P.scala p/P.scala
+> p/run s

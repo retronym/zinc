@@ -1,0 +1,5 @@
+> run m 0
+
+$ copy-file changes/A.scala A.scala
+# O has a companion class, which holds the static forwarders; A gains k, so O gets one for it
+> run k 1

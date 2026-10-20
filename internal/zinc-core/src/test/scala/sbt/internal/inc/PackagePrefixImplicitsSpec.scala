@@ -12,9 +12,9 @@
 package sbt.internal.inc
 
 class PackagePrefixImplicitsSpec extends UnitSpec:
-  behavior of "IncrementalCommon.packagePrefixImplicits"
+  behavior of "PackageScope.packagePrefixImplicits"
 
-  import IncrementalCommon.packagePrefixImplicits
+  import PackageScope.packagePrefixImplicits
 
   it should "hold for Scala 2 unless a source feature drops package prefixes" in {
     packagePrefixImplicits("2.13.16", Nil) shouldBe true

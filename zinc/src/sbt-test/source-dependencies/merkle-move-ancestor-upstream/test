@@ -1,0 +1,10 @@
+> app/run 0
+
+# A moves from the client's module to the upstream one
+$ delete app/A.scala
+$ copy-file changes/A0.scala lib/A.scala
+> app/run 0
+
+# then changes there: B now sees A as an external ancestor
+$ copy-file changes/A1.scala lib/A.scala
+> app/run s

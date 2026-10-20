@@ -13,7 +13,7 @@ package sbt
 package internal
 package inc
 
-import java.io.{ ByteArrayOutputStream, PrintStream }
+import java.io.{ ByteArrayOutputStream, OutputStream, PrintStream }
 import java.nio.file.{ Files, Path, Paths, StandardCopyOption }
 import java.nio.file.attribute.{ BasicFileAttributes, FileTime }
 import java.net.URLClassLoader
@@ -274,6 +274,9 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkAnnotated") {
       case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
     },
+    onArgs("checkNotAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkNotAnnotated(i, cls, annotation)
+    },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
         p.checkMainClasses(i, javaV, dropRightColon(src), products)
@@ -283,6 +286,10 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     },
     onArgs("checkProductsExists") {
       case (p, src :: Nil, i) => p.checkProductsExist(i, src)
+    },
+    onArgs("checkExternalDependencies") {
+      case (p, cls :: dependencies, i) =>
+        p.checkExternalDependencies(i, dropRightColon(cls), dependencies)
     },
     onArgs("checkDependencies") {
       case (p, cls :: dependencies, i) => p.checkDependencies(i, dropRightColon(cls), dependencies)
@@ -559,6 +566,15 @@ case class ProjectStructure(
       assert(found.nonEmpty, s"$cls has no method annotated $annotation")
     }
 
+  /** Test discovery, as sbt does it: does no public method of `cls` look annotated `annotation`? */
+  def checkNotAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.isEmpty, s"$cls has a method annotated $annotation")
+    }
+
   def checkMainClasses(
       i: IncState,
       javaV: String,
@@ -630,6 +646,19 @@ case class ProjectStructure(
       ()
     }
 
+  /** The classes of other subprojects that `className` depends on. */
+  def checkExternalDependencies(
+      i: IncState,
+      className: String,
+      expected: List[String]
+  ): Future[Unit] =
+    compile(i).map { analysis =>
+      val actual = analysis.relations.memberRef.external.forward(className) ++
+        analysis.relations.inheritance.external.forward(className)
+      assert(expected.toSet == actual, s"Expected external dependencies $expected, got $actual")
+      ()
+    }
+
   def checkNameExistsInClass(i: IncState, className: String, name: String): Future[Unit] =
     compile(i).map[Unit] { analysis =>
       assert(analysis.apis.externalAPI(className).nameHashes.exists(_.name == name))
@@ -678,16 +707,15 @@ case class ProjectStructure(
           val cp = (jars ++ (unmanagedJars :+ output) ++ internalClasspath).map(_.toAbsolutePath)
           val loader = ClasspathUtil.makeLoader(cp.toIndexedSeq, i.si, baseDirectory)
           val buffer = new ByteArrayOutputStream(8192)
-          val oldOut = System.out
           try
-            System.setOut(new PrintStream(buffer))
-            invokeMain(loader, getMainMethod(mainClassName, loader), params)
+            ThreadLocalOut.capture(new PrintStream(buffer)) {
+              invokeMain(loader, getMainMethod(mainClassName, loader), params)
+            }
           catch
             case t: Throwable =>
-              buffer.writeTo(oldOut)
+              buffer.writeTo(System.out)
               throw t
           finally
-            System.setOut(oldOut)
             loader match
               case f: ClasspathFilter => f.close()
         case Seq() => throw new TestFailed(s"Did not find any main class")
@@ -762,9 +790,13 @@ case class ProjectStructure(
         // wait for the full compilation from the dependencies
         // during pipelining, downstream compilation may complete before the upstream
         // to avoid deletion of directories etc, we need to wait for the upstream to finish
+        val settledDeps =
+          wholeDeps.transformWith(deps =>
+            futureScalaAnalysis.transformWith(_ => Future.fromTry(deps))
+          )
         val f =
           for
-            pj <- wholeDeps
+            pj <- settledDeps
             a0 <- futureScalaAnalysis
             a <- futureJavaAnalysis(pj, a0)
           yield a
@@ -940,6 +972,7 @@ case class ProjectStructure(
     import scala.jdk.CollectionConverters.*
     val map = new java.util.HashMap[String, String]
     properties.asScala foreach { case (k: String, v: String) => map.put(k, v) }
+    sys.props.get(IncHandler.HashingProperty).foreach(map.putIfAbsent(Hashing.Key, _))
     val externalHooks = new DefaultExternalHooks(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
@@ -1017,6 +1050,12 @@ case class ProjectStructure(
 end ProjectStructure
 
 object IncHandler:
+
+  /**
+   * The hashing mode (see [[Hashing]]) of every project whose `incOptions.properties` does not
+   * set one, for running the scripted suite in either mode.
+   */
+  val HashingProperty = "zinc.scripted.hashing"
   type Cached = (Path, XScalaInstance)
   private final val scriptedCompilerCache = new mutable.WeakHashMap[String, Cached]()
 
@@ -1052,3 +1091,39 @@ object IncHandler:
           defines
       case _ => Locate.definesClass(entry)
 end IncHandler
+
+/**
+ * Lets each thread send `System.out` to a stream of its own, so that tests running at once can
+ * each capture the output of the program they run.
+ *
+ * Setting `System.out` from each test instead is a race: a test can restore the stream of another
+ * test that has finished, after which all output goes to that test's buffer. Programs that print
+ * with `scala.Console` also keep the `System.out` of the time `Console` was initialized, in a
+ * Scala library loader that outlives the tests, so the stream they keep must route by thread too.
+ */
+private[inc] object ThreadLocalOut:
+  private val target = new ThreadLocal[PrintStream]
+  @volatile private var fallback: PrintStream = System.out
+
+  private val routed: PrintStream =
+    val out = new OutputStream:
+      private def current: PrintStream = Option(target.get).getOrElse(fallback)
+      override def write(b: Int): Unit = current.write(b)
+      override def write(b: Array[Byte], off: Int, len: Int): Unit = current.write(b, off, len)
+      override def flush(): Unit = current.flush()
+    new PrintStream(out, true)
+
+  /** Routes `System.out` by thread while `body` runs. */
+  def install[A](body: => A): A =
+    val original = System.out
+    fallback = original
+    System.setOut(routed)
+    try body
+    finally System.setOut(original)
+
+  /** Sends the `System.out` output of this thread to `out` while `body` runs. */
+  def capture[A](out: PrintStream)(body: => A): A =
+    target.set(out)
+    try body
+    finally target.remove()
+end ThreadLocalOut

@@ -20,7 +20,12 @@ import xsbti.compile.analysis.ReadSourceInfos
 
 import scala.collection.mutable.ArrayBuffer
 
-class TestCallback extends AnalysisCallback4:
+/**
+ * @param merkle whether the bridge extracts APIs for Merkle hashing (see `AnalysisCallback5`).
+ */
+class TestCallback(merkle: Boolean) extends AnalysisCallback5:
+  def this() = this(false)
+
   case class TestUsedName(name: String, scopes: ju.EnumSet[UseScope])
 
   val classDependencies = new ArrayBuffer[(String, String, DependencyContext)]
@@ -140,6 +145,8 @@ class TestCallback extends AnalysisCallback4:
   override def api(source: VirtualFileRef, api: ClassLike): Unit =
     apis(source) += api
     ()
+
+  override def merkleHashing(): Boolean = merkle
 
   override def mainClass(source: File, className: String): Unit = ()
 

@@ -13,7 +13,6 @@ package xsbt
 
 import java.util.{ Arrays, Comparator }
 import scala.tools.nsc.symtab.Flags
-import xsbti.VirtualFile
 import xsbti.api._
 
 import scala.annotation.tailrec
@@ -44,7 +43,9 @@ import ExtractAPI.ConstructorWithDefaultArgument
  *   def foo: Int
  * }
  *
- * Each compilation unit should be processed by a fresh instance of this class.
+ * One instance serves a run: call `startUnit` before each compilation unit. What a unit registers
+ * (its classes, main classes and the tree path's caches) is per unit. Hashing caches that depend only
+ * on symbols and types are shared by all units of the run; see "Direct hashing" below.
  *
  * NOTE: This class extract *full* API representation. In most of other places in the incremental compiler,
  * only non-private (accessible from other compilation units) members are relevant. Other parts of the
@@ -54,9 +55,10 @@ import ExtractAPI.ConstructorWithDefaultArgument
  */
 class ExtractAPI[GlobalType <: Global](
     val global: GlobalType,
-    // Tracks the source file associated with the CompilationUnit currently being processed by the API phase.
-    // This is used when recording inheritance dependencies.
-    sourceFile: VirtualFile
+    outputDirs: Iterable[java.nio.file.Path] = Nil,
+    isSubprojectClass: String => Boolean = _ => false,
+    materialiseLibraryMembers: String => Boolean = _ => true,
+    merkle: Boolean = true
 ) extends Compat
     with ClassName
     with GlobalHelpers {
@@ -69,6 +71,8 @@ class ExtractAPI[GlobalType <: Global](
   //   caches on other structures had minimal effect on time and cache size
   //   (tried: Definition, Modifier, Path, Id, String)
   private[this] val typeCache = perRunCaches.newMap[(Symbol, Type), xsbti.api.Type]()
+  // types that `isPlain` admits, which convert the same in any owner, shared by all units
+  private[this] val plainTypeCache = new java.util.HashMap[Type, xsbti.api.Type]()
   // these caches are necessary for correctness
   private[this] val structureCache = perRunCaches.newMap[Symbol, xsbti.api.Structure]()
   private[this] val erasedSignatureCache = perRunCaches.newMap[Symbol, xsbti.api.Annotation]()
@@ -84,6 +88,18 @@ class ExtractAPI[GlobalType <: Global](
   private[this] val allNonLocalClassSymbols = perRunCaches.newSet[Symbol]()
   private[this] val allNonLocalClassesInSrc = perRunCaches.newSet[xsbti.api.ClassLike]()
   private[this] val _mainClasses = perRunCaches.newSet[String]()
+
+  /** Forget what the previous compilation unit extracted and registered. */
+  def startUnit(): Unit = {
+    typeCache.clear()
+    structureCache.clear()
+    classLikeCache.clear()
+    pending.clear()
+    allNonLocalClassSymbols.clear()
+    allNonLocalClassesInSrc.clear()
+    _mainClasses.clear()
+  }
+
   private[this] val javaVersion: Int =
     try {
       val version = sys.props("java.specification.version").split("\\.").toList.map(_.toInt)
@@ -167,7 +183,9 @@ class ExtractAPI[GlobalType <: Global](
           renameTo(tv) = newName
       }
     }
-    def renaming(symbol: Symbol): Option[String] = renameTo.get(symbol)
+    def renaming(symbol: Symbol): Option[String] =
+      if (nestingLevel == 0) None else renameTo.get(symbol)
+    def isEmpty: Boolean = nestingLevel == 0
   }
 
   /**
@@ -253,6 +271,17 @@ class ExtractAPI[GlobalType <: Global](
     }
   }
 
+  private[this] val printedArgsCache = new java.util.IdentityHashMap[AnnotationInfo, String]()
+  private def printedArgs(a: AnnotationInfo): String = {
+    val cached = printedArgsCache.get(a)
+    if (cached ne null) cached
+    else {
+      val printed = ReusableTreePrinter.mkString(a.args, "(", ",", ")")
+      printedArgsCache.put(a, printed)
+      printed
+    }
+  }
+
   // The compiler only pickles static annotations, so only include these in the API.
   // This way, the API is not sensitive to whether we compiled from source or loaded from classfile.
   // (When looking at the sources we see all annotations, but when loading from classes we only see the pickled (static) ones.)
@@ -268,7 +297,7 @@ class ExtractAPI[GlobalType <: Global](
               if (a.assocs.isEmpty)
                 Array(
                   xsbti.api.AnnotationArgument
-                    .of("", ReusableTreePrinter.mkString(a.args, "(", ",", ")"))
+                    .of("", printedArgs(a))
                 ) // what else to do with a Tree?
               else
                 a.assocs
@@ -490,6 +519,9 @@ class ExtractAPI[GlobalType <: Global](
    * so we must ensure changes propagate somehow.
    *
    * TODO: can we include hashes for parent classes instead? This seems a bit messy.
+   *
+   * Under Merkle hashing (`merkle`), Zinc does compose them: members inherited from analysed
+   * classes are left out, and library ones may be stubs.
    */
   private def mkStructureWithInherited(info: Type, s: Symbol): xsbti.api.Structure = {
     val ancestorTypes0 = linearizedAncestorTypes(info)
@@ -504,11 +536,97 @@ class ExtractAPI[GlobalType <: Global](
         ancestorTypes0
     val decls = info.decls.toList
     val declsNoModuleCtor = if (s.isModuleClass) removeConstructors(decls) else decls
-    val declSet = decls.toSet
-    val inherited =
-      info.nonPrivateMembers.toList.filterNot(declSet) // private members are not inherited
-    mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
+    if (merkle) {
+      val (inherited, platform) =
+        ancestorDecls(info).partition(m => !isStubbedOwner(m.owner) || discoveryReads(m))
+      mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited, platform.flatMap(stub))
+    } else {
+      val declSet = decls.toSet
+      val inherited =
+        info.nonPrivateMembers.toList.filterNot(declSet) // private members are not inherited
+      mkStructure(s, ancestorTypes, declsNoModuleCtor, inherited)
+    }
   }
+
+  /**
+   * Is `owner` defined in this subproject, or in another one that Zinc has analysed? Zinc
+   * composes the name hashes of members inherited from such classes from their own decls, so
+   * they are not materialised here, except annotated ones: test discovery reads the annotations
+   * of inherited methods (a JUnit `@Test` in a base class). Members of plain library classes
+   * still are.
+   */
+  private def isInternal(owner: Symbol): Boolean = {
+    val cached = internalCache.get(owner)
+    if (cached ne null) cached.booleanValue
+    else {
+      val b = isInternal0(owner)
+      internalCache.put(owner, b)
+      b
+    }
+  }
+
+  private[this] val internalCache = new java.util.HashMap[Symbol, java.lang.Boolean]()
+
+  /**
+   * Is `owner` part of the platform: `Any`, `AnyRef`/`Object`, or a class of scala-library or
+   * scala-reflect? Those change only with the Scala version, which recompiles everything, or
+   * (for `Object`) not at all, so their members are materialised as stubs without types (`==`,
+   * `hashCode`, `Product`'s members in each case class). Other JDK classes are not included: a
+   * JDK upgrade need not recompile, and it can add inherited members.
+   */
+  private def isPlatform(owner: Symbol): Boolean = {
+    val cached = platformCache.get(owner)
+    if (cached ne null) cached.booleanValue
+    else {
+      val b = isPlatform0(owner)
+      platformCache.put(owner, b)
+      b
+    }
+  }
+
+  private[this] val platformCache = new java.util.HashMap[Symbol, java.lang.Boolean]()
+
+  /**
+   * Are members inherited from `owner` recorded as stubs (name, access, modifiers) rather than in
+   * full? Always for the platform. For other libraries, unless Zinc asks for their members: it
+   * otherwise treats a library ancestor coarsely, invalidating by the names a class inherits from
+   * it when its jar changes, rather than copying its signatures into every descendant.
+   */
+  private def isStubbedOwner(owner: Symbol): Boolean =
+    stubbedOwnerCache.getOrElseUpdate(
+      owner,
+      isPlatform(owner) || !materialiseLibraryMembers(flatname(owner, '.') + owner.moduleSuffix)
+    )
+
+  private[this] val stubbedOwnerCache = perRunCaches.newMap[Symbol, Boolean]()
+
+  private def isPlatform0(owner: Symbol): Boolean =
+    owner == definitions.AnyClass || owner == definitions.AnyRefClass ||
+      owner == definitions.ObjectClass ||
+      (owner.associatedFile match {
+        case entry: scala.reflect.io.ZipArchive#Entry =>
+          entry.underlyingSource.exists { jar =>
+            jar.name.startsWith("scala-library") || jar.name.startsWith("scala-reflect")
+          }
+        case _ => false
+      })
+
+  private def isInternal0(owner: Symbol): Boolean =
+    isSubprojectClass(flatname(owner, '.') + owner.moduleSuffix) ||
+      (owner.sourceFile match {
+        case AbstractZincFile(_) => true
+        case _                   =>
+          val at = owner.associatedFile
+          def inOutput(f: java.io.File) =
+            f != null &&
+              outputDirs.exists(d => f.toPath.toAbsolutePath.startsWith(d.toAbsolutePath))
+          at match {
+            case null                                     => false
+            case entry: scala.reflect.io.ZipArchive#Entry =>
+              entry.underlyingSource.exists(z => inOutput(z.file))
+            case f => inOutput(f.file)
+          }
+      })
 
   // Note that the ordering of classes in `baseClasses` is important.
   // It would be easier to just say `baseTypeSeq.toList.tail`,
@@ -519,14 +637,103 @@ class ExtractAPI[GlobalType <: Global](
       s: Symbol,
       bases: List[Type],
       declared: List[Symbol],
-      inherited: List[Symbol]
+      inherited: List[Symbol],
+      stubs: List[xsbti.api.ClassDefinition] = Nil
   ): xsbti.api.Structure = {
     xsbti.api.Structure.of(
       lzy(types(s, bases)),
       lzy(processDefinitions(s, declared)),
-      lzy(processDefinitions(s, inherited))
+      lzy(processDefinitions(s, inherited) ++ stubs.sortBy(_.name))
     )
   }
+
+  /**
+   * The declarations a class's ancestors contribute to its API: every non-private declaration of
+   * every library base class, and those of a base class in this subproject that discovery reads.
+   * Overridden declarations are included, and no member's type is consulted: a name's hashes
+   * combine all its declarations along the linearization, as Zinc's composition does for ancestors
+   * in this subproject. That is a superset of the inherited members, and it keeps the declarations
+   * of library ancestors that another ancestor overrides, which descendant invalidation needs:
+   * when `class D extends P with LibT` and `P` stops implementing `LibT`'s abstract `n`, `D` must
+   * recompile, and a library class has no stored API to show that `n` is abstract there. Scala 3's
+   * `ExtractAPI` also takes all declarations of each base class. The walk mirrors
+   * `FindMembers.walkBaseClasses`, but without its override checks, which compare member types as
+   * seen from the class.
+   */
+  private def ancestorDecls(info: Type): List[Symbol] = {
+    val result = new collection.mutable.ListBuffer[Symbol]
+    val flagMask = phase.flagMask
+    val fastFlags = (flagMask & ~Flags.InitialFlags) == 0
+    var bcs = info.baseClasses
+    if (bcs ne Nil) bcs = bcs.tail
+    while (bcs ne Nil) {
+      val bc = bcs.head
+      val internal = isInternal(bc)
+      var ms = bc.info.decls.toList
+      while (ms ne Nil) {
+        val m = ms.head
+        val flags = if (fastFlags) m.rawflags & flagMask else m.flags & flagMask
+        if (
+          (flags & Flags.BridgeAndPrivateFlags) == 0 && !m.isConstructor &&
+          (!internal || discoveryReadsAnnotations(m))
+        ) result += m
+        ms = ms.tail
+      }
+      bcs = bcs.tail
+    }
+    result.toList
+  }
+
+  /** Test and main-class discovery read inherited annotations and `main` signatures. */
+  private def discoveryReads(m: Symbol): Boolean = discoveryReadsAnnotations(m) ||
+    m.name == nme.main
+
+  /**
+   * Does `m` carry an annotation discovery can read? Only static annotations count, as in
+   * `mkAnnotations`: a source-only one such as `@nowarn` is present when `m`'s owner is compiled
+   * in the same run and absent when it is read from a classfile, so counting it would make a
+   * descendant's API depend on the batch. `m`'s type is completed first: on a member read from a
+   * classfile, scalac adds `@throws` only then, so it would be present or not depending on what
+   * else the run had typed.
+   */
+  private def discoveryReadsAnnotations(m: Symbol): Boolean = {
+    m.info
+    staticAnnotations(m.annotations).nonEmpty
+  }
+
+  /**
+   * A library member as a name with its access and modifiers, but no types: descendant
+   * invalidation still sees which names a class inherits, and which are abstract, without
+   * paying for their signatures. Type members and classes count too, except the platform's.
+   */
+  private def stub(m: Symbol): Option[xsbti.api.ClassDefinition] = {
+    var s = stubCache.get(m)
+    if (s eq null) {
+      s = stub0(m)
+      stubCache.put(m, s)
+    }
+    s
+  }
+  private[this] val stubCache = new java.util.HashMap[Symbol, Option[xsbti.api.ClassDefinition]]()
+  private def stub0(m: Symbol): Option[xsbti.api.ClassDefinition] =
+    if (
+      ((isClass(m) || m.isNonClassType) && isPlatform(m.owner)) ||
+      (m.isMethod && (!m.isSourceMethod || m.isSetter))
+    ) None
+    else {
+      val name = if (m.isMethod) simpleNameForMethod(m) else simpleName(m)
+      Some(
+        xsbti.api.Def.of(
+          name,
+          getAccess(m),
+          getModifiers(m),
+          Array.empty,
+          Array.empty,
+          Array.empty,
+          Constants.emptyType
+        )
+      )
+    }
   private def processDefinitions(in: Symbol, defs: List[Symbol]): Array[xsbti.api.ClassDefinition] =
     sort(defs.toArray).flatMap((d: Symbol) => definition(in, d))
   private[this] def sort(defs: Array[Symbol]): Array[Symbol] = {
@@ -563,7 +770,16 @@ class ExtractAPI[GlobalType <: Global](
     // `isParamAccessor` does not exist in all supported versions of Scala, so the flag check is done directly
     (getter == NoSymbol && !sym.hasFlag(Flags.PARAMACCESSOR)) || (getter eq sym)
   }
+  private[this] val modifiersCache = new java.util.HashMap[Symbol, xsbti.api.Modifiers]()
   private def getModifiers(s: Symbol): xsbti.api.Modifiers = {
+    var m = modifiersCache.get(s)
+    if (m eq null) {
+      m = getModifiers0(s)
+      modifiersCache.put(s, m)
+    }
+    m
+  }
+  private def getModifiers0(s: Symbol): xsbti.api.Modifiers = {
     import Flags._
     import xsbt.Compat._
     val absOver = s.hasFlag(ABSOVERRIDE)
@@ -585,7 +801,16 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   private def isImplicit(s: Symbol) = s.hasFlag(Flags.IMPLICIT)
+  private[this] val accessCache = new java.util.HashMap[Symbol, xsbti.api.Access]()
   private def getAccess(c: Symbol): xsbti.api.Access = {
+    var a = accessCache.get(c)
+    if (a eq null) {
+      a = getAccess0(c)
+      accessCache.put(c, a)
+    }
+    a
+  }
+  private def getAccess0(c: Symbol): xsbti.api.Access = {
     if (c.isPublic) Constants.public
     else if (c.isPrivateLocal) Constants.privateLocal
     else if (c.isProtectedLocal) Constants.protectedLocal
@@ -610,7 +835,37 @@ class ExtractAPI[GlobalType <: Global](
   }
 
   private def processType(in: Symbol, t: Type): xsbti.api.Type =
-    typeCache.getOrElseUpdate((in, t), makeType(in, t))
+    if (existentialRenamings.isEmpty) {
+      val plain = plainTypeCache.get(t)
+      if (plain ne null) plain
+      else if (isPlain(t)) {
+        val made = makeType(in, t)
+        plainTypeCache.put(t, made)
+        made
+      } else typeCache.getOrElseUpdate((in, t), makeType(in, t))
+    } else typeCache.getOrElseUpdate((in, t), makeType(in, t))
+
+  /**
+   * Whether `t` converts and hashes the same in any owner and outside existential renamings: it
+   * names classes, prefixes and type parameters only, and holds no alias, refinement, raw Java
+   * type, annotation or binder (existential or polymorphic), whose conversion reads `in`.
+   */
+  private def isPlain(t: Type): Boolean = t match {
+    case TypeRef(pre, sym, args) =>
+      !sym.isAliasType && !sym.isRefinementClass && isPlain(pre) && {
+        if (args.isEmpty) !isRawType(t)
+        else {
+          var rest = args
+          while ((rest ne Nil) && isPlain(rest.head)) rest = rest.tail
+          rest eq Nil
+        }
+      }
+    case ThisType(_)        => true
+    case SingleType(pre, _) => isPlain(pre)
+    case ConstantType(_)    => true
+    case NoPrefix | NoType  => true
+    case _                  => false
+  }
   private def makeType(in: Symbol, t: Type): xsbti.api.Type = {
 
     val dealiased = t match {
@@ -928,16 +1183,27 @@ class ExtractAPI[GlobalType <: Global](
     s.unexpandedName.decode.trim
   }
 
+  private[this] val methodNameCache = new java.util.HashMap[Symbol, String]()
   private def simpleNameForMethod(s: Symbol): String = {
+    var n = methodNameCache.get(s)
+    if (n eq null) {
+      n = simpleNameForMethod0(s)
+      methodNameCache.put(s, n)
+    }
+    n
+  }
+  private def simpleNameForMethod0(s: Symbol): String = {
     val name = s.unexpandedName
     val untrimmedName = if (name == nme.CONSTRUCTOR)
       constructorNameAsString(s.enclClass)
     else {
       val decoded = name.decode
-      decoded match {
-        case ConstructorWithDefaultArgument(index) => constructorNameAsString(s.enclClass, index)
-        case _                                     => decoded
-      }
+      if (!decoded.startsWith("<init>$default$")) decoded
+      else
+        decoded match {
+          case ConstructorWithDefaultArgument(index) => constructorNameAsString(s.enclClass, index)
+          case _                                     => decoded
+        }
     }
     untrimmedName.trim
   }

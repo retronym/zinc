@@ -1,0 +1,9 @@
+> app/run none
+
+# A gains a parent; the Java class B and the trait C extending it are unchanged
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run Int
+
+# a later edit to X0, which only C's refreshed linearization lists
+$ copy-file lib/changes/X0.scala lib/X0.scala
+> app/run String

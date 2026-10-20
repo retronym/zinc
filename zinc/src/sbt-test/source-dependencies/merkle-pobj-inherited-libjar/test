@@ -1,0 +1,14 @@
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+
+# Client, in `package a; package b`, resolves Foo to a.Foo; `package object b` extends q.Base from the jar.
+> use/compile
+$ sleep 2000
+
+$ copy-file changes/Base.scala dep/Base.scala
+> dep/package
+$ copy-file dep/target/dep.jar use/lib/dep.jar
+
+# Base gains Foo, which the package object inherits from the jar: it shadows a.Foo, and its v is a String, so a clean
+# build fails. The package object recompiles, as every descendant of a changed jar does, and its stubs gain Foo.
+-> use/compile

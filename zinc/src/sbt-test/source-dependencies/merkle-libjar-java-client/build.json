@@ -1,0 +1,14 @@
+{
+  "projects": [
+    {
+      "name": "dep"
+    },
+    {
+      "name": "use"
+    },
+    {
+      "name": "app",
+      "dependsOn": ["use"]
+    }
+  ]
+}
