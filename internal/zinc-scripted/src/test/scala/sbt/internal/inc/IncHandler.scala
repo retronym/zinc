@@ -15,6 +15,7 @@ package inc
 
 import java.io.{ ByteArrayOutputStream, PrintStream }
 import java.nio.file.{ Files, Path, Paths, StandardCopyOption }
+import java.nio.file.attribute.{ BasicFileAttributes, FileTime }
 import java.net.URLClassLoader
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
@@ -24,7 +25,7 @@ import sbt.util.Logger
 import sbt.util.InterfaceUtil._
 import sbt.internal.inc.JavaInterfaceUtil.{ EnrichOption, EnrichOptional }
 import xsbt.api.Discovery
-import xsbti.{ FileConverter, Problem, Severity, VirtualFileRef, VirtualFile }
+import xsbti.{ FileConverter, PathBasedFile, Problem, Severity, VirtualFileRef, VirtualFile }
 import xsbti.compile.{
   AnalysisContents,
   AnalysisStore,
@@ -52,6 +53,7 @@ import java.lang.reflect.Modifier.{ isPublic, isStatic }
 import java.util.{ Optional, Properties }
 
 import sbt.internal.inc.classpath.{ ClassLoaderCache, ClasspathUtil, ClasspathFilter }
+import sbt.internal.inc.consistent.ConsistentFileAnalysisStore
 import sbt.internal.scripted.{ StatementHandler, TestFailed }
 import sbt.internal.util.ManagedLogger
 import sjsonnew.support.scalajson.unsafe.{ Converter, Parser => JsonParser }
@@ -361,17 +363,32 @@ case class ProjectStructure(
 
   val stamper = Stamps.timeWrapBinaryStamps(converter)
   val cacheFile = baseDirectory / "target" / "inc_compile.zip"
-  val fileStore = FileAnalysisStore.binary(cacheFile.toFile)
+
+  /**
+   * The analysis store: Zinc's protobuf format, as sbt uses by default, or with
+   * `analysis.format = consistent` in `incOptions.properties` the consistent format, which sbt
+   * uses with `-Dsbt.analysis2024=true` and which compresses on several threads.
+   */
+  val fileStore =
+    Option(loadIncProperties(baseDirectory).getProperty("analysis.format")).map(_.trim) match {
+      case None | Some("binary") => FileAnalysisStore.binary(cacheFile.toFile)
+      case Some("consistent")    => ConsistentFileAnalysisStore.binary(cacheFile.toFile)
+      case Some(other)           => sys.error(s"Unknown analysis.format $other")
+    }
   val cachedStore = AnalysisStore.cached(fileStore)
   val earlyCacheFile = baseDirectory / "target" / "early" / "inc_compile.zip"
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
   private val invalidationLines = new ConcurrentLinkedQueue[String]()
+  private val timingLines = new ConcurrentLinkedQueue[String]()
   private val compilerLog = new Logger {
     override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
     override def success(message: => String): Unit = scriptedLog.success(message)
     override def log(level: sbt.util.Level.Value, message: => String): Unit = {
       val rendered = message
-      rendered.linesIterator.filter(_.startsWith("[inv] ")).foreach(invalidationLines.add)
+      rendered.linesIterator.foreach { line =>
+        if (line.startsWith("[inv] ")) invalidationLines.add(line)
+        else if (line.startsWith("[zinc-timing]")) timingLines.add(line)
+      }
       scriptedLog.log(level, rendered)
     }
   }
@@ -380,6 +397,21 @@ case class ProjectStructure(
 
   // We specify the class file manager explicitly even though it's noew possible
   // to specify it in the incremental option property file (this is the default for sbt)
+  /** `javac.options` in `incOptions.properties`, separated by spaces. */
+  val javacOptions: Array[String] =
+    Option(loadIncProperties(baseDirectory).getProperty("javac.options")).toArray
+      .flatMap(_.trim.split(" +"))
+
+  /**
+   * Whether the compiler's own jars go on the compile classpath, as they do unless
+   * `incOptions.properties` sets `classpath.scalaInstance = false`. A build that compiles the
+   * Scala library and compiler itself, such as scala/scala, needs them off, or the compiler's
+   * classes shadow the ones it is compiling.
+   */
+  val scalaInstanceOnClasspath: Boolean =
+    Option(loadIncProperties(baseDirectory).getProperty("classpath.scalaInstance"))
+      .forall(_.trim != "false")
+
   val (incOptions, scalacOptions) = {
     val properties = loadIncProperties(baseDirectory)
     val (incOptions0, sco) = loadIncOptions(properties)
@@ -471,6 +503,14 @@ case class ProjectStructure(
     }
     ()
   }
+
+  /** Returns the invalidation-log lines recorded since the last call, and forgets them. */
+  def drainInvalidationLog(): Vector[String] =
+    Iterator.continually(invalidationLines.poll()).takeWhile(_ != null).toVector
+
+  /** Returns the `[zinc-timing]` lines recorded since the last call, and forgets them. */
+  def drainTimings(): Vector[String] =
+    Iterator.continually(timingLines.poll()).takeWhile(_ != null).toVector
 
   def checkRecompilations(i: IncState, step: Int, expected: List[String]): Future[Unit] =
     compile(i).map { analysis =>
@@ -763,7 +803,7 @@ case class ProjectStructure(
     import i._
     val sources = scalaSources ++ javaSources
     val vs = sources.toList.map(converter.toVirtualFile)
-    val entryLookup = new PerClasspathEntryLookupImpl(lookupAnalysis, Locate.definesClass)
+    val entryLookup = new PerClasspathEntryLookupImpl(lookupAnalysis, IncHandler.definesClass)
     val reporter = new ManagedLoggedReporter(maxErrors, scriptedLog)
     val extra = Array(t2(("key", "value")))
     val previousResult = prev()
@@ -793,7 +833,8 @@ case class ProjectStructure(
       extra = extra
     )
 
-    val paths = (i.si.allJars.toList.map(_.toPath) ++ (unmanagedJars :+ output) ++ internalCp)
+    val scalaJars = if (scalaInstanceOnClasspath) i.si.allJars.toList.map(_.toPath) else Nil
+    val paths = scalaJars ++ (unmanagedJars :+ output) ++ internalCp
     val cp = paths.map(converter.toVirtualFile)
     val in = incrementalCompiler.inputs(
       cp.toArray,
@@ -802,7 +843,7 @@ case class ProjectStructure(
       if (exportPipelining) Some(earlyOutput)
       else None,
       scalacOptions,
-      javacOptions = Array(),
+      javacOptions,
       maxErrors,
       sourcePositionMappers = Array(),
       CompileOrder.Mixed,
@@ -813,11 +854,19 @@ case class ProjectStructure(
       converter,
       stamper
     )
+    val start = System.nanoTime()
     val result =
       if (javaOnly) incrementalCompiler.compileAllJava(in, compilerLog)
       else incrementalCompiler.compile(in, compilerLog)
+    val compiled = System.nanoTime()
     val analysis = result.analysis match { case a: Analysis => a }
-    cachedStore.set(AnalysisContents.create(analysis, result.setup))
+    // As sbt does, store the analysis only when the compile changed it.
+    if (result.hasModified) cachedStore.set(AnalysisContents.create(analysis, result.setup))
+    val stored = System.nanoTime()
+    // The whole call into Zinc, setup and stamping included, and storing its analysis after.
+    timingLines.add(
+      f"[zinc-timing] zincCall=${(compiled - start) / 1e6}%.1fms analysisWrite=${(stored - compiled) / 1e6}%.1fms"
+    )
     val javaOnlyStr = if (javaOnly) "(java-only) " else ""
     scriptedLog.info(s"""[$name] ${javaOnlyStr}compilation done: ${sources.mkString(", ")}""")
     analysis
@@ -908,11 +957,15 @@ case class ProjectStructure(
       Optional.empty[XClassFileManager]
     )
       .withInvalidationProfiler(profiler)
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if (scalaVersion.startsWith("3"))
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions = {
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)
@@ -993,4 +1046,29 @@ object IncHandler {
 
   private[internal] final val classLoaderCache =
     Some(new ClassLoaderCache(new URLClassLoader(Array())))
+
+  private[this] final val jarDefinesClassCache =
+    new java.util.concurrent.ConcurrentHashMap[Path, (FileTime, Long, DefinesClass)]
+
+  /**
+   * What a classpath entry defines, as sbt looks it up: sbt caches each jar's index across
+   * compiles (`classpathDefinesClassCache`), keyed by the file and its stamp. `Locate.entry` asks
+   * for the index of every entry before the one that defines a class, on every lookup, so without
+   * the cache each lookup on the classpath reopens those jars.
+   */
+  def definesClass(entry: VirtualFile): DefinesClass =
+    entry match {
+      case p: PathBasedFile if Files.isRegularFile(p.toPath) =>
+        val path = p.toPath
+        val attrs = Files.readAttributes(path, classOf[BasicFileAttributes])
+        val (time, size) = (attrs.lastModifiedTime, attrs.size)
+        val cached = jarDefinesClassCache.get(path)
+        if ((cached ne null) && cached._1 == time && cached._2 == size) cached._3
+        else {
+          val defines = Locate.definesClass(entry)
+          jarDefinesClassCache.put(path, (time, size, defines))
+          defines
+        }
+      case _ => Locate.definesClass(entry)
+    }
 }
