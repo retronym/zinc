@@ -57,6 +57,9 @@ trait Lookup extends ExternalLookup:
       className <- analysis.relations.productClassName.reverse(binaryClassName).headOption
       analyzedClass <- analysis.apis.internal.get(className)
     yield analyzedClass
+
+  /** The mode of this compile, which the analyses it looks up must share. See [[Hashing]]. */
+  def hashing: Hashing = Hashing.Names
 end Lookup
 
 /**
