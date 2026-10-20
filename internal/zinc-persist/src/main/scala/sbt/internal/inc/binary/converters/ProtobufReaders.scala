@@ -727,7 +727,20 @@ final class ProtobufReaders(mapper: ReadMapper, currentVersion: Schema.Version) 
     val nameHashes = analyzedClass.getNameHashesList.toZincArray(fromNameHash)
     val hasMacro = analyzedClass.getHasMacro
     val provenance = analyzedClass.getProvenance.intern
-    AnalyzedClass.of(compilationTs, name, api, apiHash, nameHashes, hasMacro, extraHash, provenance)
+    val ancestors = analyzedClass.getAncestorsList.toZincArray(stringId)
+    val moduleAncestors = analyzedClass.getModuleAncestorsList.toZincArray(stringId)
+    AnalyzedClass.of(
+      compilationTs,
+      name,
+      api,
+      apiHash,
+      nameHashes,
+      hasMacro,
+      extraHash,
+      provenance,
+      ancestors,
+      moduleAncestors
+    )
   }
 
   private final val stringId = identity[String] _

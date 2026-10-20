@@ -110,6 +110,11 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
             callback.api(sourceFile, classApisIt.next())
           }
       }
+      callback5.filter(_ => merkle).foreach { cb =>
+        extractApi.allAncestors.foreach { case ((name, module), ancestors) =>
+          cb.ancestors(name, module, ancestors)
+        }
+      }
       val mainClasses = traverser.mainClasses
 
       val mainClassesIt = mainClasses.iterator

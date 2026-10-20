@@ -769,6 +769,8 @@ private final class AnalysisCallback(
   private[this] val objectApis = new TrieMap[String, ApiInfo]
   private[this] val classPublicNameHashes = new TrieMap[String, Array[NameHash]]
   private[this] val objectPublicNameHashes = new TrieMap[String, Array[NameHash]]
+  private[this] val classAncestors = new TrieMap[String, Array[String]]
+  private[this] val objectAncestors = new TrieMap[String, Array[String]]
   private[this] val usedNames = new TrieMap[String, mutable.Set[UsedName]]
   private[this] val unreporteds = new TrieMap[VirtualFileRef, ConcurrentLinkedQueue[Problem]]
   private[this] val reporteds = new TrieMap[VirtualFileRef, ConcurrentLinkedQueue[Problem]]
@@ -1117,6 +1119,9 @@ private final class AnalysisCallback(
     storeApi(sourceFile, if (Incremental.apiDebug(options)) fullClass else thinClass, hashes)
   }
 
+  override def ancestors(className: String, module: Boolean, binaryNames: Array[String]): Unit =
+    (if (module) objectAncestors else classAncestors) (className) = binaryNames
+
   private def storeApi(
       sourceFile: VirtualFileRef,
       classApi: ClassLike,
@@ -1408,9 +1413,13 @@ private final class AnalysisCallback(
       nameHashes,
       hasMacro,
       extraHash,
-      provenance
+      provenance,
+      classAncestors.getOrElse(name, NoAncestors),
+      objectAncestors.getOrElse(name, NoAncestors)
     )
   }
+
+  private[this] val NoAncestors = new Array[String](0)
 
   private def addProductsAndDeps(base: Analysis, extraHashes: Option[ExtraHashes]): Analysis = {
     import scala.collection.JavaConverters._

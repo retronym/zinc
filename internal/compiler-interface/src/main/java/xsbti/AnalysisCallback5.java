@@ -63,4 +63,17 @@ public interface AnalysisCallback5 extends AnalysisCallback4 {
 
     /** As {@link #api(VirtualFileRef, ClassLike, ClassHashes)}, with the full API as well. */
     void apiCheck(VirtualFileRef sourceFile, ClassLike fullClass, ClassLike thinClass, ClassHashes hashes);
+
+    /**
+     * Under {@link #merkleHashing}, report the base classes of a non-local class or object, in
+     * linearization order and without the class itself, by binary name (<code>p.O$A</code> for a
+     * class <code>A</code> nested in <code>object O</code>), as the compiler resolves them: a
+     * parent reached through a path, <code>Inst.B</code> with <code>object Inst extends
+     * Outer</code>, is its class, <code>p.Outer$B</code>. Classes with no class file of their own,
+     * such as <code>scala.Any</code>, are left out.
+     *
+     * @param className The class's name as {@link AnalysisCallback#api} reports it.
+     * @param module Whether these are the object's base classes rather than the class's.
+     */
+    default void ancestors(String className, boolean module, String[] binaryNames) {}
 }
