@@ -1,0 +1,1 @@
+trait U extends T

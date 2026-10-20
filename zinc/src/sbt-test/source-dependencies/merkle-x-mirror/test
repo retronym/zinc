@@ -1,0 +1,5 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# O's mirror class has a static forwarder for the inherited m
+> app/run s

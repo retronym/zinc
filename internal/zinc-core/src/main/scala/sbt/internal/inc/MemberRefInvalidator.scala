@@ -54,13 +54,19 @@ import xsbti.UseScope
  * dependencies unconditionally. On the other hand, if api change is due to modified name hashes
  * of regular members then we'll invalidate sources that use those names.
  */
-private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolean) {
+private[inc] class MemberRefInvalidator(
+    log: Logger,
+    invalidationLog: InvalidationLog,
+    logRecompileOnMacro: Boolean
+) {
   private final val NoInvalidation = (_: String) => Set.empty[String]
   def get(
       memberRef: Relation[String, String],
       usedNames: Relations.UsedNames,
       apiChange: APIChange,
-      isScalaClass: String => Boolean
+      isScalaClass: String => Boolean,
+      sameSource: String => Set[String] = _ => Set.empty,
+      addedNames: Set[String] = Set.empty
   ): String => Set[String] = apiChange match {
     case _: TraitPrivateMembersModified => NoInvalidation
     case _: APIChangeDueToMacroDefinition =>
@@ -70,7 +76,14 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
     case NamesChange(_, modifiedNames) if modifiedNames.in(UseScope.Implicit).nonEmpty =>
       new InvalidateUnconditionally(memberRef)
     case NamesChange(_, modifiedNames) =>
-      new NameHashFilteredInvalidator(usedNames, memberRef, modifiedNames, isScalaClass)
+      new NameHashFilteredInvalidator(
+        usedNames,
+        memberRef,
+        modifiedNames,
+        isScalaClass,
+        sameSource,
+        addedNames
+      )
   }
 
   def invalidationReason(apiChange: APIChange): String = apiChange match {
@@ -83,11 +96,9 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
     case NamesChange(modifiedClass, modifiedNames) =>
       modifiedNames.in(UseScope.Implicit) match {
         case changedImplicits if changedImplicits.isEmpty =>
-          s"""|The $modifiedClass has the following regular definitions changed:
-              |\t${modifiedNames.names.mkString(", ")}.""".stripMargin
+          s"The $modifiedClass has changed definitions: ${InvalidationLog.formatUsedNames(modifiedNames.names).mkString(", ")}."
         case changedImplicits =>
-          s"""|The $modifiedClass has the following implicit definitions changed:
-              |\t${changedImplicits.mkString(", ")}.""".stripMargin
+          s"The $modifiedClass has changed implicit definitions: ${InvalidationLog.formatUsedNames(changedImplicits).mkString(", ")}."
       }
   }
 
@@ -111,9 +122,11 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
     def apply(from: String): Set[String] = {
       val invalidated = memberRef.reverse(from)
       if (invalidated.nonEmpty)
-        log.debug(
-          s"The following member ref dependencies of $from are invalidated:\n" +
-            formatInvalidated(invalidated)
+        invalidationLog.detail(
+          InvalidationLog.section(
+            s"Unconditional member-reference invalidation from $from",
+            Seq("invalidated classes" -> invalidated)
+          )
         )
       invalidated
     }
@@ -128,29 +141,66 @@ private[inc] class MemberRefInvalidator(log: Logger, logRecompileOnMacro: Boolea
       usedNames: Relations.UsedNames,
       memberRef: Relation[String, String],
       modifiedNames: ModifiedNames,
-      isScalaClass: String => Boolean
+      isScalaClass: String => Boolean,
+      sameSource: String => Set[String],
+      addedNames: Set[String]
   ) extends (String => Set[String]) {
 
+    /**
+     * The dependents of `to` that use a modified name, and the classes of their sources that use
+     * an added one. A dependency introduced by a top-level import is charged to one class of the
+     * source, but every class of the source resolves names through the import: one that uses a
+     * name `to` now has may resolve it to the new member. One that uses an existing member of
+     * `to` records its own dependency.
+     */
     def apply(to: String): Set[String] = {
       val dependent = memberRef.reverse(to)
-      filteredDependencies(dependent)
+      filteredDependencies(dependent) ++ siblingsUsingAddedNames(dependent)
     }
+
+    private def siblingsUsingAddedNames(dependent: Set[String]): Set[String] =
+      if (addedNames.isEmpty) Set.empty
+      else {
+        val names = usedNames.toMultiMap
+        val siblings = dependent.filter(isScalaClass).flatMap(sameSource) -- dependent
+        val invalidated = siblings.filter(c =>
+          isScalaClass(c) && names.get(c).exists(_.exists(u => addedNames(u.name)))
+        )
+        if (invalidated.nonEmpty)
+          invalidationLog.debug(
+            InvalidationLog.section(
+              "Classes using an added name through another class's import",
+              Seq("invalidated classes" -> invalidated)
+            )
+          )
+        invalidated
+      }
 
     private def filteredDependencies(dependent: Set[String]): Set[String] = {
       dependent.filter {
         case from if isScalaClass(from) =>
           if (!usedNames.hasAffectedNames(modifiedNames, from)) {
-            log.debug(
+            invalidationLog.detail(
               s"None of the modified names appears in source file of $from. This dependency is not being considered for invalidation."
             )
             false
           } else {
-            val affectedNames = usedNames.affectedNames(modifiedNames, from)
-            log.debug(s"The following modified names cause invalidation of $from: [$affectedNames]")
+            invalidationLog.debug(
+              InvalidationLog.section(
+                s"Member-reference invalidation of $from",
+                Seq(
+                  "modified names used by the class" -> Seq(
+                    usedNames.affectedNames(modifiedNames, from)
+                  )
+                )
+              )
+            )
             true
           }
         case from =>
-          log.debug(s"Name hashing optimization doesn't apply to non-Scala dependency: $from")
+          invalidationLog.detail(
+            s"Name hashing optimization doesn't apply to non-Scala dependency: $from"
+          )
           true
       }
     }

@@ -1,0 +1,5 @@
+> compile
+$ copy-file changes/A.scala A.scala
+# B, C and D neither declare, use nor must implement foo, so they are not recompiled
+> checkRecompilations 0 B C D Hello
+> checkRecompilations 1 A

@@ -158,6 +158,7 @@ lazy val zincRoot: Project = (project in file("."))
     scripted / watchTriggers += baseDirectory.value.toGlob / "zinc" / "src" / "sbt-test" / **,
     Scripted.scriptedSource := (zinc212 / sourceDirectory).value / "sbt-test",
     Scripted.scriptedCompileToJar := false,
+    Scripted.scriptedParallelism := java.lang.Runtime.getRuntime.availableProcessors(),
     publish / skip := true,
     commands += Command.command("release") { state =>
       "clean" :: "+compile" :: "+publishSigned" :: "reload" :: state
@@ -700,6 +701,7 @@ lazy val zincScripted = (projectMatrix in internalPath / "zinc-scripted")
     Test / buildInfoPackage := "sbt.internal.inc",
     Test / buildInfoKeys := Seq[BuildInfoKey](zinc212 / sourceDirectory),
     conflictWarning := ConflictWarning.disable,
+    Test / run / mainClass := Some("sbt.inc.ScriptedMain"),
   )
   .defaultAxes(VirtualAxis.jvm, VirtualAxis.scalaPartialVersion(scala212))
   .jvmPlatform(scalaVersions = List(scala212))
@@ -753,5 +755,6 @@ def scriptedTask: Def.Initialize[InputTask[Unit]] = Def.inputTask {
     result,
     scriptedBufferLog.value,
     scriptedCompileToJar.value,
+    scriptedParallelism.value,
   )
 }

@@ -1,0 +1,8 @@
+> compile
+
+# A comment-only edit recompiles B alone, against A's classfile, where @nowarn is not pickled.
+# B's API must not depend on whether A was compiled in the same run.
+$ copy-file changes/B.scala B.scala
+> compile
+> checkRecompilations 1 B
+> checkRecompilations 0 A C
