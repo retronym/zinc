@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/B.scala B.scala
+# C no longer implements A.m, which is deferred in an ancestor other than the changed class
+-> compile

@@ -1,0 +1,8 @@
+> run 0
+
+$ copy-file changes/T.scala T.scala
+# B holds the mixin forwarder for T.m (U is a trait, so B is the first class to mix T in);
+# C inherits it from B and U gets none, so neither recompiles
+> run s
+> checkRecompilations 1 T
+> checkRecompilations 2 B X

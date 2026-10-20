@@ -1,0 +1,8 @@
+> run 0
+
+$ copy-file changes/A.scala A.scala
+# The anonymous subclass in B's companion is the first class to mix A in, so it holds A's new
+# field, accessor and trait setter. Its local-inheritance edge to B is from B itself.
+> run 1
+> checkRecompilations 1 p.A
+> checkRecompilations 2 p.B

@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/A.scala lib/A.scala
+# As merkle-x-abstract, with A nested in an object: B is concrete and no longer implements m
+-> app/compile

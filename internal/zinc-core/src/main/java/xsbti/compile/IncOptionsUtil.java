@@ -31,8 +31,9 @@ public class IncOptionsUtil {
     public static final String TRANSITIVE_STEP_KEY = "transitiveStep";
     public static final String RECOMPILE_ALL_FRACTION_KEY = "recompileAllFraction";
     public static final String RELATIONS_DEBUG_KEY = "relationsDebug";
+    public static final String DESCENDANT_RULES_KEY = "descendantRules";
     private static final String[] EXTRA_KEYS = {
-        "hashing"
+        DESCENDANT_RULES_KEY, "hashing"
     };
     public static final String API_DEBUG_KEY = "apiDebug";
     public static final String API_DIFF_CONTEXT_SIZE_KEY = "apiDiffContextSize";
