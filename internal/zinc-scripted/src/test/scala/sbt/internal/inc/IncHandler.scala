@@ -911,11 +911,15 @@ case class ProjectStructure(
       Optional.empty[XClassFileManager]
     )
       .withInvalidationProfiler(profiler)
-    val base = IncOptions
+    val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
       .withApiDebug(true)
       .withExternalHooks(externalHooks)
+    val base =
+      if (scalaVersion.startsWith("3"))
+        base0.withAuxiliaryClassFiles(Array(xsbti.compile.TastyFiles.instance()))
+      else base0
     // .withRelationsDebug(true)
     val incOptions = {
       val opts = IncOptionsUtil.fromStringMap(base, map, scriptedLog)
