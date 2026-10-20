@@ -55,11 +55,30 @@ trait Lookup extends ExternalLookup:
       analysis = analysis0 match
         case a: Analysis => a
       className <- analysis.relations.productClassName.reverse(binaryClassName).headOption
-      analyzedClass <- analysis.apis.internal.get(className)
+      own <- analysis.apis.internal.get(className)
+      analyzedClass <-
+        Hashing.checkUpstream(hashing, own)
+        if hashing == Hashing.Merkle then
+          MerkleHashes.composed(analysis, className, ownAnalyzedClass)
+        else Some(own)
     yield analyzedClass
 
   /** The mode of this compile, which the analyses it looks up must share. See [[Hashing]]. */
   def hashing: Hashing = Hashing.Names
+
+  /**
+   * A class's own stored API, from whichever analysis on the classpath defines it. A stored
+   * linearization names a class nested in an object `a.O.C`; its classfile is `a/O$C.class`.
+   */
+  private def ownAnalyzedClass(className: String): Option[AnalyzedClass] =
+    LibraryAncestors.binaryNameCandidates(className).iterator.flatMap { binaryClassName =>
+      for
+        analysis0 <- lookupAnalysis(binaryClassName)
+        analysis = analysis0 match
+          case a: Analysis => a
+        own <- analysis.apis.internal.get(className)
+      yield own
+    }.nextOption()
 end Lookup
 
 /**
