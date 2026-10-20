@@ -1,0 +1,5 @@
+> compile
+
+$ copy-file changes/P.scala P.scala
+# next is deferred in the library trait Iterator, so concrete D is now unimplemented
+-> compile

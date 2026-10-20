@@ -361,6 +361,9 @@ object Incremental {
       def isEmpty = modifiedLibraries.isEmpty && modifiedClasses.isEmpty
     }
     incremental.previousAPIs = previous.apis
+    incremental.changedLibraryClasses =
+      if (!LibraryAncestors.invalidates(options)) Set.empty
+      else LibraryAncestors.classesOf(initialChanges.libraryDeps, previous.relations, converter)
     val (initialInvClasses, initialInvSources0) =
       incremental.invalidateInitial(previous.relations, initialChanges)
 
@@ -716,6 +719,9 @@ private final class AnalysisCallback(
     )
 
   override def merkleHashing(): Boolean = merkle
+
+  override def materialiseLibraryMembers(binaryClassName: String): Boolean =
+    !LibraryAncestors.coarse(options)
   import Incremental.CompileCycleResult
 
   // This must have a unique value per AnalysisCallback
@@ -1279,11 +1285,65 @@ private final class AnalysisCallback(
     }
   }
 
+  private val libraryFiles = new TrieMap[String, Option[VirtualFileRef]]
+
+  /**
+   * The classpath entry defining a library class, if `name` (as rendered) is one. A class of
+   * this subproject is ruled out by any of its candidate names, not just the one that matches its
+   * binary name: a nested class compiled in this run is known here by its source name only, and
+   * the output directory, already holding its classfile, would otherwise be taken for the library
+   * defining `a.b.C$D`, but only until the next run knows that binary name.
+   */
+  private def libraryFile(name: String): Option[VirtualFileRef] =
+    libraryFiles.getOrElseUpdate(
+      name, {
+        val candidates = LibraryAncestors.binaryNameCandidates(name)
+        val internal = candidates.exists(n => {
+          classApis.contains(n) || objectApis.contains(n) ||
+          internalBinaryToSourceClassName(n).isDefined || isSubprojectClass(n)
+        })
+        if (internal) None
+        else
+          candidates.iterator
+            .flatMap(lookup.lookupOnClasspath(_))
+            .toStream
+            .headOption
+            .filterNot(f => ownOutputs(converter.toPath(f).toAbsolutePath.normalize))
+      }
+    )
+
+  /**
+   * This compile's own outputs, which the classpath holds too. A class found there is one of
+   * this subproject's, whatever name it was looked up by, and not a library: in a clean build
+   * nothing yet records its binary name, and its classfile is already written.
+   */
+  private lazy val ownOutputs: Set[Path] = {
+    def paths(o: Output): List[Path] =
+      jo2o(o.getSingleOutputAsPath).toList ++
+        jo2o(o.getMultipleOutput).toList.flatMap(_.toList.map(_.getOutputDirectoryAsPath))
+    (paths(output) ++ earlyOutput.toList.flatMap(paths)).map(_.toAbsolutePath.normalize).toSet
+  }
+
+  /** The stamps of the libraries defining a class's library ancestors. See [[LibraryAncestors]]. */
+  private def libraryFingerprint(sides: List[ClassLike]): Option[Int] =
+    if (!LibraryAncestors.invalidates(options)) None
+    else {
+      val files = LibraryAncestors.ancestorNames(sides).flatMap(libraryFile).distinct
+      if (files.isEmpty) None
+      else Some(files.map(f => stampReader.library(f).toString).sorted.hashCode)
+    }
+
   private def analyzeClass(name: String, extraHashes: Option[ExtraHashes]): AnalyzedClass = {
     val hasMacro: Boolean = macroClasses.contains(name)
-    val (companions, apiHash, extraHash) = companionsWithHash(name, extraHashes)
+    val (companions, apiHash0, extraHash) = companionsWithHash(name, extraHashes)
     val nameHashes0 = nameHashesForCompanions(name)
-    val nameHashes = if (merkle) nameHashes0 :+ Hashing.Marker else nameHashes0
+    val sides = List(companions.classApi, companions.objectApi)
+    val (apiHash, nameHashes1) = libraryFingerprint(sides) match {
+      case Some(fingerprint) =>
+        LibraryAncestors.withFingerprint(apiHash0, nameHashes0, name, sides, fingerprint)
+      case None => (apiHash0, nameHashes0)
+    }
+    val nameHashes = if (merkle) nameHashes1 :+ Hashing.Marker else nameHashes1
     val safeCompanions = SafeLazyProxy(companions)
     AnalyzedClass.of(
       compileStartTime,
