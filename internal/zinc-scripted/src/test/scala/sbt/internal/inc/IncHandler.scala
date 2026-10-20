@@ -373,6 +373,9 @@ case class ProjectStructure(
   val earlyAnalysisStore = FileAnalysisStore.binary(earlyCacheFile.toFile)
   private val invalidationLines = new ConcurrentLinkedQueue[String]()
   private val timingLines = new ConcurrentLinkedQueue[String]()
+
+  /** Each incremental run's initial changes and invalidation cycles, for IncBench's `--profile`. */
+  val profiler = new bench.StepProfile.RunRecorder
   private val compilerLog = new Logger:
     override def trace(t: => Throwable): Unit = scriptedLog.trace(t)
     override def success(message: => String): Unit = scriptedLog.success(message)
@@ -922,7 +925,7 @@ case class ProjectStructure(
     val externalHooks = new DefaultExternalHooks(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
-    )
+    ).withInvalidationProfiler(profiler)
     val base0 = IncOptions
       .of()
       .withPipelining(defaultPipelining)
