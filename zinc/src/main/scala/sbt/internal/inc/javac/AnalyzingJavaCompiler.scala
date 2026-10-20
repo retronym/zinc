@@ -185,6 +185,19 @@ final class AnalyzingJavaCompiler private[sbt] (
       def readAPI(source: VirtualFileRef, classes: Seq[Class[?]]): Set[(String, String)] = {
         val (apis, mainClasses, inherits) = ClassToAPI.process(classes)
         apis.foreach(callback.api(source, _))
+        callback match {
+          case cb: xsbti.AnalysisCallback5 if cb.merkleHashing =>
+            val byName: Map[String, Class[?]] =
+              classes.iterator.map(c => (ClassToAPI.classCanonicalName(c), c: Class[?])).toMap
+            apis.iterator
+              .filter(_.definitionType != xsbti.api.DefinitionType.Module)
+              .foreach(a =>
+                byName.get(a.name).foreach(c =>
+                  cb.ancestors(a.name, false, ClassToAPI.ancestorNames(c))
+                )
+              )
+          case _ =>
+        }
         mainClasses.foreach(callback.mainClass(source, _))
         inherits.map {
           case (from, to) => (from.getName, to.getName)
