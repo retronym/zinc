@@ -1,0 +1,8 @@
+> p/compile
+
+# A comment-only edit recompiles B alone, against A's classfile, reading A from TASTy.
+# B's API must not depend on whether A was compiled in the same run.
+$ copy-file p/changes/B.scala p/B.scala
+> p/compile
+> p/checkRecompilations 1 B
+> p/checkRecompilations 0 A C

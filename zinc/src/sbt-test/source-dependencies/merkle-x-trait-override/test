@@ -1,0 +1,5 @@
+> app/run 1
+
+$ copy-file lib/changes/T.scala lib/T.scala
+# Without a mixin forwarder in B, the JVM resolves B.m to the class method P.m
+> app/run 2

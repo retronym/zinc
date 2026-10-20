@@ -1,0 +1,5 @@
+> app/run 0
+
+$ copy-file lib/changes/N.scala lib/N.scala
+# C.g is now a String; Y must be recompiled and fail
+-> app/compile

@@ -177,7 +177,12 @@ object Incremental:
 
     val profiler = options.externalHooks.getInvalidationProfiler
     val runProfiler = new AdaptedRunProfiler(profiler.profileRun)
-    val incremental: IncrementalCommon = new IncrementalNameHashing(log, options, runProfiler)
+    val incremental: IncrementalCommon = new IncrementalNameHashing(
+      log,
+      options,
+      runProfiler,
+      PackageScope.packagePrefixImplicits(currentSetup)
+    )
     try
       incrementalCompile(
         sources,
@@ -357,6 +362,10 @@ object Incremental:
       override val modifiedLibraries = initialChanges.libraryDeps.toArray
       override val modifiedClasses = initialChanges.external.allModified.toArray
       def isEmpty = modifiedLibraries.isEmpty && modifiedClasses.isEmpty
+    incremental.previousAPIs = previous.apis
+    incremental.changedLibraryClasses =
+      if !LibraryAncestors.invalidates(options) then Set.empty
+      else LibraryAncestors.classesOf(initialChanges.libraryDeps, previous.relations, converter)
     val (initialInvClasses, initialInvSources0) =
       incremental.invalidateInitial(previous.relations, initialChanges)
 
@@ -405,10 +414,28 @@ object Incremental:
       )
 
     val hasSubprojectChange = initialChanges.external.apiChanges.nonEmpty
+
+    /**
+     * Records the current API of every upstream class whose change this run has processed. A
+     * recompiled class records the upstream APIs it depends on, but a descendant that the rules
+     * skip records nothing, and a stale record would hide the next change to that class.
+     */
+    def refreshExternalAPIs(analysis: Analysis): Analysis =
+      if !hasSubprojectChange then analysis
+      else
+        analysis.copy(
+          apis = initialChanges.external.allModified.foldLeft[APIs](analysis.apis) {
+            (apis, clazz) =>
+              lookup.lookupAnalyzedClass(clazz, None) match
+                case Some(ac) if apis.external.contains(clazz) => apis.markExternalAPI(clazz, ac)
+                case _                                         => apis
+          }
+        )
+
     val analysis = withClassfileManager(options, converter, output, outputJarContent) {
       classfileManager =>
         if hasModified then
-          incremental.cycle(
+          refreshExternalAPIs(incremental.cycle(
             initialInvClasses,
             initialInvSources,
             sources,
@@ -421,7 +448,7 @@ object Incremental:
             output,
             1,
             initialInvSources -- initialInvSources0,
-          )
+          ))
         else
           val analysis =
             if hasSubprojectChange then
@@ -731,7 +758,24 @@ private final class AnalysisCallback(
     progress: Option[CompileProgress],
     incHandlerOpt: Option[Incremental.IncrementalCallback],
     log: Logger
-) extends xsbti.AnalysisCallback4, HasCompilerPhaseListener:
+) extends xsbti.AnalysisCallback5, HasCompilerPhaseListener:
+
+  private val merkle = Hashing.isMerkle(options)
+
+  private val subprojectClasses = new scala.collection.concurrent.TrieMap[String, Boolean]
+
+  private val externalAPIs = new scala.collection.concurrent.TrieMap[String, Option[AnalyzedClass]]
+
+  override def isSubprojectClass(binaryClassName: String): Boolean =
+    subprojectClasses.getOrElseUpdate(
+      binaryClassName,
+      lookup.lookupAnalysis(binaryClassName).isDefined
+    )
+
+  override def merkleHashing(): Boolean = merkle
+
+  override def materialiseLibraryMembers(binaryClassName: String): Boolean =
+    !LibraryAncestors.coarse(options)
   import Incremental.CompileCycleResult
 
   // This must have a unique value per AnalysisCallback
@@ -870,17 +914,26 @@ private final class AnalysisCallback(
       actions = l2jl(Nil),
     )
 
+  /**
+   * A class's dependencies on itself are dropped, except by local inheritance: a local or
+   * anonymous subclass of a trait, declared in the trait or its companion, is charged to the
+   * trait's own name. It mixes the trait in, so it holds forwarders and fields for members the
+   * trait inherits, and under Merkle hashing the edge is how invalidation finds it when the trait
+   * itself is not recompiled.
+   */
   private def internalClassDependency(
       onClassName: String,
       sourceClass: ClassRef,
       context: DependencyContext
   ): Unit =
     val sourceClassName = sourceClass.name
-    if onClassName != sourceClassName then
+    if onClassName != sourceClassName ||
+      merkle && context == DependencyContext.LocalDependencyByInheritance
+    then
       add(intSrcDeps, sourceClassName, InternalDependency.of(sourceClassName, onClassName, context))
-      if context == DependencyContext.DependencyByInheritance && sourceClass.kind == NameKind.Type
-      then
-        add(typeParents, sourceClassName, onClassName)
+      if onClassName != sourceClassName && context == DependencyContext.DependencyByInheritance &&
+        sourceClass.kind == NameKind.Type
+      then add(typeParents, sourceClassName, onClassName)
 
   override def classDependency(
       onClass: ClassRef,
@@ -987,7 +1040,7 @@ private final class AnalysisCallback(
   ): Unit =
     // TODO: handle library JARs and rt.jar.
     val vf = converter.toVirtualFile(classFile)
-    externalAPI(onBinaryName, Some(vf)) match
+    externalAPIs.getOrElseUpdate(onBinaryName, externalAPI(onBinaryName, Some(vf))) match
       case Some(api) =>
         // dependency is a product of a source in another project
         val targetBinaryClassName = onBinaryName
@@ -1054,7 +1107,10 @@ private final class AnalysisCallback(
     if !APIUtil.isScalaSourceName(sourceFile.id) && APIUtil.isAnnotationDefinition(classApi) then
       annotationClasses.add(className)
     val shouldMinimize = !Incremental.apiDebug(options)
-    val savedClassApi = if shouldMinimize then APIUtil.minimize(classApi) else classApi
+    val savedClassApi =
+      if !shouldMinimize then classApi
+      else if merkle then APIUtil.minimizeWithStubs(classApi)
+      else APIUtil.minimize(classApi)
     val apiHash: HashAPI.Hash = HashAPI(classApi)
     val nameHashes = (new xsbt.api.NameHashing(options.useOptimizedSealed())).nameHashes(classApi)
     classApi.definitionType match
@@ -1141,8 +1197,11 @@ private final class AnalysisCallback(
       )
 
   private def getAnalysis: Analysis =
-    val analysis0 =
-      addProductsAndDeps(Analysis.empty, new ExtraHashes, new InheritedImplicitScopes)
+    val analysis0 = addProductsAndDeps(
+      Analysis.empty,
+      if merkle then None else Some(new ExtraHashes),
+      new InheritedImplicitScopes
+    )
     addUsedNames(addCompilation(addTransitiveBytecodeHash(analysis0)))
 
   def getPostJavaAnalysis: Analysis =
@@ -1176,7 +1235,7 @@ private final class AnalysisCallback(
     base.copy(apis = APIs)
 
   /**
-   * A trait's extraHash includes its parents', so a private change in a parent reaches every
+   * Under name hashing, a trait's extraHash includes its parents', so a private change in a parent reaches every
    * class that inherits it (sbt/zinc#662). Taking the parents from the cycle being compiled, not
    * from the previous analysis, makes a trait hash the same on a cold and a warm build.
    *
@@ -1321,7 +1380,7 @@ private final class AnalysisCallback(
 
   private def companionsWithHash(
       className: String,
-      extraHashes: ExtraHashes
+      extraHashes: Option[ExtraHashes]
   ): (Companions, HashAPI.Hash, HashAPI.Hash) =
     val emptyClass =
       ApiInfo(
@@ -1331,13 +1390,19 @@ private final class AnalysisCallback(
       )
     val emptyObject =
       ApiInfo(emptyApiHash, emptyApiHash, APIUtil.emptyClassLike(className, DefinitionType.Module))
-    val ApiInfo(classApiHash, _, classApi) = classApis.getOrElse(className, emptyClass)
+    val ApiInfo(classApiHash, extraHash, classApi) = classApis.getOrElse(className, emptyClass)
     val ApiInfo(objectApiHash, _, objectApi) = objectApis.getOrElse(className, emptyObject)
     val companions = Companions.of(classApi, objectApi)
     val apiHash = (classApiHash, objectApiHash).hashCode
     // extraHash covers a trait's private members. An object's is a copy of its apiHash,
-    // already merged above, so only the class side contributes.
-    (companions, apiHash, extraHashes(className))
+    // already merged above, so only the class side contributes. Under name hashing it folds in
+    // the trait's parents' (see `ExtraHashes`). Under Merkle hashing it covers the trait's own
+    // members only: a class sees every ancestor's, as an ancestor's private change invalidates
+    // its descendants here and the hashes composed for another subproject fold in each
+    // ancestor's extraHash. Folding in the parents' made a public member added to a trait read
+    // as a change to the private members of each trait extending it.
+    (companions, apiHash, extraHashes.fold(extraHash)(_(className)))
+  end companionsWithHash
 
   private def nameHashesForCompanions(className: String): Array[NameHash] =
     val classNameHashes = classPublicNameHashes.get(className)
@@ -1349,16 +1414,67 @@ private final class AnalysisCallback(
       case (None, Some(nm)) => nm
       case (None, None)     => sys.error("Failed to find name hashes for " + className)
 
+  private val libraryFiles = new TrieMap[String, Option[VirtualFileRef]]
+
+  /**
+   * The classpath entry defining a library class, if `name` (as rendered) is one. A class of
+   * this subproject is ruled out by any of its candidate names, not just the one that matches its
+   * binary name: a nested class compiled in this run is known here by its source name only, and
+   * the output directory, already holding its classfile, would otherwise be taken for the library
+   * defining `a.b.C$D`, but only until the next run knows that binary name.
+   */
+  private def libraryFile(name: String): Option[VirtualFileRef] =
+    libraryFiles.getOrElseUpdate(
+      name, {
+        val candidates = LibraryAncestors.binaryNameCandidates(name)
+        val internal = candidates.exists(n =>
+          classApis.contains(n) || objectApis.contains(n) ||
+            internalBinaryToSourceClassName(n).isDefined || isSubprojectClass(n)
+        )
+        if internal then None
+        else
+          candidates.iterator
+            .flatMap(lookup.lookupOnClasspath(_))
+            .nextOption()
+            .filterNot(f => ownOutputs(converter.toPath(f).toAbsolutePath.normalize))
+      }
+    )
+
+  /**
+   * This compile's own outputs, which the classpath holds too. A class found there is one of
+   * this subproject's, whatever name it was looked up by, and not a library: in a clean build
+   * nothing yet records its binary name, and its classfile is already written.
+   */
+  private lazy val ownOutputs: Set[Path] =
+    def paths(o: Output): List[Path] =
+      o.getSingleOutputAsPath.toScala.toList ++
+        o.getMultipleOutput.toScala.toList.flatMap(_.toList.map(_.getOutputDirectoryAsPath))
+    (paths(output) ++ earlyOutput.toList.flatMap(paths)).map(_.toAbsolutePath.normalize).toSet
+
+  /** The stamps of the libraries defining a class's library ancestors. See [[LibraryAncestors]]. */
+  private def libraryFingerprint(sides: List[ClassLike]): Option[Int] =
+    if !LibraryAncestors.invalidates(options) then None
+    else
+      val files = LibraryAncestors.ancestorNames(sides).flatMap(libraryFile).distinct
+      if files.isEmpty then None
+      else Some(files.map(f => stampReader.library(f).toString).sorted.hashCode)
+
   private def analyzeClass(
       name: String,
       bytecodeHash: Int,
-      extraHashes: ExtraHashes,
+      extraHashes: Option[ExtraHashes],
       inheritedImplicitScopes: InheritedImplicitScopes
   ): AnalyzedClass =
     val hasMacro: Boolean = macroClasses.contains(name)
     val (companions, ownApiHash, extraHash) = companionsWithHash(name, extraHashes)
-    val apiHash = inheritedImplicitScopes(name).fold(ownApiHash)((ownApiHash, _).hashCode)
-    val nameHashes = inheritedImplicitScopes.nameHashes(name)
+    val apiHash0 = inheritedImplicitScopes(name).fold(ownApiHash)((ownApiHash, _).hashCode)
+    val nameHashes0 = inheritedImplicitScopes.nameHashes(name)
+    val sides = List(companions.classApi, companions.objectApi)
+    val (apiHash, nameHashes1) = libraryFingerprint(sides) match
+      case Some(fingerprint) =>
+        LibraryAncestors.withFingerprint(apiHash0, nameHashes0, name, sides, fingerprint)
+      case None => (apiHash0, nameHashes0)
+    val nameHashes = if merkle then nameHashes1 :+ Hashing.Marker else nameHashes1
     val safeCompanions = SafeLazyProxy(companions)
     AnalyzedClass.of(
       compileStartTime,
@@ -1376,7 +1492,7 @@ private final class AnalysisCallback(
 
   private def addProductsAndDeps(
       base: Analysis,
-      extraHashes: ExtraHashes,
+      extraHashes: Option[ExtraHashes],
       inheritedImplicitScopes: InheritedImplicitScopes
   ): Analysis =
     import scala.jdk.CollectionConverters.*
@@ -1499,7 +1615,10 @@ private final class AnalysisCallback(
     val trimmedAnalysis = merged.copy(
       Stamps.empty,
       APIs(merged.apis.internal, Map.empty),
-      Relations.empty.copy(productClassName = merged.relations.productClassName),
+      Relations.empty.copy(
+        productClassName = merged.relations.productClassName,
+        externalDependencies = earlyExternalDependencies(merged.relations),
+      ),
       SourceInfos.empty,
       Compilations.empty,
     )
@@ -1508,6 +1627,20 @@ private final class AnalysisCallback(
     mergeUpdates() // must merge updates each cycle or else scalac will clobber it
     val available = lookup.shouldDoEarlyOutput(merged)
     Incremental.writeEarlyOut(progress, earlyOutput, available, knownProducts(merged), log)
+
+  /**
+   * Under Merkle hashing a downstream subproject composes a class's hashes with those of its
+   * upstream ancestors, which it finds through the external inheritance relation (see
+   * [[MerkleHashes]]), so the early analysis keeps that relation.
+   */
+  private def earlyExternalDependencies(relations: Relations): ExternalDependencies =
+    if !merkle then ExternalDependencies.empty
+    else
+      ExternalDependencies(
+        relations.externalDependencies.dependencies.filter(
+          _._1 == DependencyContext.DependencyByInheritance
+        )
+      )
 
   private def mergeUpdates() =
     pickleJarPair.foreach {

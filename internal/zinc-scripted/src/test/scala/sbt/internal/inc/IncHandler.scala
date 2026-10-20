@@ -270,6 +270,12 @@ class IncHandler(directory: Path, cacheDir: Path, scriptedLog: ManagedLogger, co
     onArgs("checkClasses") {
       case (p, src :: products, i) => p.checkClasses(i, dropRightColon(src), products)
     },
+    onArgs("checkAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkAnnotated(i, cls, annotation)
+    },
+    onArgs("checkNotAnnotated") {
+      case (p, cls :: annotation :: Nil, i) => p.checkNotAnnotated(i, cls, annotation)
+    },
     onArgs("checkMainClasses") {
       case (p, javaV :: src :: products, i) =>
         p.checkMainClasses(i, javaV, dropRightColon(src), products)
@@ -511,6 +517,24 @@ case class ProjectStructure(
         assert(expected == actual, msg)
       assertClasses(expected.toSet, classes(src))
       ()
+    }
+
+  /** Test discovery, as sbt does it: does `cls` have a public method annotated `annotation`? */
+  def checkAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.nonEmpty, s"$cls has no method annotated $annotation")
+    }
+
+  /** Test discovery, as sbt does it: does no public method of `cls` look annotated `annotation`? */
+  def checkNotAnnotated(i: IncState, cls: String, annotation: String): Future[Unit] =
+    compile(i).map { analysis =>
+      val c = analysis.apis.internalAPI(cls).api().classApi()
+      val found = xsbt.api.Discovery.defAnnotations(c.structure, _ == annotation) ++
+        c.savedAnnotations.filter(_ == annotation)
+      assert(found.isEmpty, s"$cls has a method annotated $annotation")
     }
 
   def checkMainClasses(
@@ -901,6 +925,7 @@ case class ProjectStructure(
     import scala.jdk.CollectionConverters.*
     val map = new java.util.HashMap[String, String]
     properties.asScala foreach { case (k: String, v: String) => map.put(k, v) }
+    sys.props.get(IncHandler.HashingProperty).foreach(map.putIfAbsent(Hashing.Key, _))
     val externalHooks = new DefaultExternalHooks(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
@@ -978,6 +1003,12 @@ case class ProjectStructure(
 end ProjectStructure
 
 object IncHandler:
+
+  /**
+   * The hashing mode (see [[Hashing]]) of every project whose `incOptions.properties` does not
+   * set one, for running the scripted suite in either mode.
+   */
+  val HashingProperty = "zinc.scripted.hashing"
   type Cached = (Path, XScalaInstance)
   private final val scriptedCompilerCache = new mutable.WeakHashMap[String, Cached]()
 

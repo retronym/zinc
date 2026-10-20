@@ -1,0 +1,9 @@
+> p/compile
+
+# A body edit recompiles L.scala alone. L.A, the ancestor of L.B nested in the same object, is a
+# class of this subproject in both compiles, though only the second can name its classfile, so
+# L.B's API does not move and U, which reads only L.B, does not recompile.
+$ copy-file changes/L.scala p/L.scala
+> p/compile
+> p/checkRecompilations 1 p.L p.L$.A p.L$.B
+> p/checkIterations 2

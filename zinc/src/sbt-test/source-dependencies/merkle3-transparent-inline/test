@@ -1,0 +1,5 @@
+> p/run Int
+
+# the type App sees for D().t comes from P's inline body
+$ copy-file changes/P.scala p/P.scala
+> p/run String
