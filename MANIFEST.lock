@@ -1,0 +1,6 @@
+# integration/bench-1.12.x, built 2026-10-20T09:49:08Z by build-integration from manifest.toml
+
+base	upstream/1.12.x	db2a2f35fe499d0179b78fe0d292aa74e9fb2a6e
+
+rz#71	refs/pull/71/head	764fb493d3edf0bb3d3bb0df10a6cd9508223a15	clean
+rz#75	refs/pull/75/head	aab10acc525910fa419fcd1c21259957604b231c	clean
