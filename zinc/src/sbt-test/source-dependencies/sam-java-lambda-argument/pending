@@ -1,0 +1,8 @@
+# J passes a lambda to O.run(F). F is named only in descriptors (O.run's Methodref, the invokedynamic), which Zinc's
+# Java class-file reader does not read, so J records no edge on F.
+# Without pipelining: with it, Zinc recompiles every Java source in every compile, which hides the miss.
+> p/compile
+# F.apply now takes an int: the lambda no longer conforms, so a clean build fails. Zinc does not recompile J.
+# Lean: Sam.p1_today.
+$ copy-file changes/F.java p/F.java
+-> p/compile
