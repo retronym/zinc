@@ -923,6 +923,7 @@ case class ProjectStructure(
     import scala.collection.JavaConverters._
     val map = new java.util.HashMap[String, String]
     properties.asScala foreach { case (k: String, v: String) => map.put(k, v) }
+    sys.props.get(IncHandler.HashingProperty).foreach(map.putIfAbsent(Hashing.Key, _))
     val externalHooks = new DefaultExternalHooks(
       Optional.empty[ExternalHooks.Lookup],
       Optional.empty[XClassFileManager]
@@ -1006,6 +1007,12 @@ case class ProjectStructure(
 }
 
 object IncHandler {
+
+  /**
+   * The hashing mode (see [[Hashing]]) of every project whose `incOptions.properties` does not
+   * set one, for running the scripted suite in either mode.
+   */
+  val HashingProperty = "zinc.scripted.hashing"
   type Cached = (Path, XScalaInstance)
   private[this] final val scriptedCompilerCache = new mutable.WeakHashMap[String, Cached]()
 
