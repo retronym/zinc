@@ -160,6 +160,7 @@ final class AnalyzingJavaCompiler private[sbt] (
       // sbt/zinc#145: dependencies on inlined `static final` constants, keyed
       // `usingClassBinaryName -> ownerBinaryNames`, populated by the Java compilation below.
       var constantDeps: Map[String, Set[String]] = Map.empty
+      var usedNames: Map[String, Set[String]] = Map.empty
 
       timed(javaCompilationPhase, log) {
         val args = sbt.internal.inc.javac.JavaCompiler.commandArguments(
@@ -180,9 +181,10 @@ final class AnalyzingJavaCompiler private[sbt] (
         // from a separately-compiled class) are not tracked under forked javac.
         val success = javac match
           case ljc: LocalJavaCompiler =>
-            val (ok, deps) =
-              ljc.runWithConstantDeps(javaSources, args, output, incToolOptions, reporter, log)
+            val (ok, deps, names) =
+              ljc.runWithTreeFacts(javaSources, args, output, incToolOptions, reporter, log)
             constantDeps = deps
+            usedNames = names
             ok
           case _ =>
             javac.run(javaSources, args, output, incToolOptions, reporter, log)
@@ -235,7 +237,8 @@ final class AnalyzingJavaCompiler private[sbt] (
               loader,
               readAPI,
               readClassfileAPI,
-              constantDeps
+              constantDeps,
+              usedNames
             )
           finally classes.close()
       }
