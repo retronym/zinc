@@ -33,7 +33,7 @@ final case class SyntheticCorpus(
 ):
   require(modules >= 1 && depth >= 1 && fanOut >= 1)
 
-  final case class Cls(name: String, level: Int, parent: Option[String]):
+  case class Cls(name: String, level: Int, parent: Option[String]):
     def module: Int = math.min(level * modules / (depth + 1), modules - 1)
 
   val classes: Vector[Cls] =
