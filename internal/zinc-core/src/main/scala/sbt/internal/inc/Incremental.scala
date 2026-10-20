@@ -1051,23 +1051,25 @@ private final class AnalysisCallback(
         if (!writtenEarlyArtifacts) progress.foreach(_.afterEarlyOutput(false))
       outputJarContent.scalacRunCompleted()
       phaseListener.runCompleted()
-      if (earlyOutput.isDefined) {
-        val early = incHandler.previousAnalysisPruned
-        invalidationResults match {
-          case None if lookup.shouldDoEarlyOutput(early)    => writeEarlyArtifacts(early)
-          case None | Some(CompileCycleResult(false, _, _)) => notifyNoEarlyOut()
-          case _                                            =>
-        }
-        if (!writtenEarlyArtifacts) // writing implies the updates merge has happened
-          mergeUpdates() // must merge updates each cycle or else scalac will clobber it
-      }
+      if (earlyOutput.isDefined && !writtenEarlyArtifacts)
+        mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
       val partialAnalysis = getAnalysis
       val hasScala = Analysis.sources(partialAnalysis).scala.nonEmpty
       // If we had early output and scala sources, then the cycle has already been registered
       val shouldRegisterCycle = earlyOutput.isEmpty || !hasScala
 
-      incHandler.completeCycle(invalidationResults, partialAnalysis, shouldRegisterCycle)
+      val result =
+        incHandler.completeCycle(invalidationResults, partialAnalysis, shouldRegisterCycle)
+      // A run that did not reach the phase that sends dependencies (one that compiles no Scala
+      // source) writes its early output here, once it is known to be the last cycle.
+      if (earlyOutput.isDefined && !result.continue && !writtenEarlyArtifacts) {
+        val early = incHandler.previousAnalysisPruned
+        if (invalidationResults.isEmpty && lookup.shouldDoEarlyOutput(early))
+          writeEarlyArtifacts(early)
+        else notifyNoEarlyOut()
+      }
+      result
     } else {
       throw new IllegalStateException(
         "can't call AnalysisCallback#getCycleResultOnce more than once"
@@ -1154,10 +1156,9 @@ private final class AnalysisCallback(
         case None =>
           previousApis.get(className) match {
             case Some(previous) => previous.extraHash()
-            // Scala 3 can report a Java parent that has no API here: a JDK class under `-release`
-            // (scala/scala3#27117), or a Java source when pipelining is on but the compiler
-            // predates it (before 3.5). extraHash carries a trait's private members; a Java class
-            // has none.
+            // A parent with no analysis yet (e.g. a same-run Java class pipelining hasn't
+            // compiled, or a previous-run remnant already pruned) contributes no extraHash of
+            // its own rather than failing the whole compilation.
             case None =>
               log.debug(s"No extra API hash found for parent $className")
               emptyApiHash
