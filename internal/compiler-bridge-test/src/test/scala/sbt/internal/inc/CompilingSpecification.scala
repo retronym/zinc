@@ -29,6 +29,10 @@ import xsbti.api.DependencyContext._
  * source code using Scala compiler.
  */
 trait CompilingSpecification extends AbstractBridgeProviderTestkit {
+
+  /** Whether the bridge extracts APIs for Merkle hashing (see `sbt.internal.inc.Hashing`). */
+  def merkleHashing: Boolean = false
+
   def scalaVersion =
     sys.props
       .get("zinc.build.compilerbridge.scalaVersion")
@@ -204,7 +208,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
   def compileSrcs(
       baseDir: Path,
       reporter: Reporter = mkReporter,
-      scalaVersion0: String = scalaVersion
+      scalaVersion0: String = scalaVersion,
+      extraClasspath: Seq[Path] = Nil
   )(groupedSrcs: List[List[String]]): (Seq[VirtualFile], TestCallback) = {
     val rootPaths: Map[String, Path] = Map(
       "BASE" -> baseDir,
@@ -213,7 +218,7 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
     ) ++ localCoursierCache
     val converter = new MappedFileConverter(rootPaths, false)
     val targetDir = baseDir / "target"
-    val analysisCallback = new TestCallback
+    val analysisCallback = new TestCallback(merkleHashing)
     Files.createDirectory(targetDir)
     val files = for {
       (compilationUnit, unitId) <- groupedSrcs.zipWithIndex
@@ -225,7 +230,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
       }
       val sources = srcFiles.toArray[VirtualFile]
       val (si, sc) = mkScalaCompiler(baseDir, scalaVersion0)
-      val cp = ((si.allJars).map(_.toPath) ++ Array(targetDir)).map(converter.toVirtualFile)
+      val cp = ((si.allJars).map(_.toPath) ++ extraClasspath ++ Array(targetDir))
+        .map(converter.toVirtualFile)
       sc.compile(
         sources = sources,
         classpath = cp,

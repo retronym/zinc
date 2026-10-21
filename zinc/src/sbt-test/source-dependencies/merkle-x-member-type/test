@@ -1,0 +1,6 @@
+> app/run 0
+
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run s
+# B and C neither declare, use nor must implement m: only the client recompiles
+> app/checkRecompilations 1 p.X

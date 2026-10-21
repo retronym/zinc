@@ -1,0 +1,5 @@
+> app/run Int
+
+# A's parent changes; C names B only through a type alias
+$ copy-file lib/changes/A.scala lib/A.scala
+> app/run String

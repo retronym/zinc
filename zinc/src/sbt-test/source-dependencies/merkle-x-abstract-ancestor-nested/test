@@ -1,0 +1,5 @@
+> app/compile
+
+$ copy-file lib/changes/B.scala lib/B.scala
+# As merkle-x-abstract-ancestor, with A and B nested in objects: C no longer implements O.A.m
+-> app/compile

@@ -58,11 +58,33 @@ final class API(val global: CallbackGlobal) extends Compat with GlobalHelpers wi
       }
     }
 
+    private val isSubprojectClass: String => Boolean = callback match {
+      case cb: xsbti.AnalysisCallback4 => cb.isSubprojectClass
+      case _                           => _ => false
+    }
+
+    private val callback5: Option[xsbti.AnalysisCallback5] = callback match {
+      case cb: xsbti.AnalysisCallback5 => Some(cb)
+      case _                           => None
+    }
+    private val merkle: Boolean = callback5.exists(_.merkleHashing())
+    private val materialiseLibraryMembers: String => Boolean =
+      callback5.fold((_: String) => true)(cb => cb.materialiseLibraryMembers(_))
+
+    private val extractApi =
+      new ExtractAPI[global.type](
+        global,
+        global.outputDirs,
+        isSubprojectClass,
+        materialiseLibraryMembers,
+        merkle
+      )
+
     private def processScalaUnit(unit: CompilationUnit): Unit = {
       val sourceFile: VirtualFile = unit.source.file match { case AbstractZincFile(vf) => vf }
       debuglog("Traversing " + sourceFile)
       callback.startSource(sourceFile)
-      val extractApi = new ExtractAPI[global.type](global, sourceFile)
+      extractApi.startUnit()
       val traverser = new TopLevelHandler(extractApi)
       traverser.apply(unit.body)
 
