@@ -276,7 +276,7 @@ object Incremental {
     // val profiler = options.externalHooks.getInvalidationProfiler
     // val runProfiler = new AdaptedRunProfiler(profiler.profileRun)
     // val incremental: IncrementalCommon = new IncrementalNameHashing(log, options, runProfiler)
-    val callback = builder.build()
+    val callback = builder.build(previous)
     try {
       val analysis = withClassfileManager(options, converter, output, outputJarContent) {
         classFileManager =>
@@ -348,7 +348,6 @@ object Incremental {
     val previous = previous0 match { case a: Analysis => a }
     val initialChanges =
       incremental.detectInitialChanges(sources, previous, current, lookup, converter, output)
-    log.debug(s"> initialChanges = $initialChanges")
     val binaryChanges = new DependencyChanges {
       override def modifiedBinaries: Array[File] =
         modifiedLibraries.map(converter.toPath(_).toFile)
@@ -395,15 +394,16 @@ object Incremental {
     val initialInvSources =
       if (pickleJava && hasModified) initialInvSources0 ++ javaSources
       else initialInvSources0
-    if (hasModified) {
-      if (initialInvSources == sources)
-        incremental.log.debug(s"all ${initialInvSources.size} sources are invalidated")
-      else
-        incremental.log.debug(
-          "All initially invalidated classes: " + initialInvClasses + "\n" +
-            "All initially invalidated sources:" + initialInvSources + "\n"
+    if (hasModified)
+      incremental.invalidationLog.debug(
+        InvalidationLog.section(
+          "Initial invalidation outcome",
+          Seq(
+            "classes" -> initialInvClasses,
+            "sources" -> initialInvSources.map(_.id),
+          )
         )
-    }
+      )
 
     val hasSubprojectChange = initialChanges.external.apiChanges.nonEmpty
     val analysis = withClassfileManager(options, converter, output, outputJarContent) {
@@ -536,6 +536,67 @@ object Incremental {
   }
 }
 
+/**
+ * With pipelining, this runs `onDependenciesSent` once the compiler has sent its dependencies and called
+ * `dependencyPhaseCompleted`.
+ *
+ * Scala 3.8.3 and 3.9 call `dependencyPhaseCompleted` before they actually send the dependencies, which
+ * only happens in the Inlining phase (scala/scala3#27125). As a workaround, zinc waits for the inlining
+ * phase to complete.
+ *
+ * Concurrency: phases are reported once per unit, `dependencyPhaseCompleted` is called on another thread.
+ */
+private[sbt] final class CompilerPhaseListener(
+    waitForInlining: Boolean,
+    onDependenciesSent: () => Unit
+) {
+  @volatile private[this] var dependenciesSent = !waitForInlining
+  private[this] var inliningStarted = false
+  private[this] var dependencyPhaseSignalled = false
+  private[this] var notified = false
+
+  def phaseStarted(phase: String): Unit =
+    if (!dependenciesSent) {
+      notifyIfReady {
+        if (phase == "inlining") inliningStarted = true
+        else if (inliningStarted) dependenciesSent = true
+      }
+    }
+
+  def dependencyPhaseCompleted(): Unit = notifyIfReady { dependencyPhaseSignalled = true }
+
+  /** For a run that did not reach the phase after Inlining, such as one with only Java sources. */
+  def runCompleted(): Unit = notifyIfReady { dependenciesSent = true }
+
+  private def notifyIfReady(update: => Unit): Unit = {
+    val ready = synchronized {
+      update
+      val ready = !notified && dependenciesSent && dependencyPhaseSignalled
+      if (ready) notified = true
+      ready
+    }
+    if (ready) onDependenciesSent()
+  }
+
+  /** Tells this listener about phases and forwards everything to `progress`. */
+  def progress(progress: Option[CompileProgress]): CompileProgress =
+    new CompileProgress {
+      override def startUnit(phase: String, unitPath: String): Unit = {
+        phaseStarted(phase)
+        progress.foreach(_.startUnit(phase, unitPath))
+      }
+      override def advance(current: Int, total: Int, prevPhase: String, nextPhase: String) =
+        progress.forall(_.advance(current, total, prevPhase, nextPhase))
+      override def afterEarlyOutput(success: Boolean): Unit =
+        progress.foreach(_.afterEarlyOutput(success))
+    }
+}
+
+/** A callback whose compiler progress goes through `phaseListener`. */
+private[sbt] trait HasCompilerPhaseListener {
+  def phaseListener: CompilerPhaseListener
+}
+
 private object AnalysisCallback {
 
   /** Allow creating new callback instance to be used in each compile iteration */
@@ -557,11 +618,18 @@ private object AnalysisCallback {
     def build(incHandler: Incremental.IncrementalCallback): AnalysisCallback =
       buildImpl(Some(incHandler))
 
-    // Create an AnalysisCallback without IncHandler for Java compilation purpose.
-    def build(): AnalysisCallback = buildImpl(None)
+    /**
+     * An AnalysisCallback without IncHandler, for compiling Java alone (with pipelining, after
+     * Scala). Its dependencies on classes of `previous` are internal: without the lookup they were
+     * recorded as dependencies on another subproject, through this one's own analysis.
+     */
+    def build(previous: Analysis): AnalysisCallback = buildImpl(None, Some(previous))
 
-    private def buildImpl(incHandlerOpt: Option[Incremental.IncrementalCallback]) = {
-      val previousAnalysisOpt = incHandlerOpt.map(_.previousAnalysisPruned)
+    private def buildImpl(
+        incHandlerOpt: Option[Incremental.IncrementalCallback],
+        previous: Option[Analysis] = None
+    ) = {
+      val previousAnalysisOpt = incHandlerOpt.map(_.previousAnalysisPruned).orElse(previous)
       val binaryToSourceLookup: String => Option[String] = previousAnalysisOpt match {
         case Some(analysis) => (binaryClassName: String) =>
             analysis.relations.productClassName.reverse(binaryClassName).headOption
@@ -605,7 +673,8 @@ private final class AnalysisCallback(
     progress: Option[CompileProgress],
     incHandlerOpt: Option[Incremental.IncrementalCallback],
     log: Logger
-) extends xsbti.AnalysisCallback4 {
+) extends xsbti.AnalysisCallback4
+    with HasCompilerPhaseListener {
   import Incremental.CompileCycleResult
 
   // This must have a unique value per AnalysisCallback
@@ -988,23 +1057,26 @@ private final class AnalysisCallback(
       def notifyNoEarlyOut() =
         if (!writtenEarlyArtifacts) progress.foreach(_.afterEarlyOutput(false))
       outputJarContent.scalacRunCompleted()
-      if (earlyOutput.isDefined) {
-        val early = incHandler.previousAnalysisPruned
-        invalidationResults match {
-          case None if lookup.shouldDoEarlyOutput(early)    => writeEarlyArtifacts(early)
-          case None | Some(CompileCycleResult(false, _, _)) => notifyNoEarlyOut()
-          case _                                            =>
-        }
-        if (!writtenEarlyArtifacts) // writing implies the updates merge has happened
-          mergeUpdates() // must merge updates each cycle or else scalac will clobber it
-      }
+      phaseListener.runCompleted()
+      if (earlyOutput.isDefined && !writtenEarlyArtifacts)
+        mergeUpdates() // must merge updates each cycle or else scalac will clobber it
 
       val partialAnalysis = getAnalysis
       val hasScala = Analysis.sources(partialAnalysis).scala.nonEmpty
       // If we had early output and scala sources, then the cycle has already been registered
       val shouldRegisterCycle = earlyOutput.isEmpty || !hasScala
 
-      incHandler.completeCycle(invalidationResults, partialAnalysis, shouldRegisterCycle)
+      val result =
+        incHandler.completeCycle(invalidationResults, partialAnalysis, shouldRegisterCycle)
+      // A run that did not reach the phase that sends dependencies (one that compiles no Scala
+      // source) writes its early output here, once it is known to be the last cycle.
+      if (earlyOutput.isDefined && !result.continue && !writtenEarlyArtifacts) {
+        val early = incHandler.previousAnalysisPruned
+        if (invalidationResults.isEmpty && lookup.shouldDoEarlyOutput(early))
+          writeEarlyArtifacts(early)
+        else notifyNoEarlyOut()
+      }
+      result
     } else {
       throw new IllegalStateException(
         "can't call AnalysisCallback#getCycleResultOnce more than once"
@@ -1240,7 +1312,18 @@ private final class AnalysisCallback(
 
   override def apiPhaseCompleted(): Unit = ()
 
+  val phaseListener = new CompilerPhaseListener(
+    waitForInlining = currentSetup.compilerVersion.startsWith("3."),
+    onDependenciesSent = () => invalidateAndWriteEarlyOutput()
+  )
+
+  // Sent too early on Scala 3.8.3 (scala/scala3#27125), see `CompilerPhaseListener`
   override def dependencyPhaseCompleted(): Unit = {
+    phaseListener.dependencyPhaseCompleted()
+    outputJarContent.dependencyPhaseCompleted()
+  }
+
+  private def invalidateAndWriteEarlyOutput(): Unit = {
     val incHandler = incHandlerOpt.getOrElse(sys.error("incHandler was expected"))
     if (earlyOutput.isDefined && invalidationResults.isEmpty) {
       val a = getAnalysis
@@ -1253,7 +1336,6 @@ private final class AnalysisCallback(
         writeEarlyArtifacts(merged)
       }
     }
-    outputJarContent.dependencyPhaseCompleted()
   }
 
   override def classesInOutputJar(): java.util.Set[String] = {
