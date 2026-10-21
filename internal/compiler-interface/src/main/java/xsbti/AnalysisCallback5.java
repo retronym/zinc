@@ -14,18 +14,33 @@ package xsbti;
 import xsbti.api.ClassLike;
 
 /**
- * Extension to {@link AnalysisCallback4}: the bridge extracts APIs for Merkle hashing.
+ * Extension to {@link AnalysisCallback4}: the bridge hashes each class's API itself and sends
+ * only the part of it that Zinc keeps.
  */
 public interface AnalysisCallback5 extends AnalysisCallback4 {
+    /** How the bridge reports class APIs in this compilation. */
+    enum ApiMode {
+        /** The full API through {@link AnalysisCallback#api}, hashed by Zinc. */
+        TREE,
+        /** The kept API and its hashes through {@link #api(VirtualFileRef, ClassLike, ClassHashes)}. */
+        HASHES,
+        /** Both, through {@link #apiCheck}, so that Zinc can compare the two hashings. */
+        CHECK
+    }
+
     /**
      * Whether Zinc composes the hashes of inherited members from each ancestor's own (Merkle
      * hashing). If so, the API of a class omits the members it inherits from classes of this
-     * subproject or another one Zinc has analysed. Otherwise the API of a class includes every
-     * member it inherits.
+     * subproject or another one Zinc has analysed, and the bridge may hash it itself, as
+     * {@link #apiMode} says. Otherwise the API of a class includes every member it inherits, and
+     * the bridge sends it in full, through {@link AnalysisCallback#api}.
      */
     default boolean merkleHashing() {
         return false;
     }
+
+    /** How the bridge reports class APIs in this compilation, under {@link #merkleHashing}. */
+    ApiMode apiMode();
 
     /**
      * Whether the API of a class inheriting from the library class with this binary name should
@@ -35,4 +50,17 @@ public interface AnalysisCallback5 extends AnalysisCallback4 {
     default boolean materialiseLibraryMembers(String binaryClassName) {
         return true;
     }
+
+    /** Whether name hashes include sealed children only in the pattern-matching scope. */
+    boolean useOptimizedSealed();
+
+    /**
+     * Report a class's API as Zinc stores it: the header, parents, self type, a stub (name,
+     * access, modifiers, annotations) of each declared member and of each abstract inherited
+     * member, and main methods in full; with the hashes of the whole API.
+     */
+    void api(VirtualFileRef sourceFile, ClassLike thinClass, ClassHashes hashes);
+
+    /** As {@link #api(VirtualFileRef, ClassLike, ClassHashes)}, with the full API as well. */
+    void apiCheck(VirtualFileRef sourceFile, ClassLike fullClass, ClassLike thinClass, ClassHashes hashes);
 }

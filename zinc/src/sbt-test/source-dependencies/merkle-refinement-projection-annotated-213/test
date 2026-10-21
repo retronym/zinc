@@ -1,0 +1,8 @@
+# merkle-refinement-projection-annotated on Scala 2.13, whose eta-expansion owns the type
+# parameter of `List` by a local dummy rather than by the alias, when `A` is typed from source.
+
+> p/compile
+$ copy-file changes/B.scala p/B.scala
+> p/compile
+> p/checkIterations 2
+> p/checkRecompilations 1 p.B p.C
