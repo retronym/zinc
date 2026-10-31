@@ -193,4 +193,21 @@ class ParallelGzipOutputStreamSpecification extends AnyFlatSpec with Matchers {
     }
     Await.result(verifications, 60.seconds)
   }
+
+  "ParallelGzipOutputStream" should "compress at the level it is given" in {
+    val data = Array.tabulate[Byte](defaultSize * 4)(i => ((i / 7) % 50).toByte)
+    def at(level: Int): Array[Byte] = {
+      val bout = new ByteArrayOutputStream()
+      val gout = new ParallelGzipOutputStream(bout, 4, level)
+      try gout.write(data)
+      finally gout.close()
+      bout.toByteArray
+    }
+    val stored = at(0)
+    val best = at(9)
+    decompress(stored) shouldBe data
+    decompress(best) shouldBe data
+    stored.length should be > data.length
+    best.length should be < data.length / 10
+  }
 }

@@ -96,6 +96,7 @@ object FileAnalysisStore {
 
       val outputStream = new FileOutputStream(tmpAnalysisFile)
       Using.zipOutputStream(outputStream) { outputStream =>
+        outputStream.setLevel(AnalysisCompression.level)
         val protobufWriter = CodedOutputStream.newInstance(outputStream)
         outputStream.putNextEntry(new ZipEntry(analysisFileName))
         format.write(protobufWriter, analysis, setup)
@@ -119,6 +120,7 @@ object FileAnalysisStore {
       val tmpAnalysisFile = Files.createTempFile(tmpDir.toPath, file.getName, ".tmp").toFile
       if (!file.getParentFile.exists()) file.getParentFile.mkdirs()
       Using.zipOutputStream(new FileOutputStream(tmpAnalysisFile)) { outputStream =>
+        outputStream.setLevel(AnalysisCompression.level)
         val writer = new BufferedWriter(new OutputStreamWriter(outputStream, IO.utf8))
         outputStream.putNextEntry(new ZipEntry(analysisFileName))
         format.write(writer, analysis, setup)
