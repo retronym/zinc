@@ -1,0 +1,9 @@
+# P has only a lazy val, so it needs no initialiser. Compiled with P, Client still calls P.$init$.
+> p/compile
+# Client alone, against P's TASTy (which says P has no initialiser): its static initialiser omits the call.
+$ copy-file changes/Client.scala p/Client.scala
+> p/compile
+# P gains a statement. Its API is unchanged, so Zinc recompiles P only, and Client never runs it;
+# a clean build compiles Client with P and calls P.$init$.
+$ copy-file changes/P.scala p/P.scala
+> p/run expect-init

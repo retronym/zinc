@@ -159,6 +159,17 @@ class NameHashingSpecification extends UnitSpec {
     assertNameHashNotEqualForRegularName("bar", nameHashes1, nameHashes2)
   }
 
+  it should "generate hashes that are sensitive to whether a class is a trait" in {
+    val nameHashing = new NameHashing(false)
+    val traitFoo =
+      simpleClassLike(name = "Foo", dt = DefinitionType.Trait, structure = simpleStructure())
+    val classFoo =
+      simpleClassLike(name = "Foo", dt = DefinitionType.ClassDef, structure = simpleStructure())
+    val nameHashes1 = nameHashing.nameHashes(traitFoo)
+    val nameHashes2 = nameHashing.nameHashes(classFoo)
+    assertNameHashNotEqualForRegularName("Foo", nameHashes1, nameHashes2)
+  }
+
   /**
    * Test if members introduced in parent class affect hash of a name
    * of a child class.

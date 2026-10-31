@@ -1,0 +1,12 @@
+# Pending: with pipelining, lib's failed compile leaves its early output (pickles written before
+# refchecks) in place. The revert finds no change in lib, so app compiles against the stale
+# pickles of the failed A. Reproduces on 2.13.x, not 2.12.x. Found by the Conformance harness.
+> app/compile
+
+# A.m no longer conforms to M.m: lib fails
+$ copy-file lib/changes/A1.scala lib/A.scala
+-> app/compile
+
+# Back to the original sources: this must compile as before
+$ copy-file lib/changes/A0.scala lib/A.scala
+> app/compile
