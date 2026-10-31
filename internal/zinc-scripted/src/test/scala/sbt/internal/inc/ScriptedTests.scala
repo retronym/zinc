@@ -11,6 +11,7 @@
 
 package sbt.internal.inc
 
+import java.io.{ BufferedWriter, FileWriter, Writer }
 import java.nio.file.{ Files, Path }
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -32,7 +33,6 @@ final class ScriptedTests(
 ) {
   import ScriptedTests._
 
-  private[this] val batchIdGenerator: AtomicInteger = new AtomicInteger
   private[this] val runIdGenerator: AtomicInteger = new AtomicInteger
 
   final val ScriptFilename = "test"
@@ -48,8 +48,8 @@ final class ScriptedTests(
     handlersProvider.getHandlers(scriptConfig)
   }
 
-  /** Returns a sequence of test runners that have to be applied in the call site. */
-  def batchScriptedRunner(tests: Seq[ScriptedTest], instances: Int): Seq[TestRunner] = {
+  /** Returns one runner per test, to be applied in the call site. */
+  def scriptedRunners(tests: Seq[ScriptedTest]): Seq[TestRunner] = {
     // Test group and names may be file filters (like '*')
     val groupAndNameDirs = for {
       ScriptedTest(group, name) <- tests
@@ -57,24 +57,13 @@ final class ScriptedTests(
       testDir <- groupDir.toFile.*(name).get.map(_.toPath)
     } yield (groupDir, testDir)
 
-    val labelsAndDirs = groupAndNameDirs.map {
+    groupAndNameDirs.map {
       case (groupDir, nameDir) =>
         val groupName = groupDir.getFileName.toString
         val testName = nameDir.getFileName.toString
         val testDirectory = testResources.readOnlyResourceDirectory(groupName, testName)
-        (groupName, testName) -> testDirectory
-    }
-
-    if (labelsAndDirs.isEmpty) List()
-    else {
-      val batchSeed = labelsAndDirs.size / instances
-      val batchSize = if (batchSeed == 0) labelsAndDirs.size else batchSeed
-      labelsAndDirs
-        .grouped(batchSize)
-        .map { batch => () =>
-          IO.withTemporaryDirectory(tempDir => runBatchedTests(batch, tempDir.toPath))
-        }
-        .toList
+        () =>
+          IO.withTemporaryDirectory(tempDir => runTest(groupName, testName, testDirectory, tempDir))
     }
   }
 
@@ -87,72 +76,66 @@ final class ScriptedTests(
     logFile
   }
 
-  case class ScriptedLogger(log: ManagedLogger, buffer: BufferedAppender)
+  /**
+   * A logger of one test: its output goes to the console, buffered when `bufferLog` is set, and to
+   * the log file of that test alone.
+   */
+  final class ScriptedLogger(val log: ManagedLogger, val buffer: BufferedAppender, writer: Writer)
+      extends AutoCloseable {
+    def close(): Unit = {
+      LoggerContext.globalContext.remove(log.name)
+      writer.close()
+    }
+  }
 
   private val BufferSize = 8192 // copied from IO since it's private
 
-  def rebindLogger(logger: ScriptedLogger, logFile: Path): ScriptedLogger = {
-    // Create buffered logger to a file that we will afterwards use.
-    import java.io.{ BufferedWriter, FileWriter }
-    val name = logger.log.name
-    val writer = new BufferedWriter(new FileWriter(logFile.toFile), BufferSize)
-    val fileOut = ConsoleOut.bufferedWriterOut(writer)
-    val fileAppender = ConsoleAppender(name, fileOut, useFormat = false)
-    LoggerContext.globalContext.addAppender(name, fileAppender -> Level.Debug)
-    logger
-  }
-
-  private def createBatchLogger(name: String): ScriptedLogger = {
+  private def createTestLogger(name: String, logFile: Path): ScriptedLogger = {
     val logger = LoggerContext.globalContext.logger(name, None, None)
     val outAppender = BufferedAppender(ConsoleAppender())
+    val writer = new BufferedWriter(new FileWriter(logFile.toFile), BufferSize)
+    val fileAppender =
+      ConsoleAppender(name, ConsoleOut.bufferedWriterOut(writer), useFormat = false)
     LoggerContext.globalContext.clearAppenders(name)
     LoggerContext.globalContext.addAppender(name, outAppender -> outLevel)
-    ScriptedLogger(logger, outAppender)
+    LoggerContext.globalContext.addAppender(name, fileAppender -> Level.Debug)
+    new ScriptedLogger(logger, outAppender, writer)
   }
 
   /**
-   * Runs the tests of a batch one after the other, each in a fresh directory with fresh handlers.
+   * Runs one test in a fresh directory with fresh handlers.
    *
-   * Sharing one directory and clearing it between tests is not isolation: on Windows a file that
-   * is still open cannot be deleted, and a JAR left behind under `lib/` lands on the next test's
-   * classpath.
+   * Sharing one directory between tests and clearing it in between is not isolation: on Windows a
+   * file that is still open cannot be deleted, and a JAR left behind under `lib/` lands on the next
+   * test's classpath.
    *
-   * @param groupedTests The labels and directories of the tests to run.
-   * @param batchTmpDir The directory holding one subdirectory per test.
+   * @param originalDir The directory of the test in the source tree.
+   * @param testDir The directory to copy the test to and run it in.
    */
-  private def runBatchedTests(
-      groupedTests: Seq[((String, String), File)],
-      batchTmpDir: Path
-  ): Seq[Option[String]] = {
-    val runner = new BatchScriptRunner
-    val batchId = s"initial-batch-${batchIdGenerator.incrementAndGet()}"
-    val batchLogger = createBatchLogger(batchId)
-    if (bufferLog) batchLogger.buffer.record()
+  private def runTest(
+      group: String,
+      name: String,
+      originalDir: File,
+      testDir: File
+  ): Option[String] = {
+    val label = s"$group/$name"
+    val logFile = createScriptedLogFile(s"scripted-$group-$name")
+    val logger = createTestLogger(logFile.getFileName.toString, logFile)
+    try {
+      if (bufferLog) logger.buffer.record()
+      logger.log.info(s"Running $label")
+      IO.copyDirectory(originalDir, testDir)
 
-    groupedTests.zipWithIndex.map {
-      case (((group, name), originalDir), index) =>
-        val label = s"$group/$name"
-        val loggerName = s"scripted-$group-$name.log"
-        val logFile = createScriptedLogFile(loggerName)
-        val logger = rebindLogger(batchLogger, logFile)
-        if (bufferLog) batchLogger.buffer.record()
-
-        batchLogger.log.info(s"Running $label")
-        val testDir = Files.createDirectory(batchTmpDir.resolve(index.toString))
-        IO.copyDirectory(originalDir, testDir.toFile)
-
-        val handlers = createScriptedHandlers(batchId, testDir, batchLogger.log)
-        val states = new BatchScriptRunner.States
-        val seqHandlers = handlers.values.toList
-        runner.initStates(states, seqHandlers)
-        try {
-          val runTest = () => commonRunTest(label, testDir, handlers, runner, states, logger)
-          runOrHandleDisabled(label, testDir, runTest, logger)
-        } finally {
-          runner.cleanUpHandlers(seqHandlers, states)
-          IO.delete(testDir.toFile)
-        }
-    }
+      val runner = new BatchScriptRunner
+      val handlers = createScriptedHandlers(label, testDir.toPath, logger.log)
+      val states = new BatchScriptRunner.States
+      val seqHandlers = handlers.values.toList
+      runner.initStates(states, seqHandlers)
+      try {
+        val runTest = () => commonRunTest(label, testDir.toPath, handlers, runner, states, logger)
+        runOrHandleDisabled(label, testDir.toPath, runTest, logger)
+      } finally runner.cleanUpHandlers(seqHandlers, states)
+    } finally logger.close()
   }
 
   private def runOrHandleDisabled(
@@ -176,7 +159,8 @@ final class ScriptedTests(
       states: BatchScriptRunner.States,
       scriptedLogger: ScriptedLogger
   ): Option[String] = {
-    val ScriptedLogger(logger, buffer) = scriptedLogger
+    val logger = scriptedLogger.log
+    val buffer = scriptedLogger.buffer
 
     val (file, pending) = {
       val normal = testDirectory.resolve(ScriptFilename)
@@ -226,6 +210,6 @@ final class ScriptedTests(
 }
 
 object ScriptedTests {
-  type TestRunner = () => Seq[Option[String]]
+  type TestRunner = () => Option[String]
   val emptyCallback: Path => Unit = _ => ()
 }
