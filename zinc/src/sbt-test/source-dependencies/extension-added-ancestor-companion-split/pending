@@ -1,0 +1,9 @@
+# C, downstream, resolves t.m (t: T) through the implicit class in Q's companion; Q is an
+# ancestor of T, both upstream.
+> down/compile
+
+# P, between T and Q, gains a companion with an implicit class: more specific, it wins, and a
+# clean build rejects C. Upstream, T is invalidated as P's inheritor but its API does not change;
+# downstream, C depends on T and Q, not on P (sbt/zinc#1845's shape).
+$ copy-file changes/P.scala up/P.scala
+-> down/compile
