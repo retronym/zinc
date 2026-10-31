@@ -1,0 +1,14 @@
+# A.x = B.y, B.y = C.z, C.z: Int.
+> compile
+
+# C.z becomes Some(A.x): three inferred types in a cycle. Each round compiles a pair, which
+# typechecks against the third's classfile, so the types grow by one Some per round
+# (B.y becomes Some of Int, then A.x, then C.z Some of Some of Int, and so on) and the pairs rotate.
+# Only the brute-force round (transitiveStep) compiles all three together, and fails as a
+# clean build does. Without transitiveStep the rounds would not end.
+$ copy-file changes/C1.scala C.scala
+-> compile
+> checkInvalidationLog expected-invalidation-log
+
+> clean
+-> compile
