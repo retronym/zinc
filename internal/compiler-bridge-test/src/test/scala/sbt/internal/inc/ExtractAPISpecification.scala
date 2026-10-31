@@ -3,7 +3,7 @@ package internal
 package inc
 
 import xsbti.api._
-import xsbt.api.{ SameAPI, ShowAPI }
+import xsbt.api.{ APIUtil, SameAPI, ShowAPI }
 
 class ExtractAPISpecification
     extends UnitSpec
@@ -30,6 +30,19 @@ class ExtractAPISpecification
          |""".stripMargin
     val fooClassApi2 = compileAndGetFooClassApi(src2)
     assert(SameAPI(fooClassApi1, fooClassApi2) !== true)
+  }
+
+  it should "not count a `macro ???` definition as a macro" in {
+    val src =
+      """|import scala.language.experimental.macros
+         |import scala.reflect.macros.blackbox
+         |object Impl { def impl(c: blackbox.Context): c.Expr[Int] = c.universe.reify(1) }
+         |object Stub { def m: Int = macro ??? }
+         |object Real { def m: Int = macro Impl.impl }
+         |""".stripMargin
+    val apis = extractApisFromSrc(src).map(c => c.name -> c).toMap
+    assert(!APIUtil.hasMacro(apis("Stub")))
+    assert(APIUtil.hasMacro(apis("Real")))
   }
 
   it should "extract correctly the definition type of a package object" in {
