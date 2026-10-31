@@ -1,0 +1,8 @@
+# Client imports `a.X.Foo` statically; `X` has only a method `Foo`, so `Foo` is the class `a.b.Foo`.
+> compile
+
+# A member class `X.Foo` now comes through the single-static import, which shadows the package,
+# and has no `m`: a clean build fails. Client's classfile does not name `X`, but its static import
+# records an edge to `X`, whose API changed.
+$ copy-file changes/X.java src/main/java/a/X.java
+-> compile
