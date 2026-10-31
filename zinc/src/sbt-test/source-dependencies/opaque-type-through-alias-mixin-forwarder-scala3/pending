@@ -1,0 +1,6 @@
+# K's mixin forwarder for Tr.h erases A.S = O.T to T's right-hand side.
+> p/run int
+# T's right-hand side becomes Long. Tr's API renders A.S by name and does not move; K records
+# nothing of A or O and keeps h(I)I. A clean build has h(J)I.
+$ copy-file changes/O.scala p/O.scala
+> p/run long
