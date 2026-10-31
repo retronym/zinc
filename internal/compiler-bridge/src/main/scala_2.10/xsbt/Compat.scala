@@ -57,6 +57,15 @@ import scala.tools.nsc.symtab.Flags, Flags._
 abstract class Compat {
   val global: Global
   import global._
+
+  /** `NamedArg` is `AssignOrNamedArg` before 2.13. */
+  protected object NamedArgCompat {
+    def apply(lhs: Tree, rhs: Tree): Tree = AssignOrNamedArg(lhs, rhs)
+    def unapply(t: Tree): Option[(Tree, Tree)] = t match {
+      case AssignOrNamedArg(lhs, rhs) => Some((lhs, rhs))
+      case _                          => None
+    }
+  }
   val LocalChild = global.tpnme.LOCAL_CHILD
   val Nullary = global.NullaryMethodType
   val ScalaObjectClass = definitions.ScalaObjectClass

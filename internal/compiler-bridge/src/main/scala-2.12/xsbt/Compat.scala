@@ -25,6 +25,15 @@ abstract class Compat {
     Compat.OriginalTreeTraverser.Instance.traverseOriginal(in)(func)
   }
 
+  /** `NamedArg` is `AssignOrNamedArg` before 2.13. */
+  protected object NamedArgCompat {
+    def apply(lhs: Tree, rhs: Tree): Tree = AssignOrNamedArg(lhs, rhs)
+    def unapply(t: Tree): Option[(Tree, Tree)] = t match {
+      case AssignOrNamedArg(lhs, rhs) => Some((lhs, rhs))
+      case _                          => None
+    }
+  }
+
   protected def processSAMAttachment(f: Function)(addDependency: Symbol => Unit): Unit = {
     f.attachments.get[SAMFunction].foreach(sam => {
       addDependency(sam.samTp.typeSymbol)
