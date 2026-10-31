@@ -1,0 +1,7 @@
+# Client, in `package a; package b`, summons an A: `import a.X.given` supplies `given B`, `package object b` supplies
+# `given g: C` (C <: B). Scala 3.7+ picks the most general, B.
+> p/run B
+# g is retyped to A, now the most general, so a clean build chooses A. Client has no edge to the package object;
+# Zinc recompiles PObj.scala only and Client keeps B. Lean: SpecGivens.type_widened_stale.
+$ copy-file changes/PObj.scala p/PObj.scala
+> p/run A
