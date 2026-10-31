@@ -1,0 +1,13 @@
+> compile
+
+# Foo renamed to Bar: Client no longer compiles, but javac writes Bar.class first.
+$ delete src/main/java/a/b/Foo.java
+$ copy-file changes/Bar.java src/main/java/a/b/Bar.java
+-> compile
+
+# The rename reverted: the sources are those of the last successful build, so Zinc compiles
+# nothing, and the product of the failed build stays in the output.
+$ delete src/main/java/a/b/Bar.java
+$ copy-file changes/Foo.java src/main/java/a/b/Foo.java
+> compile
+$ absent target/classes/a/b/Bar.class

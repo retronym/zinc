@@ -1,0 +1,8 @@
+# J.K is the constant expression 1 << 3. javac's classfile has its value; Scala 3's Java
+# parser does not fold it (scala/scala3#27264).
+> p/compile
+
+# A clean build compiles C with J.java and rejects `val a: 8 = J.K`. Zinc compiles C alone against
+# J.class, where J.K has the constant type 8, and accepts it.
+$ copy-file changes/C.scala p/C.scala
+-> p/compile
