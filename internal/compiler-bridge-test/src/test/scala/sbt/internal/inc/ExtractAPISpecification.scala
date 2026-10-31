@@ -38,6 +38,10 @@ object ExtractAPISpecification
     ),
     example("represent a self type correctly", selfTypes),
     example("print the arguments of static annotations", annotationArguments),
+    example(
+      "print an annotation's default argument the same from source and from classfile",
+      annotationDefaultArgument
+    ),
   )
 
   private def fooClassApi(src: String): ClassLike =
@@ -359,5 +363,29 @@ object ExtractAPISpecification
     val printed =
       f.annotations.toList.map(a => a.arguments.toList.map(arg => (arg.name, arg.value)))
     printed ==== List(List(("", "(1,\"s\")")), List(("", "()")), List(("", "(-2,\"t\")")))
+  }
+
+  // Since 2.13.17 the typer inlines an omitted annotation argument's default from the `@defaultArg`
+  // meta-annotation of the parameter, when it is available: always for an annotation class loaded
+  // from a classfile, but only if its parameter was typed first when compiled in the same run.
+  // Otherwise it inserts a default getter call, which ExtractAPI normalizes to the inlined default.
+  private def annotationDefaultArgument: Result = {
+    val ann =
+      """|class ann[T <: Throwable](cause: String = "") extends scala.annotation.StaticAnnotation
+         |""".stripMargin
+    val use =
+      """|trait A { @ann[IndexOutOfBoundsException] def apply(i: Int): Int }
+         |""".stripMargin
+    def printed(apis: Set[ClassLike]): String = {
+      val a = apis.find(_.name == "A").get
+      val apply = a.structure.declared.find(_.name == "apply").get
+      apply.annotations.head.arguments.head.value
+    }
+    val fromSource = printed(extractApisFromSrcs(List(use, ann)).head)
+    val fromClassfile = printed(extractApisFromSrcs(List(ann), List(use))(1))
+    val patch = scalaVersion.stripPrefix("2.13.").takeWhile(_.isDigit)
+    val inlinesDefaults = scalaVersion.startsWith("2.13.") && patch.nonEmpty && patch.toInt >= 17
+    val same = fromSource ==== fromClassfile
+    if (inlinesDefaults) same.and(fromClassfile ==== "(\"\")") else same
   }
 }
