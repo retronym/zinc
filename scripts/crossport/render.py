@@ -46,7 +46,7 @@ table.skips th{font:600 .7rem var(--sans);letter-spacing:.06em;text-transform:up
 .tip[hidden]{display:none}.tip.pinned{pointer-events:auto;border-color:var(--l0);padding-right:34px}.tip .x{position:absolute;top:6px;right:8px;border:0;background:none;color:var(--fg2);font-size:1.2rem;line-height:1;cursor:pointer;padding:2px 6px}.tip .hint{margin-top:8px;font-size:.72rem;color:var(--fg3)}.tip .h{font-weight:600;margin-bottom:4px}.tip .l{margin:1px 0}.tip .u+.u{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}.tip .m{color:var(--fg2);font-size:.8rem;margin-top:2px}.tip a{color:var(--l0)}.tip code{font-size:.78rem}details summary{cursor:pointer;font-weight:600;margin:24px 0 8px}
 </style></head><body><div class="wrap">
 <h1>Bridge cross-port gaps<span class="wip">WIP</span></h1>
-<p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.12.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
+<p>Fixes that landed on the compiler bridges of Scala 2.13, Scala 3 and Zinc (<code>develop</code>, <code>1.13.x</code>), one row per logical fix. Solid dots are where the fix landed; arrows point in port direction (earlier to later); dashed arrows go to a line that does not have it yet. Changes since __SINCE__, generated __GEN__.</p>
 <div class="tiles" id="tiles"></div>
 <div class="legend">
 <span><i style="background:var(--crit-bg);border-color:var(--crit)"></i>pending: should exist, missing</span>
@@ -65,7 +65,7 @@ __CI__
 </div>
 <script>
 const DATA = __DATA__;
-const LINES = [["scala2","scala/scala 2.13.x","--l0"],["scala3","scala/scala3 main","--l1"],["zinc-develop","sbt/zinc develop","--l2"],["zinc-1.12.x","sbt/zinc 1.12.x","--l3"]];
+const LINES = [["scala2","scala/scala 2.13.x","--l0"],["scala3","scala/scala3 main","--l1"],["zinc-develop","sbt/zinc develop","--l2"],["zinc-1.13.x","sbt/zinc 1.13.x","--l3"]];
 const NS = "http://www.w3.org/2000/svg";
 const LABEL_W = 340, COL_W = 175, ROW_H = 58, HEAD_H = 4, W = LABEL_W + COL_W * 4 + 10;
 const cx = i => LABEL_W + COL_W * i + COL_W / 2;

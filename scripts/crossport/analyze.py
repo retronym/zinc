@@ -9,7 +9,7 @@ usage: analyze.py [--since YYYY-MM-DD] [--out DIR] [--verdicts FILE]
 import argparse, json, re
 from pathlib import Path
 
-LINES = ["scala2", "scala3", "zinc-develop", "zinc-1.12.x"]
+LINES = ["scala2", "scala3", "zinc-develop", "zinc-1.13.x"]
 REPO_LINE = {"scala/scala": "scala2", "scala/scala3": "scala3"}
 SEMANTIC = re.compile(r"/(ExtractAPI|ExtractUsedNames|ExtractDependencies|Dependency|ClassName|API|LocalToNonLocalClass|GlobalHelpers|CallbackGlobal|ThunkHolder|APIUtils|ShowAPI)\.scala$")
 TEST = re.compile(r"(/test/|/src/test|compiler-bridge-test|sbt-test/)")
@@ -333,7 +333,7 @@ def main():
                 elif line.startswith("zinc"):
                     status[line] = {"state": "pending", "reason": "missing on this zinc line"}
                 else:
-                    status[line] = {"state": "pending" if present & {"zinc-develop", "zinc-1.12.x"} else "triage", "reason": "no linked change found"}
+                    status[line] = {"state": "pending" if present & {"zinc-develop", "zinc-1.13.x"} else "triage", "reason": "no linked change found"}
             v = verdicts.get(line)
             if v:
                 status[line] = ledger_status(v)

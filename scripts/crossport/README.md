@@ -1,6 +1,6 @@
 # Bridge cross-port gap report
 
-WIP. Reports which fixes to the compiler bridges have not yet been ported between Scala 2.13 (`scala/scala` 2.13.x), Scala 3 (`scala/scala3` main), and Zinc (`develop` and `1.12.x`).
+WIP. Reports which fixes to the compiler bridges have not yet been ported between Scala 2.13 (`scala/scala` 2.13.x), Scala 3 (`scala/scala3` main), and Zinc (`develop` and `1.13.x`, which replaced `1.12.x`).
 
 ```bash
 python3 scripts/crossport/fetch.py      # gh api; cached per commit under ~/.cache/crossport

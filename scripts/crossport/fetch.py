@@ -16,15 +16,15 @@ SOURCES = [
      "paths": ["sbt-bridge", "compiler/src/dotty/tools/dotc/sbt", "sbt-test/source-dependencies"]},
     {"id": "zinc-develop", "repo": "sbt/zinc", "branch": "develop",
      "paths": ["internal/compiler-bridge", "internal/compiler-bridge-test"]},
-    {"id": "zinc-1.12.x", "repo": "sbt/zinc", "branch": "1.12.x",
+    {"id": "zinc-1.13.x", "repo": "sbt/zinc", "branch": "1.13.x",
      "paths": ["internal/compiler-bridge", "internal/compiler-bridge-test"]},
 ]
 
 OPEN_PR_REPOS = [
     ("scala/scala", "2.13.x", "scala2"), ("scala/scala3", "main", "scala3"),
-    ("sbt/zinc", "develop", "zinc-develop"), ("sbt/zinc", "1.12.x", "zinc-1.12.x"),
+    ("sbt/zinc", "develop", "zinc-develop"), ("sbt/zinc", "1.13.x", "zinc-1.13.x"),
     ("retronym/scala", "2.13.x", "scala2"), ("retronym/scala3", "main", "scala3"),
-    ("retronym/zinc", "develop", "zinc-develop"), ("retronym/zinc", "1.12.x", "zinc-1.12.x"),
+    ("retronym/zinc", "develop", "zinc-develop"), ("retronym/zinc", "1.13.x", "zinc-1.13.x"), ("retronym/zinc", "1.12.x", "zinc-1.13.x"),
 ]
 OPEN_PR_QUERY = """query($owner:String!,$name:String!,$base:String!,$after:String){repository(owner:$owner,name:$name){
 pullRequests(states:OPEN,baseRefName:$base,first:50,after:$after){pageInfo{hasNextPage endCursor}

@@ -8,7 +8,7 @@ This is a ground-truth check for analyze.py: it finds gaps whatever the commit h
 says, and shows when a commit-level "pending" is already ported under another title.
 
 usage: srcdiff.py ZINC_CHECKOUT SCALA_CHECKOUT
-  e.g. srcdiff.py ~/code/zinc ~/code/scala   (zinc on 1.12.x or develop, scala on 2.13.x)
+  e.g. srcdiff.py ~/code/zinc ~/code/scala   (zinc on 1.13.x or develop, scala on 2.13.x)
 """
 import difflib, re, sys
 from pathlib import Path

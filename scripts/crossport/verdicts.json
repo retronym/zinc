@@ -17,7 +17,7 @@
    "state": "ported",
    "ref": "sbt/zinc#1601"
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "ported",
    "ref": "sbt/zinc#1602"
   }
@@ -34,7 +34,7 @@
    "state": "ported",
    "ref": "sbt/zinc#1288"
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "ported",
    "ref": "sbt/zinc#1288"
   }
@@ -63,7 +63,7 @@
    "state": "ported",
    "ref": "sbt/zinc#1259"
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "ported",
    "ref": "sbt/zinc#1259"
   }
@@ -73,7 +73,7 @@
    "state": "wontfix",
    "reason": "Compat shim for running scala2-sbt-bridge on older zinc; zinc's own bridge always matches its interface."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "as zinc-develop"
   }
@@ -83,7 +83,7 @@
    "state": "wontfix",
    "reason": "as scala2#10966"
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "as scala2#10966"
   }
@@ -93,7 +93,7 @@
    "state": "wontfix",
    "reason": "Reporter messaging only, no invalidation effect; not checked in detail."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "as zinc-develop"
   }
@@ -103,7 +103,7 @@
    "state": "wontfix",
    "reason": "Lint warning cleanup, mechanical."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "mechanical"
   },
@@ -127,7 +127,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -141,7 +141,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -155,7 +155,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -169,7 +169,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -183,7 +183,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -197,7 +197,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -211,7 +211,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -225,7 +225,7 @@
    "state": "wontfix",
    "reason": "Scala 2 bridge tracks macro type args separately (sbt/zinc#1316, scala/scala#11287)."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 2 bridge tracks macro type args separately (sbt/zinc#1316, scala/scala#11287)."
   }
@@ -239,7 +239,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -253,7 +253,7 @@
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "Scala 3 specific mechanism; no Scala 2 counterpart."
   }
@@ -267,7 +267,7 @@
    "state": "wontfix",
    "reason": "scala2-sbt-bridge already calls dependencyPhaseCompleted at the end of its Dependency phase (Dependency.scala)."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "wontfix",
    "reason": "scala2-sbt-bridge already calls dependencyPhaseCompleted at the end of its Dependency phase (Dependency.scala)."
   }
@@ -281,7 +281,7 @@
    "state": "ported",
    "ref": "sbt/zinc#1601"
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "ported",
    "ref": "sbt/zinc#1602"
   }
@@ -295,7 +295,7 @@
    "state": "triage",
    "reason": "Pattern-match under-compilation when a case class or extractor changes: check whether Scala 2 has the same symptom (needs a scripted test)."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "triage",
    "reason": "Pattern-match under-compilation when a case class or extractor changes: check whether Scala 2 has the same symptom (needs a scripted test)."
   }
@@ -309,7 +309,7 @@
    "state": "triage",
    "reason": "JDK classes under -release reported as binary deps: check Scala 2 with -release."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "triage",
    "reason": "JDK classes under -release reported as binary deps: check Scala 2 with -release."
   }
@@ -323,7 +323,7 @@
    "state": "triage",
    "reason": "Paths of binary deps on module objects: check Scala 2's LocateClassFile handling."
   },
-  "zinc-1.12.x": {
+  "zinc-1.13.x": {
    "state": "triage",
    "reason": "Paths of binary deps on module objects: check Scala 2's LocateClassFile handling."
   }

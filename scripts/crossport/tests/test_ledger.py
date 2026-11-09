@@ -42,9 +42,9 @@ class LedgerLinks(unittest.TestCase):
 
     def test_ref_prefers_the_unit_on_the_ported_line(self):
         units = fixture()
-        units[("zinc-1.12.x", 1601)] = unit("zinc-1.12.x", "sbt/zinc", 1601, "2025-09-27")
-        got = analyze.resolve_ref("sbt/zinc#1601", units, "zinc-1.12.x")
-        self.assertEqual(got, [("zinc-1.12.x", 1601)])
+        units[("zinc-1.13.x", 1601)] = unit("zinc-1.13.x", "sbt/zinc", 1601, "2025-09-27")
+        got = analyze.resolve_ref("sbt/zinc#1601", units, "zinc-1.13.x")
+        self.assertEqual(got, [("zinc-1.13.x", 1601)])
 
     def test_split_pr_part_keys_resolve(self):
         units = {("scala2", 11287, 1): unit("scala2", "scala/scala", 11287, "2026-10-12", part=(2, 6))}
@@ -55,8 +55,8 @@ class LedgerLinks(unittest.TestCase):
 class Verdicts(unittest.TestCase):
     def test_verdict_keyed_by_any_unit_of_a_merged_group_is_found(self):
         units = fixture()
-        ledger = {"scala3#26642": {"zinc-1.12.x": {"state": "ported", "ref": "sbt/zinc#1602"}}}
-        self.assertEqual(analyze.group_verdicts(list(units), units, ledger)["zinc-1.12.x"]["ref"], "sbt/zinc#1602")
+        ledger = {"scala3#26642": {"zinc-1.13.x": {"state": "ported", "ref": "sbt/zinc#1602"}}}
+        self.assertEqual(analyze.group_verdicts(list(units), units, ledger)["zinc-1.13.x"]["ref"], "sbt/zinc#1602")
 
     def test_tracking_and_ref_are_kept_in_the_status(self):
         st = analyze.ledger_status({"state": "pending", "reason": "no hasInline", "tracking": "retronym/scala#135"})

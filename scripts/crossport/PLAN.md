@@ -41,7 +41,7 @@ TODO. Flag a fix whose scripted test directory holds `disabled` or `pending` in 
 
 ### 5. Customer lens
 
-TODO. `--lines scala2,zinc-1.12.x` on `analyze.py` and `render.py`, restricting lanes, rows (drop rows with no unit on a chosen line) and counts. Test: with two lanes selected, Scala 3-only rows drop out and tile counts change accordingly.
+TODO. `--lines scala2,zinc-1.13.x` on `analyze.py` and `render.py`, restricting lanes, rows (drop rows with no unit on a chosen line) and counts. Test: with two lanes selected, Scala 3-only rows drop out and tile counts change accordingly.
 
 ### 2. Source-diff ground truth
 
