@@ -327,5 +327,38 @@
    "state": "triage",
    "reason": "Paths of binary deps on module objects: check Scala 2's LocateClassFile handling."
   }
+ },
+ "zinc-develop#1842": {
+  "scala2": {
+   "state": "pending",
+   "reason": "The scala2-sbt-bridge Dependency and ExtractUsedNames do not visit sym.annotations; zinc's annotation-ctor-change-213-bin is pending until the port lands."
+  },
+  "scala3": {
+   "state": "pending",
+   "reason": "The PR notes Scala 3's ExtractDependencies has the same gap; annotation-ctor-change-3 is pending in Zinc."
+  },
+  "zinc-1.13.x": {
+   "state": "pending",
+   "reason": "Not backported yet (TODO in the PR)."
+  }
+ },
+ "zinc-develop#1807": {
+  "scala2": {
+   "state": "ported",
+   "ref": "scala/scala#11360",
+   "reason": "Landed 2026-11-03."
+  },
+  "scala3": {
+   "state": "pending",
+   "reason": "Scala 3 CI skip module-inheritance-extra-hash; tracked by the Scala 3 CI job.",
+   "tracking": "retronym/scala3#26"
+  }
+ },
+ "zinc-develop#1324": {
+  "scala3": {
+   "state": "pending",
+   "reason": "Scala 3 CI skip constructors-unrelated-2.",
+   "tracking": "retronym/scala3#26"
+  }
  }
 }
