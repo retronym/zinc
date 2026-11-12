@@ -82,6 +82,10 @@ class Step:
         return self.meta.get("subject", "") if self.meta else ""
 
     @property
+    def exported(self):
+        return self.meta.get("exported") if self.meta else None
+
+    @property
     def date(self):
         return (self.meta.get("date") or "")[:10] if self.meta else ""
 
@@ -436,8 +440,15 @@ def header(rp, S):
     rng = f"`{start}`..`{last.sha}`" if start and last else "unknown"
     L.append(f"- Repository: `{S['repo']}`, first-parent commits {rng}"
              + (f", committed {dated[0]} to {dated[-1]}" if dated else "")
-             + (f"; the export (modules, classpaths, options) is of `{info['exportCommit'][:9]}`" if info.get("exportCommit") else "")
+             + (f"; the export (modules, classpaths, options) is of `{info['exportCommit'][:9]}`"
+                if info.get("exportCommit") and not info.get("sbtExport") else "")
              + ".")
+    if info.get("sbtExport"):
+        ok, failed = [s for s in steps if s.exported], [s for s in steps if s.exported is False]
+        L.append(f"- Build: re-exported by the project's sbt at the start and at each commit that changes `*.sbt` or `project/`, "
+                 f"so dependencies, options and generated sources follow the history: {plural(len(ok), 'step')} took a new export"
+                 + (f", and {plural(len(failed), 'step')} ({', '.join(code(s.name) for s in failed[:5])}) did not export and kept the previous one" if failed else "")
+                 + ". Those steps are marked `[build]` under Steps.")
     line = f"- Steps: {len(steps)} complete"
     if rp.incomplete:
         line += f", {len(rp.incomplete)} in progress and left out ({', '.join(code(n) for n in rp.incomplete[:3])})"
@@ -871,7 +882,8 @@ def steps_table(rp):
     rows = []
     for s in steps:
         fc = s.files_changed()
-        r = [s.number, code(s.sha), s.date, trunc(s.subject, 44), "-" if fc is None else fc,
+        mark = "[build] " if s.exported else "[build failed] " if s.exported is False else ""
+        r = [s.number, code(s.sha), s.date, trunc(mark + s.subject, 44), "-" if fc is None else fc,
              s.clean.get("necessaryCount", 0) if s.clean_ok else "-"]
         for m in modes:
             row = s.modes[m]

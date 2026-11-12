@@ -4,6 +4,7 @@ one before, under one or more incOptions modes, and compared with a clean build 
 
     incbench-history REPO FROZEN_BUILD OUT [--zinc CHECKOUT] [--ref REF] [--steps N]
                      [--mode NAME[=KEY=VALUE,...]]... [--inc-option KEY=VALUE]...
+                     [--sbt-export [--sbt-arg ARG]...]
 
 REPO is a clone of the project with its history. FROZEN_BUILD is an export of some of its modules
 at one commit, as IncBench's --build reads it (build.json, <module>/src/main/{scala,java},
@@ -18,6 +19,12 @@ A step is a first-parent commit that changes a file under those source directori
 from the parent of the first. Sources much older than the export stop compiling against its
 dependencies, so the replay first looks for the oldest step that still compiles and starts no
 earlier.
+
+With --sbt-export the build follows the history too. The project's own sbt re-exports the same
+modules (incbench-export, in a clone under OUT) at the start and at every commit that changes
+`*.sbt` or `project/`, and such a commit is a step whether or not it changes a source: its
+dependency jars, options, module graph and generated sources replace the build's. A commit whose
+build does not export keeps the previous export. This runs the project's build code.
 
 OUT gets:
 
@@ -144,20 +151,73 @@ def materialise(repo, build, want, have):
     return changed
 
 
-def candidates(repo, ref, roots, limit):
-    """The last `limit` first-parent commits up to `ref` that change a source under `roots`, oldest first."""
+def is_build_file(path):
+    return path.startswith("project/") or ("/" not in path and path.endswith(".sbt"))
+
+
+def candidates(repo, ref, roots, limit, with_build=False):
+    """
+    The last `limit` first-parent commits up to `ref` that change a source under `roots` or, with
+    `with_build`, the build definition; oldest first, with the set of those that change the build.
+    """
     dirs = sorted({r for rs in roots.values() for r in rs})
     out = git(repo, "log", "--first-parent", "-m", "--name-only", "--format=@%H %P", f"-n{limit}", ref, "--",
-              *[d or "." for d in dirs])
-    keep, current = [], None
+              *[d or "." for d in dirs], *(["*.sbt", "project"] if with_build else []))
+    keep, build, current = [], set(), None
     for line in out.split("\n"):
         if line.startswith("@"):
             rev, *parents = line[1:].split()
             current = rev if parents else None
-        elif current and line.endswith(SOURCE_SUFFIXES):
+        elif current and with_build and is_build_file(line):
+            if current not in keep:
+                keep.append(current)
+            build.add(current)
+        elif current and line.endswith(SOURCE_SUFFIXES) and current not in keep:
             keep.append(current)
-            current = None
-    return list(reversed(keep))
+    return list(reversed(keep)), build
+
+
+class Exporter:
+    """The project's own sbt, in a clone of the repository, exporting the modules at a commit."""
+
+    def __init__(self, repo, out, modules, scala, no_scala_instance, sbt_args, script):
+        self.checkout, self.exports, self.modules = out / "checkout", out / "exports", modules
+        self.cmd = [sys.executable, str(script)]
+        self.opts = ["--scala", scala] + (["--no-scala-instance"] if no_scala_instance else [])
+        for arg in sbt_args:
+            self.opts += [f"--sbt-arg={arg}"]
+        subprocess.run(["git", "clone", "-q", "--local", "--no-checkout", str(repo), str(self.checkout)], check=True)
+        self.exports.mkdir()
+
+    def at(self, commit):
+        """The export of `commit`, or None if its build does not export."""
+        git(self.checkout, "checkout", "-q", "-f", "--detach", commit)
+        dest = self.exports / commit[:9]
+        t = time.time()
+        r = subprocess.run([*self.cmd, str(self.checkout), str(dest), *self.modules, *self.opts],
+                           text=True, capture_output=True)
+        (self.exports / f"{commit[:9]}.log").write_text(r.stdout + r.stderr)
+        log(f"export {commit[:9]}: {'ok' if r.returncode == 0 else 'FAILED'}, {time.time() - t:.0f}s")
+        return dest if r.returncode == 0 else None
+
+
+def adopt(export, build):
+    """Makes `build` the export, touching only what differs; returns the paths that changed."""
+    files = lambda root: {str(f.relative_to(root)) for f in root.rglob("*") if f.is_file()}
+    want, have = files(export), files(build)
+    changed = []
+    for path in sorted(have - want):
+        (build / path).unlink()
+        changed.append(path)
+    for path in sorted(want):
+        src, dest = export / path, build / path
+        if path not in have or src.read_bytes() != dest.read_bytes():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.unlink(missing_ok=True)
+            shutil.copy2(src, dest)
+            if path != "export.json":
+                changed.append(path)
+    return changed
 
 
 def zinc_classpath(checkout):
@@ -296,6 +356,10 @@ def main():
     ap.add_argument("--scala", default="2.13.x")
     ap.add_argument("--profile", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--jvm-opt", action="append")
+    ap.add_argument("--sbt-export", action="store_true",
+                    help="re-export the build with the project's sbt at every commit that changes it")
+    ap.add_argument("--sbt-arg", action="append", default=[], help="for sbt, before its commands, with --sbt-export")
+    ap.add_argument("--exporter", default=str(Path(__file__).resolve().parent / "incbench-export"))
     ap.add_argument("--report", default=str(Path(__file__).resolve().parent / "incbench-history-report"))
     a = ap.parse_args()
 
@@ -320,22 +384,41 @@ def main():
         log(f"{m}: sources from {roots[m] or 'nowhere'}; {len(frozen_only[m])} exported files not in the repository")
         if not roots[m]:
             sys.exit(f"{m}: none of the export's sources are in {repo} at {base_commit}")
-    steps = candidates(repo, ref, roots, a.steps * 20)
+    steps, build_steps = candidates(repo, ref, roots, a.steps * 20, a.sbt_export)
     if not steps:
         sys.exit("no commit changes the exported modules' sources")
-    first = first_compiling(repo, frozen, out, roots, frozen_only, modules, steps, classpath, jvm_opts, common)
-    available = len(steps) - first
-    steps = steps[first:][-a.steps:]
-    start = git(repo, "rev-parse", f"{steps[0]}^1").strip()
-    log(f"{len(steps)} steps of {available} that compile against the export, {start[:9]}..{steps[-1][:9]}")
-
-    have = prepare_build(frozen, build, modules, frozen_only)
-    materialise(repo, build, desired(repo, start, roots), have)
+    parent = lambda commit: git(repo, "rev-parse", f"{commit}^1").strip()
+    if a.sbt_export:
+        no_scala_instance = any("classpath.scalaInstance" in (frozen / m / "incOptions.properties").read_text()
+                                for m in modules)
+        exporter = Exporter(repo, out, modules, a.scala, no_scala_instance, a.sbt_arg, a.exporter)
+        available = len(steps)
+        steps = steps[-a.steps:]
+        for attempt in range(5):
+            start = parent(steps[0])
+            export = exporter.at(start)
+            if export:
+                break
+            steps = steps[1:]
+        else:
+            sys.exit("none of the first five starting commits exports; see exports/*.log")
+        log(f"{len(steps)} steps, {sum(s in build_steps for s in steps)} of them build changes, {start[:9]}..{steps[-1][:9]}")
+        build.mkdir()
+        adopt(export, build)
+        roots, frozen_only = infer_roots(repo, start, build, modules)
+    else:
+        first = first_compiling(repo, frozen, out, roots, frozen_only, modules, steps, classpath, jvm_opts, common)
+        available = len(steps) - first
+        steps = steps[first:][-a.steps:]
+        start = parent(steps[0])
+        log(f"{len(steps)} steps of {available} that compile against the export, {start[:9]}..{steps[-1][:9]}")
+        have = prepare_build(frozen, build, modules, frozen_only)
+        materialise(repo, build, desired(repo, start, roots), have)
     have = desired(repo, start, roots)
 
     (out / "replay.json").write_text(json.dumps({
         "repo": str(repo), "frozenBuild": str(frozen), "exportCommit": base_commit, "ref": ref, "start": start,
-        "steps": len(steps), "stepsAvailable": available, "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "incOptions": a.inc_option,
+        "steps": len(steps), "stepsAvailable": available, "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "sbtExport": a.sbt_export, "sbtArgs": a.sbt_arg, "incOptions": a.inc_option,
         "scala": a.scala, "jvmOpts": jvm_opts, "classpathFile": str(a.classpath_file) if a.classpath_file else None,
         "zinc": str(a.zinc.resolve()), "zincCommit": git(a.zinc.resolve(), "rev-parse", "HEAD").strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -352,9 +435,18 @@ def main():
         replay.wait_for("ready")
         log("base built")
         for i, commit in enumerate(steps, 1):
-            want = desired(repo, commit, roots)
-            changed = materialise(repo, build, want, have)
-            have = want
+            exported = None
+            if a.sbt_export and commit in build_steps:
+                export = exporter.at(commit)
+                exported = export is not None
+                if export:
+                    changed = adopt(export, build)
+                    roots, frozen_only = infer_roots(repo, commit, build, modules)
+                    have = desired(repo, commit, roots)
+            if not exported:
+                want = desired(repo, commit, roots)
+                changed = materialise(repo, build, want, have)
+                have = want
             if not changed:
                 continue
             name = f"{i:04d}-{commit[:9]}"
@@ -362,7 +454,7 @@ def main():
             replay.step(name)
             subject, date = git(repo, "log", "-1", "--format=%s%x00%cI", commit).strip().split("\0")
             commits.write(json.dumps({"step": name, "commit": commit, "subject": subject, "date": date,
-                                      "changed": changed, "seconds": round(time.time() - t, 1)}) + "\n")
+                                      "changed": changed, "exported": exported, "seconds": round(time.time() - t, 1)}) + "\n")
             commits.flush()
             log(f"{name} {len(changed)} files, {time.time() - t:.1f}s: {subject[:70]}")
             if a.report and Path(a.report).exists():
