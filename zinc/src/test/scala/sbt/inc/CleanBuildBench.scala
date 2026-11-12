@@ -79,7 +79,9 @@ object CleanBuildBench extends BridgeProviderTestkit:
         Array.empty
       )
       zinc.inputs(
-        ((output +: si.allJars.map(_.toPath).toVector) ++ classpath).map(converter.toVirtualFile).toArray,
+        ((output +: si.allJars.map(_.toPath).toVector) ++ classpath).map(
+          converter.toVirtualFile
+        ).toArray,
         sources.map(converter.toVirtualFile).toArray,
         output,
         None,
@@ -95,6 +97,7 @@ object CleanBuildBench extends BridgeProviderTestkit:
         converter,
         Stamps.timeWrapBinaryStamps(converter)
       )
+    end inputs
 
     val modes = Vector("default" -> true, "clean" -> false).collect {
       case (mode, enabled) if selected(mode) => mode -> inputs(enabled)
@@ -121,4 +124,5 @@ object CleanBuildBench extends BridgeProviderTestkit:
         f"$i%4d $mode%-7s ${(t1 - t0) / 1e6}%10.0f ${(t2 - t1) / 1e6}%8.0f ${(t2 - t0) / 1e6}%8.0f $kb%11d"
       )
     loaderCache.close()
+  end main
 end CleanBuildBench

@@ -46,18 +46,36 @@ There are a few ways out:
 
 ## Results
 
-`sbt.inc.CleanBuildBench` (zinc test scope) compiles a source tree from scratch in both modes. The default mode includes writing the analysis through `MixedAnalyzingCompiler.staticCachedStore`, as sbt 2 does. The corpus is pekko 1.7.1 `actor` (214 Scala and 30 Java files) and `stream` (209 Scala and 3 Java files, against the published pekko-actor jar), compiled with Scala 2.13.16 on an Apple silicon Mac.
+Measured in the zinc-direct perflab lab (retronym/jvm-perf-lab, `labs/zinc-direct`), which drives Zinc through its API with no sbt. The lab now loads this branch's build, published to a private Ivy home and prepared with `scripts/prepare-zinc-dev.sh`, and has a `mode` parameter (`default` or `clean`). Each op is one from-scratch compile of Pekko 1.7.1 `actor` (214 Scala and 30 Java files) or `stream` (209 Scala and 3 Java files), with Scala 2.13.18, in-process javac, and the analysis written with `FileAnalysisStore` in default mode. The machine is an M5 Pro (testbed `m5-pro`) running a JDK 26 build, with a loadgate of 6 cores. Each fork runs 6 warmup and 6 measured ops.
 
-| | default | clean | saving |
+Timing (campaign `m5-zd-clean-ab`, 3 forks per variant, mean ± 99.9% CI over forks):
+
+| | default | clean | Δ |
 |---|---|---|---|
-| actor, cold JVM (median of 3) | 9063 ms | 7832 ms | 14% |
-| stream, cold JVM (median of 3) | 11357 ms | 9841 ms | 13% |
-| actor, warm (median of last 4 of 12) | 2385 ms | 1890 ms | 21% |
-| stream, warm (median of last 4 of 12) | 3850 ms | 3340 ms | 13% |
+| actor | 2.495 ± 0.35 s/op | 2.063 ± 0.29 s/op | −17.3% ± 10.8% |
+| stream | 4.319 ± 0.24 s/op | 3.753 ± 0.21 s/op | −13.1% ± 4.3% |
 
-Where the warm saving goes, from `-Yprofile-enabled` phase times:
+Where the time goes (campaign `m5-zd-clean-prof`, async-profiler cpu, one fork per variant). This is CPU time per op, with each stack attributed to the outermost frame that names a Zinc subsystem (`scripts/attribute-stacks.py` in the lab):
 
-- In scalac, `xsbt-api` (about 170 ms for actor, 210 ms for stream) and `xsbt-dependency` (60 to 80 ms) disappear. That is roughly half of the saving.
-- The rest is Zinc's side: building the analysis in the callback, stamping, and reading javac's classfiles. Writing the analysis (450 KB) costs only about 20 ms warm and 70 ms cold.
+| ms per op, default − clean | actor | stream |
+|---|---|---|
+| bridge `xsbt-api` phase | +171 | +205 |
+| bridge `xsbt-dependency` phase | +89 | +114 |
+| building the analysis after the run (`AnalysisCallback.getCycleResultOnce`) | +124 | +154 |
+| of which product stamps (`InitialStamps.product`, hashing every classfile) | 78 | 98 |
+| of which source stamps | 11 | 12 |
+| of which `completeCycle` | 16 | 16 |
+| javac classfile analysis (`JavaAnalyze`, `ClassToAPI`) | +48 | +42 |
+| analysis store write | +20 | +22 |
+| other Zinc bookkeeping | +16 | +17 |
+| scalac's own phases (typer, transform, backend) | +122 | −23 |
+| JIT compiler threads | +114 | +61 |
+| GC and VM threads | +61 | −43 |
 
-The classfiles are byte-identical between the two modes (1892 classes for actor).
+For `stream`, the direct costs on the compile thread add up to about 556 ms/op, against a 566 ms/op difference in wall time. About half is the two bridge phases, a quarter is building the analysis (two thirds of that is hashing classfiles), and the rest is classfile analysis of javac's output and the store write. In default mode Zinc also makes 7 to 11% more JIT compilations, a significant difference in both projects.
+
+`actor`'s profile also shows scalac's own phases 122 ms/op slower in default mode. That is spread thinly; the largest item is the `itable stub` of the typer's self-type dispatch. It would fit the extra phases polluting shared type profiles. But `stream` shows no such slowdown, and both profiles are one fork each, so this is not established.
+
+Product stamps are a cost in incremental builds too: after a compile Zinc opens and hashes every classfile it just wrote, mostly time in `open(2)` on macOS. The callback could hash the bytes as the classfiles are written. That would be worth its own change.
+
+The classfiles are byte-identical between the two modes.
