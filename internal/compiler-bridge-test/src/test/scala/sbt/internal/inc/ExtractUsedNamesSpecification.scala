@@ -5,7 +5,6 @@ package inc
 import hedgehog.{ sbt => _, _ }
 import hedgehog.runner._
 import xsbti.UseScope
-import HedgehogSupport.pendingUntilFixed
 
 object ExtractUsedNamesSpecification
     extends Properties
@@ -32,8 +31,7 @@ object ExtractUsedNamesSpecification
     // pending test for https://github.com/scala/bug/issues/7173
     example("extract names of constants", constants),
     // test for https://github.com/gkossakowski/sbt/issues/4
-    // TODO: we should fix it by having special treatment of `selectDynamic` and `applyDynamic` calls
-    example("extract names from method calls on Dynamic", pendingUntilFixed(dynamic)),
+    example("extract names from method calls on Dynamic", dynamic),
     // This doesn't work in 2.13.0-RC1
     example("extract sealed classes scope", sealedClassesScope),
   )
@@ -257,10 +255,19 @@ object ExtractUsedNamesSpecification
     val srcA = """|import scala.language.dynamics
                   |class A extends Dynamic {
                   | def selectDynamic(name: String): Int = name.length
+                  | def applyDynamic(name: String)(i: Int): Int = i
+                  | def updateDynamic(name: String)(i: Int): Unit = ()
                   |}""".stripMargin
-    val srcB = "class B { def foo(a: A): Int = a.bla }"
+    val srcB = """|class B {
+                  |  def foo(a: A): Int = a.bla
+                  |  def bar(a: A): Int = a.blu(1)
+                  |  def baz(a: A): Unit = a.blo = 1
+                  |}""".stripMargin
     val usedNames = extractUsedNamesFromSrc(srcA, srcB)
-    usedNames("B") ==== standardNames ++ Set("B", "A", "a", "Int", "selectDynamic", "bla")
+    Result.diff(
+      usedNames("B"),
+      Set("selectDynamic", "bla", "applyDynamic", "blu", "updateDynamic", "blo", "blo_=")
+    )((a, b) => b.subsetOf(a))
   }
 
   private def sealedClassesScope: Result = {

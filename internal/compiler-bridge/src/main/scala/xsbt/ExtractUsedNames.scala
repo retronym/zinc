@@ -169,6 +169,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
     override def traverse(tree: Tree): Unit = {
       handleAnnotations(tree)
       handleClassicTreeNode(tree)
+      handleDynamicCall(tree)
       processMacroExpansion(tree)(handleMacroExpansion)
       super.traverse(tree)
     }
@@ -187,6 +188,38 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
           }
         }
       case _ =>
+    }
+
+    /**
+     * Registers the member names that `Dynamic` calls stand in for. `d.foo` on a `Dynamic` without
+     * a member `foo` is typed as `d.selectDynamic("foo")` (and likewise for `applyDynamic`,
+     * `applyDynamicNamed` and `updateDynamic`). Adding a member `foo` (or setter `foo_=`) changes
+     * the meaning, so register those names.
+     */
+    private def handleDynamicCall(tree: Tree): Unit = tree match {
+      case Apply(fun, Literal(Constant(name: String)) :: Nil) if isDynamicCall(fun) =>
+        val names = getNamesOfEnclosingScope
+        names.add(newTermName(name).encode)
+        names.add(newTermName(name + "_=").encode)
+        ()
+      case _ =>
+    }
+
+    private val dynamicNames: Set[Name] =
+      Set("selectDynamic", "applyDynamic", "applyDynamicNamed", "updateDynamic")
+        .map(s => newTermName(s): Name)
+
+    private def isDynamicCall(fun: Tree): Boolean = {
+      val sel = fun match {
+        case TypeApply(sel, _) => sel
+        case _                 => fun
+      }
+      sel match {
+        case Select(qual, name) =>
+          dynamicNames(name) && qual.tpe != null &&
+          qual.tpe.baseClasses.contains(definitions.DynamicClass)
+        case _ => false
+      }
     }
 
     val addSymbol: (JavaSet[Name], Symbol) => Unit = { (names: JavaSet[Name], symbol: Symbol) =>
