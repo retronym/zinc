@@ -126,12 +126,41 @@ The plan was scala-steward (application code, dense history) and cats (several m
 - DONE 8. Tracer bullet. It was cats, not scala-steward, and it found two harness bugs: old commits not compiling against the export, and files renamed only in case being lost on a case-insensitive file system.
 - DONE 9. Replays of scala/scala, pekko and cats under `hashing=names` and `hashing=merkle`; see Results.
 - DONE 10. `bin/incbench-history-minimise`: delta debugging over a step's changed files, each trial from a clean build of the parent (`rebase`).
-- TODO 11. Port to 1.12.x (rz#71): the commits after the plan touch only `bench/`, `bin/` and the ASM test dependency, so they should cherry-pick; not attempted.
+- TODO 11. Port to 1.12.x (rz#71). The Python tools carry over as they are. The Scala sources do not cherry-pick: the 1.12.x line's `zinc-scripted` is Scala 2 (braces, no `enum`, no `given`), so `ClassfileNorm`, `TastyNorm`, `IncHistory` and their suites need a syntax port, and `Runner` there needs the same three additions (`compileEvery`, `analysis`, `path`). Not attempted.
 - TODO 12. The `java-context` check for Java-mixed modules, and the `tasty` level on a real Scala 3 replay (pekko's Scala 3 export exists; the level is tested only on scala3-library's own files).
 
 ## Results
 
-RESULTS_PLACEHOLDER
+Replays of 2026-11-13, each under `hashing=names` and `hashing=merkle` in one JVM, from `claude/incbench-history-oracle-merkle` (`integration/merkle` 9e7c3e276 plus this branch), released Scala 2.13 compiler, `pipelining=false`, `recompileAllFraction=0.5`, `recompileOnMacroDef=true`. So `names` here is name hashing on the integration line's Zinc, with its fixes, not on a release. Outputs are in `~/code/.integration/history-oracle/run2-{scala,pekko,cats}` (`report.md`, `work/steps.jsonl`, `work/diffs/`). The machine was running other work, each step ran once, and the timings are indicative only.
+
+| | scala/scala | pekko | cats |
+|---|---:|---:|---:|
+| Steps (first-parent commits that change sources) | 200 | 168 | 9 |
+| Sources in the build | 1,072 | 322 | 353 |
+| Findings (`stale`, `missed-error`, `spurious-error`), either mode | 0 | 1 | 0 |
+| Steps with a compiler difference (`compiler`) | 1 | 0 | 1 |
+| Steps with noise only (all `typevars`) | 53 | 35 (names), 36 (merkle) | 7 |
+| Necessary sources, total | 1,924 | 787 | 108 |
+| Sources compiled, names / merkle | 2,905 / 2,777 | 1,132 / 1,138 | 374 / 363 |
+| Compiled over necessary, names / merkle | 1.51 / 1.44 | 1.44 / 1.45 | 3.5 / 3.4 |
+| Steps where merkle compiled fewer / names fewer | 30 / 3 | 3 / 3 | |
+| Incremental wall, names / merkle (s) | 256 / 190 | 50.4 / 50.7 | 29.8 / 26.4 |
+| Clean wall (s) | 3,304 | 559 | 67 |
+| Incremental over clean, names / merkle | 7.8% / 5.8% | 9.0% / 9.1% | 45% / 39% |
+
+**Soundness.**
+
+- One finding, in both modes, and it reproduces on develop's Zinc without Merkle: pekko 3a601fa75 changes `Udp.SimpleSender(options: immutable.Traversable[SocketOption])` to `immutable.Iterable[...]`. `Traversable` is a deprecated alias of `Iterable`, so the API hash of `options` does not change and `UdpSender`, whose `private val options = simpleSender.options` infers its type from it, is not recompiled. Its bytecode equals the clean build's; its pickle still names the alias. The minimiser reduces the commit's 5 files to `Udp.scala` in 5 trials. This is the dealiasing Zinc does on purpose, with a visible consequence only for a later compile that reads the stale pickle (a deprecation warning that a clean build would not give). Worth a decision on whether the oracle should treat pickle-only differences in private members as their own verdict; they are now marked `pickleOnly`.
+- No step in 377 produced stale bytecode, a missed error or a spurious error, under either mode.
+- Compiler differences, both in classes the step recompiled: cats `SortedSetSemilattice` loses its specialised `combineN$mc*$sp` forwarders when `SortedSetInstances.scala` is compiled without the rest of kernel (the batch dependence of anomalies/cats §4, now with a one-file reproduction from the minimiser); scala/scala `StringBuilder` at 701ca74c2 differs only in its pickle.
+- All noise is `typevars` (`A` against `A$`), from the released compiler. The `pool` level is what lets these match: the renamed variable shifts the constant pool. `locals` and `tasty` did not occur.
+- The oracle itself is checked against a known Zinc bug: `IncHistorySuite` replays the pending scripted test `import-package` and gets `missed-error`.
+
+**Precision.** Both modes compile about 1.5 times the necessary sources on scala/scala and pekko, with a median of exactly the necessary set. Merkle compiles fewer sources than name hashing on scala/scala in 30 of 200 steps (133 sources, 4.4%) and takes fewer cycles (313 against 343); on pekko the two are level (6 steps differ, 3 each way; the largest, +9 for Merkle, is 2214215b7, which adds an annotation to public sealed traits). cats recompiles 3.5 times the necessary set under both, the macro-definition cascade of anomalies/cats §6.
+
+**Performance.** Incremental compilation costs 6 to 9% of the clean builds it replaces on scala/scala and pekko. On scala/scala Merkle's total is 26% below name hashing's (190 s against 256 s); most of that is inside scalac's `xsbt-*` phases (8 s against 50 s), with Zinc's own time equal (31 s). On pekko the modes are equal. `analysisWrite` and `prune` are the largest parts of Zinc's own time under both. These need a quiet machine and repetitions before they are quoted.
+
+**What the replay cost.** scala/scala: 80 minutes for 200 steps, of which 55 are the clean reference builds. pekko: 16 minutes. The bisection for the first compiling commit took 6 to 9 clean builds.
 
 ## Future work
 
