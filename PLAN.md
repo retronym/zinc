@@ -102,3 +102,13 @@ The M5 Pro runs endpoint security software (JumpCloud) that inflates file-open c
 
 On the quiet machine the saving is 11–13%, below the M5 Pro's figures, and the intervals are much tighter. Product stamping costs about half as much on the M4 (38 against 75 ms/op for actor, 52 against 101 for stream, at nearly equal total compile times), so on a quiet machine it is roughly 1–1.5% of a full compile. The bridge phases remain the largest item (`xsbt-api` +184 and +227 ms/op, `xsbt-dependency` +88 and +109 ms/op), followed by building the analysis (+85 and +100 ms/op) and javac classfile analysis (+39 ms/op each). Default mode makes 10–16% more JIT compilations on the M4.
 
+### Typed-`Nil` stream
+
+The same comparison at the 2.13.x tip, on Pekko `stream` with typed-`Nil` `FanInShapeN`/`FanOutShapeN` templates (jvm-perf-lab `labs/zinc/typed-nil.patch`), which takes less typer work than stock `stream` (campaigns `m5-zd-clean-typednil-tip-ab`/`-prof` and `m4-…`):
+
+| | default | clean | Δ |
+|---|---|---|---|
+| M5 Pro | 3.496 ± 0.30 s/op | 2.886 ± 0.25 s/op | −17.5% ± 6.6% |
+| M4 | 3.418 ± 0.50 s/op | 3.045 ± 0.44 s/op | −10.9% ± 11.5% |
+
+Zinc's own frames cost about the same as in stock `stream` (on the compile thread, about 540 ms/op on the M4 and 590 on the M5 Pro: `xsbt-api` 220–235, `xsbt-dependency` 125–130, building the analysis 100–155, classfile analysis 40–45, store write 20). Since the compile is shorter, they are a larger share of it.
