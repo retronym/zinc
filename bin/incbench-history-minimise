@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Minimise a step of a history replay: find a smallest set of the commit's changed files that
+still gives the step's verdict when compiled incrementally from a clean build of its parent.
+
+    incbench-history-minimise OUT STEP [--mode NAME] [--verdict VERDICT]...
+
+OUT is a finished (or running) replay of incbench-history and STEP one of its steps, such as
+0042-ab12cd34e. The verdict to keep is the one the replay recorded for --mode at that step
+(default: the first mode with a finding, else the first that is not `same`), unless --verdict
+names others to accept.
+
+The replay judged the step from the state its history had left. Here every trial starts from a
+clean build of the parent commit, so the first trial applies the whole commit: if the verdict
+does not come back, the finding depends on the earlier history and nothing is minimised. A
+trial reproduces when it gives the verdict and, if the replay recorded differing classes that no
+normalisation explains, at least one of those classes differs again. Then
+delta debugging (Zeller's ddmin) over the changed files: a trial puts a subset of them at the
+commit's version, the rest at the parent's, and asks the same oracle. A subset that does not
+compile is a trial that does not reproduce.
+
+Writes OUT/minimised/STEP/: `result.json`, `report.md` with the minimal files and their diffs,
+and `work/`, IncHistory's copies and evidence for the trials.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+_loader = importlib.machinery.SourceFileLoader("incbench_history", str(Path(__file__).resolve().parent / "incbench-history"))
+ih = importlib.util.module_from_spec(importlib.util.spec_from_loader("incbench_history", _loader))
+_loader.exec_module(ih)
+
+FINDINGS = ("stale", "missed-error", "spurious-error")
+
+
+def ddmin(items, test):
+    """A 1-minimal sublist of `items` for which `test` holds; `test(items)` must hold."""
+    n = 2
+    while len(items) >= 2:
+        size = max(1, len(items) // n)
+        chunks = [items[i:i + size] for i in range(0, len(items), size)]
+        reduced = False
+        for chunk in chunks:
+            if test(chunk):
+                items, n, reduced = chunk, 2, True
+                break
+        if not reduced:
+            for chunk in chunks:
+                rest = [x for x in items if x not in chunk]
+                if rest and test(rest):
+                    items, n, reduced = rest, max(n - 1, 2), True
+                    break
+        if not reduced:
+            if n >= len(items):
+                break
+            n = min(len(items), n * 2)
+    return items
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out", type=Path)
+    ap.add_argument("step")
+    ap.add_argument("--mode")
+    ap.add_argument("--verdict", action="append")
+    a = ap.parse_args()
+    out = a.out.resolve()
+    replay = json.loads((out / "replay.json").read_text())
+    commit = next(json.loads(l) for l in open(out / "commits.jsonl") if json.loads(l)["step"] == a.step)
+    recorded = {}
+    for line in open(out / "work" / "steps.jsonl"):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d["step"] == a.step and "verdict" in d:
+            recorded[d["mode"]] = d
+    mode = a.mode or next((m for m, d in recorded.items() if d["verdict"] in FINDINGS), None) \
+        or next((m for m, d in recorded.items() if d["verdict"] != "same"), None)
+    if mode is None:
+        sys.exit(f"{a.step}: every mode is the same as clean; nothing to minimise")
+    want_verdicts = set(a.verdict or [recorded[mode]["verdict"]])
+    want_classes = {x["class"] for x in recorded[mode].get("differences", []) if x["kind"] != "noise"}
+    spec = next(m for m in replay["modes"] if m.split("=", 1)[0] == mode)
+
+    repo, frozen = Path(replay["repo"]), Path(replay["frozenBuild"])
+    roots, frozen_only, modules = replay["roots"], replay["frozenOnly"], replay["modules"]
+    child = commit["commit"]
+    parent = ih.git(repo, "rev-parse", f"{child}^1").strip()
+    before, after = ih.desired(repo, parent, roots), ih.desired(repo, child, roots)
+    changed = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
+
+    dest = out / "minimised" / a.step
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    build = dest / "build"
+    have = ih.prepare_build(frozen, build, modules, frozen_only)
+
+    def put(tree):
+        nonlocal have
+        ih.materialise(repo, build, tree, have)
+        have = tree
+
+    put(before)
+    classpath = Path(replay["classpathFile"]).read_text().strip() if replay.get("classpathFile") \
+        else ih.zinc_classpath(Path(replay["zinc"]))
+    args = ["--build", str(build), "--work", str(dest / "work"), "--scala", replay["scala"], "--mode", spec]
+    for o in replay["incOptions"]:
+        args += ["--inc-option", o]
+    session = ih.Replay(classpath, replay.get("jvmOpts") or ["-Xmx6g", "-Xss4m"], args, dest / "inchistory.log")
+    trials = []
+
+    def verdict_of(name):
+        last = None
+        for line in open(dest / "work" / "steps.jsonl"):
+            d = json.loads(line)
+            if d["step"] == name and d["mode"] == mode and "verdict" in d:
+                last = d
+        return last
+
+    def test(subset):
+        n = len(trials) + 1
+        if n > 1:
+            put(before)
+            session.rebase(f"trial-{n:03d}-base")
+        tree = dict(before)
+        for p in subset:
+            if p in after:
+                tree[p] = after[p]
+            else:
+                tree.pop(p, None)
+        put(tree)
+        name = f"trial-{n:03d}"
+        session.step(name)
+        d = verdict_of(name)
+        classes = {x["class"] for x in d.get("differences", [])}
+        ok = d["verdict"] in want_verdicts and (not want_classes or bool(classes & want_classes))
+        trials.append({"trial": name, "files": subset, "verdict": d["verdict"], "reproduces": ok,
+                       "differences": [x["class"] for x in d.get("differences", [])][:20]})
+        ih.log(f"{name}: {len(subset)} of {len(changed)} files -> {d['verdict']}")
+        return ok
+
+    try:
+        session.wait_for("ready")
+        from_clean = test(changed)
+        minimal = ddmin(changed, test) if from_clean and len(changed) > 1 else changed
+    finally:
+        session.stop()
+
+    result = {"step": a.step, "commit": child, "parent": parent, "mode": mode, "verdicts": sorted(want_verdicts),
+              "changed": changed, "reproducesFromClean": from_clean, "minimal": minimal if from_clean else None,
+              "trials": trials}
+    (dest / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+
+    lines = [f"# Minimised: {a.step}", "",
+             f"Commit {child[:9]} ({commit['subject']}), parent {parent[:9]}, mode `{mode}`, verdict "
+             f"{', '.join(f'`{v}`' for v in sorted(want_verdicts))} in the replay.", ""]
+    if not from_clean:
+        lines += [f"Compiled incrementally from a clean build of the parent, the whole commit ({len(changed)} files) "
+                  f"gives `{trials[0]['verdict']}`. The replay's verdict depends on the state the earlier history "
+                  "left, so there is nothing to minimise from a clean start.", ""]
+    else:
+        last = next(t for t in reversed(trials) if t["reproduces"] and sorted(t["files"]) == sorted(minimal))
+        lines += [f"{len(minimal)} of the commit's {len(changed)} changed files are enough, from a clean build of "
+                  f"the parent ({len(trials)} trials):", ""]
+        lines += [f"- `{p}`" for p in minimal]
+        lines += ["", f"Differing classes in the reproducing trial `{last['trial']}`: "
+                  + ", ".join(f"`{c}`" for c in last["differences"]) + ".", "",
+                  f"Evidence: `work/diffs/{last['trial']}/{mode}/`.", "", "## The minimal edit", ""]
+        to_repo = {}
+        for m, dirs in roots.items():
+            for root in dirs:
+                for path in ih.tree(repo, child, [root] if root else []):
+                    to_repo[f"{m}/src/main/{ih.lang_dir(path)}/{path[len(root):].lstrip('/')}"] = path
+                for path in ih.tree(repo, parent, [root] if root else []):
+                    to_repo.setdefault(f"{m}/src/main/{ih.lang_dir(path)}/{path[len(root):].lstrip('/')}", path)
+        diff = ih.git(repo, "diff", parent, child, "--", *[to_repo[p] for p in minimal if p in to_repo])
+        lines += ["```diff", diff.rstrip()[:20000], "```", ""]
+    (dest / "report.md").write_text("\n".join(lines))
+    print(dest / "report.md")
+
+
+if __name__ == "__main__":
+    main()
