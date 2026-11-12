@@ -5,7 +5,7 @@ package inc
 import hedgehog.{ sbt => _, _ }
 import hedgehog.runner._
 import xsbti.api._
-import xsbt.api.{ SameAPI, ShowAPI }
+import xsbt.api.{ HashAPI, SameAPI, ShowAPI }
 
 object ExtractAPISpecification
     extends Properties
@@ -38,6 +38,11 @@ object ExtractAPISpecification
     ),
     example("represent a self type correctly", selfTypes),
     example("print the arguments of static annotations", annotationArguments),
+    example("record static parameter annotations in the parameter type", parameterAnnotations),
+    example(
+      "give an inherited Java method the same API from Java sources and class files",
+      inheritedJavaParameterAnnotations
+    ),
   )
 
   private def fooClassApi(src: String): ClassLike =
@@ -359,5 +364,65 @@ object ExtractAPISpecification
     val printed =
       f.annotations.toList.map(a => a.arguments.toList.map(arg => (arg.name, arg.value)))
     printed ==== List(List(("", "(1,\"s\")")), List(("", "()")), List(("", "(-2,\"t\")")))
+  }
+
+  private def parameterAnnotations: Result = {
+    val src =
+      """|class st(s: String) extends scala.annotation.StaticAnnotation
+         |class nonStatic extends scala.annotation.Annotation
+         |class C {
+         |  def f(@st("old") a: Int, @nonStatic b: Int, c: Int) = 1
+         |}
+         |""".stripMargin
+    val c = extractApisFromSrc(src).find(_.name == "C").get
+    val f = c.structure.declared.find(_.name == "f").get.asInstanceOf[Def]
+    val List(a, b, c1) = f.valueParameters.head.parameters.toList
+    val annotated = a.tpe match {
+      case at: Annotated =>
+        Result.all(
+          List(
+            at.annotations.toList.map(_.arguments.toList.map(_.value)) ==== List(List("(\"old\")")),
+            (at.annotations.head.base match {
+              case p: Projection => p.id ==== "st"
+              case other         => Result.failure.log(s"expected Projection, got $other")
+            }),
+            at.baseType ==== b.tpe
+          )
+        )
+      case other => Result.failure.log(s"expected Annotated, got $other")
+    }
+    Result.all(
+      List(annotated, Result.assert(!b.tpe.isInstanceOf[Annotated]), b.tpe ==== c1.tpe)
+    )
+  }
+
+  private def inheritedJavaParameterAnnotations: Result = {
+    val javaSrcs = List(
+      "Ann.java" ->
+        """|import java.lang.annotation.*;
+           |@Retention(RetentionPolicy.CLASS) @interface ClassRet { String value(); }
+           |@Retention(RetentionPolicy.RUNTIME) @interface RuntimeRet { String value(); }
+           |""".stripMargin,
+      "J.java" ->
+        """|public class J {
+           |  public int f(@ClassRet("c") int a, @RuntimeRet("r") int b, @Deprecated int c) { return 1; }
+           |}
+           |""".stripMargin
+    )
+    def uApi(javaFromSource: Boolean): ClassLike =
+      extractApisWithJava(javaSrcs, "class U extends J", javaFromSource, List("-parameters"))
+        .find(_.name == "U")
+        .get
+    val fromSource = uApi(javaFromSource = true)
+    val fromClassfile = uApi(javaFromSource = false)
+    Result
+      .all(
+        List(
+          Result.assert(SameAPI(fromSource, fromClassfile)),
+          HashAPI(fromSource) ==== HashAPI(fromClassfile)
+        )
+      )
+      .log(ShowAPI.showApi(fromSource)(1))
+      .log(ShowAPI.showApi(fromClassfile)(1))
   }
 }

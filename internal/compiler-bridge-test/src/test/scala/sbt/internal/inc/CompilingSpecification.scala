@@ -254,6 +254,59 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
     (files.flatten map { converter.toVirtualFile(_) }, analysisCallback)
   }
 
+  /**
+   * Extracts the APIs of `scalaSrc`, which uses the Java classes in `javaSrcs` (file name to
+   * contents). The Java classes are either compiled by scalac in the same run as `scalaSrc`, or
+   * compiled by javac with `javacOptions` beforehand and read from the classpath.
+   */
+  def extractApisWithJava(
+      javaSrcs: List[(String, String)],
+      scalaSrc: String,
+      javaFromSource: Boolean,
+      javacOptions: List[String] = Nil
+  ): Set[ClassLike] =
+    IO.withTemporaryDirectory { tempDir =>
+      val baseDir = tempDir.toPath
+      val rootPaths: Map[String, Path] = Map(
+        "BASE" -> baseDir,
+        "SBT_BOOT" -> localBoot,
+        "JAVA_HOME" -> javaHome
+      ) ++ localCoursierCache
+      val converter = new MappedFileConverter(rootPaths, false)
+      val targetDir = Files.createDirectory(baseDir / "target")
+      val javaFiles: List[VirtualFile] =
+        if (javaFromSource) javaSrcs.map { case (name, content) =>
+          StringVirtualFile(name, content)
+        }
+        else {
+          val srcDir = Files.createDirectory(baseDir / "java")
+          val paths = javaSrcs.map {
+            case (name, content) => Files.writeString(srcDir / name, content).toString
+          }
+          val javac = javax.tools.ToolProvider.getSystemJavaCompiler
+          val args = javacOptions ++ List("-d", targetDir.toString) ++ paths
+          assert(javac.run(null, null, null, args: _*) == 0, s"javac failed: $args")
+          Nil
+        }
+      val scalaFile = StringVirtualFile("Test.scala", scalaSrc)
+      val analysisCallback = new TestCallback
+      val (si, sc) = mkScalaCompiler(baseDir, scalaVersion)
+      val cp = ((si.allJars).map(_.toPath) ++ Array(targetDir)).map(converter.toVirtualFile)
+      sc.compile(
+        sources = (javaFiles :+ scalaFile).toArray,
+        classpath = cp,
+        converter = converter,
+        changes = emptyChanges,
+        options = Array("-deprecation", "-Yrangepos"),
+        output = CompileOutput(targetDir),
+        callback = analysisCallback,
+        reporter = mkReporter,
+        progressOpt = Optional.empty[CompileProgress],
+        log = log
+      )
+      analysisCallback.apis(scalaFile)
+    }
+
   def compileSrcs(srcs: String*): (Seq[VirtualFile], TestCallback) = {
     compileSrcs(List(srcs.toList))
   }

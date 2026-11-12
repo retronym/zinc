@@ -1,0 +1,5 @@
+> p/compile
+
+# Without @deprecatedName, the named argument old in B no longer resolves
+$ copy-file changes/A.scala p/A.scala
+-> p/compile
