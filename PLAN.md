@@ -19,8 +19,22 @@ Why reuse `enabled` rather than add an option: it is existing public API ("Deter
 ## Caveats
 
 - Output directories are not cleaned, just as for a compile with no previous analysis. Stale classes from deleted sources are only removed if the caller cleans the output. A jar output is rewritten from scratch.
-- sbt's test and main-class discovery reads APIs from the analysis, so it finds nothing in this mode. That suits compile-only CI jobs, or needs discovery to come from somewhere else.
+- Test and main class discovery finds nothing in this mode, see below.
 - Stale analysis files already on disk are left alone. The mode is meant for fresh checkouts.
+
+## Test and main class discovery
+
+sbt discovers tests and main classes from the analysis, not from the classfiles:
+
+- `definedTests` runs `Tests.discover` over `Tests.allDefs(analysis)`, which reads the extracted APIs in `analysis.apis.internal` and matches them against the test frameworks' fingerprints.
+- `discoveredMainClasses` calls `Defaults.discoverMainClasses(analysis)`, which reads the `mainClass` reports kept in `analysis.infos`.
+
+In clean mode the analysis is empty, so both come back empty. `run` then finds no main class unless `mainClass` is set explicitly. Worse, `test` runs zero tests and still succeeds, so a CI job that turns this mode on for a project with tests goes green without testing anything. Until discovery stops depending on the analysis, the mode is only safe for compile-only jobs, or for projects whose tests are not run in that build.
+
+There are a few ways out:
+- sbt could discover from the classfiles, for example with `ClassfileToAPI`, which Zinc already uses for Java classes it cannot load.
+- Zinc could offer a middle mode that keeps the `xsbt-api` phase but drops dependencies, used names and stamping. That gives up roughly half of the saving.
+- The clean callback could record only main classes and the definitions that test fingerprints match.
 
 ## Steps
 
