@@ -430,9 +430,10 @@ class IncrementalCompilerImpl extends IncrementalCompiler:
       stampReader: ReadStamps
   )(implicit logger: Logger): CompileResult =
     handleCompilationError(sources.size, output, logger) {
+      val clean = !incrementalOptions.enabled
       val prev = previousAnalysis match
-        case Some(previous) => previous.asInstanceOf[Analysis]
-        case None           => Analysis.empty
+        case Some(previous) if !clean => previous.asInstanceOf[Analysis]
+        case _                        => Analysis.empty
       val javaSrcs = sources.filter(MixedAnalyzingCompiler.javaOnly)
       val outputs = output :: earlyOutput.toList
       val outputJars = outputs.flatMap(out => (JarUtils.getOutputJar(out): Option[Path]).toList)
@@ -453,6 +454,9 @@ class IncrementalCompilerImpl extends IncrementalCompiler:
 
       val extraJavacOptions = if outputJarsOnCp then JarUtils.javacOptions else Nil
 
+      if clean && !skip && !recompileAllJava then
+        JarUtils.getOutputJar(output).foreach(jar => java.nio.file.Files.deleteIfExists(jar))
+
       val outputJarContent = JarUtils.createOutputJarContent(output)
 
       val config = MixedAnalyzingCompiler.makeConfig(
@@ -467,7 +471,7 @@ class IncrementalCompilerImpl extends IncrementalCompiler:
         scalaOptions ++ extraScalacOptions,
         javaOptions ++ extraJavacOptions,
         prev,
-        previousSetup,
+        if clean then None else previousSetup,
         perClasspathEntryLookup,
         reporter,
         compileOrder,
@@ -476,7 +480,7 @@ class IncrementalCompilerImpl extends IncrementalCompiler:
         output,
         outputJarContent,
         earlyOutput,
-        earlyAnalysisStore,
+        if clean then None else earlyAnalysisStore,
         stampReader,
         extra
       )
@@ -487,11 +491,34 @@ class IncrementalCompilerImpl extends IncrementalCompiler:
       else
         JarUtils.setupTempClassesDir(temporaryClassesDirectory)
         val (changed, analysis) =
-          if recompileAllJava then
+          if clean then
+            compileClean(MixedAnalyzingCompiler(config)(using logger), javaOnly = recompileAllJava)
+          else if recompileAllJava then
             compileAllJava(MixedAnalyzingCompiler(config)(using logger))
           else
             compileInternal(MixedAnalyzingCompiler(config)(using logger))
         CompileResult.of(analysis, currentSetup, changed)
+    }
+
+  /** Compile all sources without incremental bookkeeping, see [[Incremental.compileClean]]. */
+  private[sbt] def compileClean(
+      mixedCompiler: MixedAnalyzingCompiler,
+      javaOnly: Boolean
+  ): (Boolean, Analysis) =
+    import mixedCompiler.*, config.*, currentSetup.*
+    Incremental.compileClean(
+      sources.toSet,
+      converter,
+      incOptions,
+      output,
+      outputJarContent,
+      earlyOutput,
+      Incremental.isPickleJava(options.scalacOptions.toIndexedSeq),
+      progress,
+      log
+    ) { (srcs, changes, callback, classFileManager) =>
+      if javaOnly then mixedCompiler.compileJava(sources.filter(srcs), callback, classFileManager)
+      else mixedCompiler.compile(srcs, changes, callback, classFileManager)
     }
 
   /** Compile all Java sources using the given mixed compiler. */
