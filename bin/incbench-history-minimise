@@ -68,6 +68,7 @@ def main():
     ap.add_argument("step")
     ap.add_argument("--mode")
     ap.add_argument("--verdict", action="append")
+    ap.add_argument("--zinc", type=Path, help="a Zinc checkout to run instead of the replay's")
     a = ap.parse_args()
     out = a.out.resolve()
     replay = json.loads((out / "replay.json").read_text())
@@ -108,8 +109,12 @@ def main():
         have = tree
 
     put(before)
-    classpath = Path(replay["classpathFile"]).read_text().strip() if replay.get("classpathFile") \
-        else ih.zinc_classpath(Path(replay["zinc"]))
+    if a.zinc:
+        classpath = ih.zinc_classpath(a.zinc.resolve())
+    elif replay.get("classpathFile"):
+        classpath = Path(replay["classpathFile"]).read_text().strip()
+    else:
+        classpath = ih.zinc_classpath(Path(replay["zinc"]))
     args = ["--build", str(build), "--work", str(dest / "work"), "--scala", replay["scala"], "--mode", spec]
     for o in replay["incOptions"]:
         args += ["--inc-option", o]

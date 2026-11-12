@@ -1,6 +1,6 @@
 # Plan: IncBench as a soundness oracle that replays git history
 
-**Status:** plan written 2026-11-12 after running what exists (see "Where things stand"). Jason asked for the build-out to proceed without a review stop; decisions marked **(review)** are the ones most worth a second look.
+**Status:** built through step 10 on 2026-11-13; the replays of step 8 and 9 are recorded under "Results". Jason asked for the build-out to proceed without a review stop, so the decisions below were not reviewed first; those marked **(review)** are the ones most worth a second look. One decision could not be carried out as planned: running sbt on a corpus repository was refused by the session's permission classifier (it executes the repository's build code), so builds are not re-exported per commit (decision 3), and that changed which repositories can be replayed (decision 10).
 
 ## Problem
 
@@ -36,16 +36,15 @@ The history is the first-parent chain of a branch, oldest first. For each commit
 
 On the candidate repos most recent commits touch the build, not the sources (scala-steward: of the last 400 first-parent commits 258 touch only `*.sbt` or `project/`, 61 touch main sources), so this definition matters: counting raw commits would replay mostly no-ops.
 
-### 3. Build changes are steps too, re-exported from sbt only when a build file changed **(review)**
+### 3. Build changes should be steps too; for now the build is frozen at one export **(review)**
 
-A dependency bump or an option change is an edit real users make, and Zinc has to get it right (changed library stamps, changed `MiniSetup`). So the replay keeps the incremental state across them rather than restarting.
+A dependency bump or an option change is an edit real users make, and Zinc has to get it right (changed library stamps, changed `MiniSetup`). The intent is to keep the incremental state across them: re-export the build with sbt at every commit that touches `*.sbt` or `project/`, treat a changed export as a step, read source-only commits straight from git, and skip commits whose build does not load. `IncHistory` already supports it: a step may change jars, options and `build.json`, and the copies reload.
 
-- The build is exported with sbt (`print` of sources, classpaths, options and source directories per module, as `export-build` does) at the first commit and again at every commit that touches `*.sbt` or `project/`. If the export is unchanged, the commit is not a build step.
-- Between exports, a commit's sources are read straight from git under the module's exported source directories, so no sbt runs for a source-only commit.
-- Managed (generated) sources are captured at each export. A generator whose inputs live outside `project/` would be missed between exports; the driver re-exports at the last commit and reports any drift rather than trusting this silently.
-- A commit whose build does not load or resolve is skipped, and its changes fold into the next step that exports.
+**What is built instead.** The driver replays against one existing export (the frozen builds of the October campaigns) and follows only the sources: it finds where each module's sources live in the repository by locating the export's files in the tree of the export's commit, and every first-parent commit that changes a file under those directories is a step. Files of the export that are not in the repository (generated sources) stay as exported.
 
-The exporter moves into this repo beside `bin/incbench-report.py`, since the oracle cannot depend on a script in the talks repo.
+This has a cost that the first runs made plain. Sources older than a dependency change or a generator change do not compile against the export, and then every step is `same-fail`. So the driver first bisects for the oldest step whose parent still compiles and starts no earlier. How far back that reaches depends on the project: 744 steps for scala/scala (no dependencies), all 169 candidate steps for pekko `actor`, 9 for cats (its generated `NTupleMonadInstances` stops matching), 3 for scala-steward (a circe bump).
+
+**Needs Jason's go-ahead:** running the corpus's own sbt (`print` of sources, classpaths and options, as `export-build` does) per build-changing commit. With it, the exporter moves into this repo beside `bin/incbench-report.py`, and cats and scala-steward replay to full depth with their dependency bumps as steps.
 
 ### 4. Commits that do not compile are steps, compared as failures
 
@@ -70,7 +69,7 @@ A class that matches only above `raw` is still listed, as noise with its level, 
 Two facts decide what a remaining difference means, and both are recorded per class:
 
 - **stale or fresh:** did this incremental compile write the class? A differing class that was *not* recompiled is the signature of undercompilation. A differing class that *was* recompiled, from the same source, is the compiler depending on its batch.
-- **Java context:** in a module with Java sources, scalac sees a Java class as source in a clean build and often as a classfile incrementally. IncBench's existing `java-context` check (a clean build that sees Java as classfiles) is kept and run only for steps that otherwise diverge.
+- **Java context:** in a module with Java sources, scalac sees a Java class as source in a clean build and often as a classfile incrementally. IncBench's `java-context` check (a clean build that sees Java as classfiles) is not carried over yet: such a difference is in a class the step wrote, so it shows as `compiler`, not as a finding. pekko's 169 steps showed none.
 
 The verdict of a step is then: `same`; `noise` (every difference explained by a level or by Java context); `compiler` (unexplained, all fresh); `stale` (an unexplained difference in a class not recompiled, or a missing or extra classfile); or the failure verdicts of decision 4. Only `stale`, `missed-error` and `spurious-error` are soundness findings against Zinc.
 
@@ -98,12 +97,13 @@ Each mode (`names`, `merkle`, or any other `incOptions` variation) has its own c
 
 Markdown, generated from the JSON lines, so two runs can be diffed.
 
-### 10. The first two repos: scala-steward and cats
+### 10. The repos: scala/scala and pekko, with cats as a short third
 
-- **scala-steward** `core`: one module, application-style code on cats-effect, circe and http4s, with a dense history of small real edits and constant dependency bumps (which exercise decision 3). It compiles in seconds, so it is the tracer bullet.
-- **cats** `kernel`, `core`, `free`: several modules, generated sources, type classes and implicits throughout, and the one corpus where Merkle is known to recompile both fewer and more than name hashing.
+The plan was scala-steward (application code, dense history) and cats (several modules, implicits, generated sources). With the build frozen at one export (decision 3) they replay 3 and 9 steps. The repositories that replay deep are those whose compiled inputs are only their sources:
 
-Both are Scala 2.13 by default, and both are corpora with October results to compare against. pekko (`actor`, `actor-typed`: Java mixed with Scala, deep hierarchies, and a Scala 3 build for the `tasty` level) is the third, after the first two run clean.
+- **scala/scala** `library`, `reflect`, `compiler` at 2.13.x: no external dependencies, 1,072 sources, deep hierarchies, macros, Java mixed in, and the build we know best. 200 steps of the 744 available.
+- **pekko** `actor`, `actor-typed`: Java mixed with Scala, deep hierarchies, where Merkle was known to recompile fewer sources. All 169 steps.
+- **cats** `kernel`, `core`, `free`: the 9 steps that compile, as a sample of implicit-heavy code.
 
 ## Prior art
 
@@ -119,18 +119,24 @@ Both are Scala 2.13 by default, and both are corpora with October results to com
 - DONE 1. Survey: branches, PRs, Merkle selection; rebased onto #90's head.
 - DONE 2. Ran the existing `--verify` on scala-steward under both modes.
 - DONE 3. This plan.
-- TODO 4. Comparator: the normalisation ladder over ASM, with tests built from classfiles that differ in exactly one respect.
-- TODO 5. `IncHistory`: replay session with modes, one clean reference, verdicts, necessary set, evidence, reset after a finding; tested on a small synthetic history.
-- TODO 6. Exporter and history driver: commits, exports at build changes, source sync from git, failing and unloadable commits.
-- TODO 7. Report generator: soundness, precision, performance.
-- TODO 8. Tracer bullet: scala-steward, 200 steps, both modes; fix what it shows.
-- TODO 9. cats, 200 steps, both modes.
-- TODO 10. Minimisation of findings by changed file.
-- TODO 11. Write-up of the two replays, and a port note for 1.12.x.
+- DONE 4. Comparator: `ClassfileNorm` (the ladder, over ASM's textual form, with `ScalaInlineInfo` decoded so no pool index survives) and `TastyNorm`, with tests on classfiles that differ in exactly one respect.
+- DONE 5. `IncHistory`: replay session with modes, one clean reference, verdicts, necessary set, evidence, carried differences, reset after a finding. `IncHistorySuite` runs it on a two-module build, including a known Zinc undercompilation (the pending scripted test `import-package`), which it reports as `missed-error`.
+- DONE 6. History driver `bin/incbench-history`, against a frozen export, with the bisection for the oldest step that compiles. NOT DONE: the sbt exporter and build changes as steps (decision 3).
+- DONE 7. Report generator `bin/incbench-history-report`: soundness, precision, performance, per step.
+- DONE 8. Tracer bullet. It was cats, not scala-steward, and it found two harness bugs: old commits not compiling against the export, and files renamed only in case being lost on a case-insensitive file system.
+- DONE 9. Replays of scala/scala, pekko and cats under `hashing=names` and `hashing=merkle`; see Results.
+- DONE 10. `bin/incbench-history-minimise`: delta debugging over a step's changed files, each trial from a clean build of the parent (`rebase`).
+- TODO 11. Port to 1.12.x (rz#71): the commits after the plan touch only `bench/`, `bin/` and the ASM test dependency, so they should cherry-pick; not attempted.
+- TODO 12. The `java-context` check for Java-mixed modules, and the `tasty` level on a real Scala 3 replay (pekko's Scala 3 export exists; the level is tested only on scala3-library's own files).
+
+## Results
+
+RESULTS_PLACEHOLDER
 
 ## Future work
 
-- **pekko**, Java-mixed and under Scala 3, with the per-round Java context check (`byRound`) carried over from `--verify`.
+- **Build changes as steps** (decision 3), which brings back scala-steward and cats at full depth.
+- **pekko under Scala 3**, with the per-round Java context check (`byRound`) carried over from `--verify`.
 - **In-situ bakeoff of two Zinc implementations** on a user's build: one JVM per Zinc checkout in lockstep over the same replay, or the sbt-driven driver of `PLAN-user-harness.md` reusing the comparator and report.
 - **Bug-report generator** for a user who just hit under- or overcompilation: take the working tree's last commits (or a stash) as a two-step history, replay, minimise, and write a report directory whose summary contains no code.
 - **Hedgehog differential test:** a generated class hierarchy plus an edit, incremental against clean, with the same comparator as the property's oracle; shrinking takes the place of minimisation.
