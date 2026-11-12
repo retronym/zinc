@@ -15,7 +15,9 @@ generated sources, stay as exported.
 
 A step is a first-parent commit that changes a file under those source directories. The last
 --steps of them up to --ref (default: the export's commit) are replayed, oldest first, starting
-from the parent of the first.
+from the parent of the first. Sources much older than the export stop compiling against its
+dependencies, so the replay first looks for the oldest step that still compiles and starts no
+earlier.
 
 OUT gets:
 
@@ -203,7 +205,7 @@ class Replay:
     def step(self, name):
         self.proc.stdin.write(f"step {name}\n")
         self.proc.stdin.flush()
-        return self.wait_for("done")
+        return self.wait_for("done")["cleanOk"]
 
     def stop(self):
         try:
@@ -213,6 +215,60 @@ class Replay:
         except Exception:
             self.proc.kill()
         self.log.close()
+
+
+def first_compiling(repo, frozen, out, roots, frozen_only, modules, steps, classpath, jvm_opts, args):
+    """
+    The index of the oldest step whose parent compiles against the export, by bisection: the
+    export's dependencies and generated sources are those of its commit, so older sources stop
+    compiling at some point, and the search takes that point to be the only one.
+    """
+    build = out / "probe" / "build"
+    have = prepare_build(frozen, build, modules, frozen_only)
+
+    def at(commit):
+        nonlocal have
+        want = desired(repo, commit, roots)
+        materialise(repo, build, want, have)
+        have = want
+
+    parent = lambda i: git(repo, "rev-parse", f"{steps[i]}^1").strip()
+    at(parent(0))
+    probe = Replay(classpath, jvm_opts, ["--build", str(build), "--work", str(out / "probe" / "work"), *args],
+                   out / "probe.log")
+    try:
+        if probe.wait_for("ready")["cleanOk"]:
+            return 0
+        lo, hi = 0, len(steps) - 1
+        at(parent(hi))
+        if not probe.step(f"probe-{hi}"):
+            sys.exit(f"the parent of the last step, {parent(hi)[:9]}, does not compile against the export")
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            at(parent(mid))
+            ok = probe.step(f"probe-{mid}")
+            log(f"probe: the parent of step {mid + 1} of {len(steps)} {'compiles' if ok else 'does not compile'}")
+            lo, hi = (lo, mid) if ok else (mid, hi)
+        return hi
+    finally:
+        probe.stop()
+        shutil.rmtree(out / "probe", ignore_errors=True)
+
+
+def prepare_build(frozen, build, modules, frozen_only):
+    """Copies the export, and returns its sources that the history tracks, to be replaced."""
+    shutil.copytree(frozen, build, ignore=shutil.ignore_patterns("target"))
+    have = {}
+    for m in modules:
+        # An earlier IncBench run on the export leaves its own options in incOptions.properties and
+        # the build's in incOptions.base.properties.
+        saved = build / m / "incOptions.base.properties"
+        if saved.exists():
+            saved.replace(build / m / "incOptions.properties")
+        for (lang, rel), f in exported_sources(build, m).items():
+            if f"{lang}/{rel}" not in frozen_only[m]:
+                have[f"{m}/src/main/{lang}/{rel}"] = None
+    return have
 
 
 def main():
@@ -244,51 +300,45 @@ def main():
 
     if out.exists():
         shutil.rmtree(out)
+    out.mkdir(parents=True)
     build = out / "build"
-    shutil.copytree(frozen, build, ignore=shutil.ignore_patterns("target"))
-    for m in modules:
-        # An earlier IncBench run on the export leaves its own options in incOptions.properties and
-        # the build's in incOptions.base.properties.
-        saved = build / m / "incOptions.base.properties"
-        if saved.exists():
-            saved.replace(build / m / "incOptions.properties")
+    classpath = a.classpath_file.read_text().strip() if a.classpath_file else zinc_classpath(a.zinc.resolve())
+    jvm_opts = a.jvm_opt or ["-Xmx6g", "-Xss4m"]
+    common = ["--scala", a.scala]
+    for o in a.inc_option:
+        common += ["--inc-option", o]
 
-    roots, frozen_only = infer_roots(repo, base_commit, build, modules)
+    roots, frozen_only = infer_roots(repo, base_commit, frozen, modules)
     for m in modules:
         log(f"{m}: sources from {roots[m] or 'nowhere'}; {len(frozen_only[m])} exported files not in the repository")
         if not roots[m]:
             sys.exit(f"{m}: none of the export's sources are in {repo} at {base_commit}")
-    steps = candidates(repo, ref, roots, a.steps * 20)[-a.steps:]
+    steps = candidates(repo, ref, roots, a.steps * 20)
     if not steps:
         sys.exit("no commit changes the exported modules' sources")
+    first = first_compiling(repo, frozen, out, roots, frozen_only, modules, steps, classpath, jvm_opts, common)
+    available = len(steps) - first
+    steps = steps[first:][-a.steps:]
     start = git(repo, "rev-parse", f"{steps[0]}^1").strip()
-    log(f"{len(steps)} steps, {start[:9]}..{steps[-1][:9]}")
+    log(f"{len(steps)} steps of {available} that compile against the export, {start[:9]}..{steps[-1][:9]}")
 
-    # The export's sources that the history tracks are replaced by the start commit's.
-    have = {}
-    for m in modules:
-        for (lang, rel), f in exported_sources(build, m).items():
-            if f"{lang}/{rel}" not in frozen_only[m]:
-                have[f"{m}/src/main/{lang}/{rel}"] = None
+    have = prepare_build(frozen, build, modules, frozen_only)
     materialise(repo, build, desired(repo, start, roots), have)
     have = desired(repo, start, roots)
 
     (out / "replay.json").write_text(json.dumps({
         "repo": str(repo), "frozenBuild": str(frozen), "exportCommit": base_commit, "ref": ref, "start": start,
-        "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "incOptions": a.inc_option,
+        "steps": len(steps), "stepsAvailable": available, "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "incOptions": a.inc_option,
         "scala": a.scala, "zinc": str(a.zinc.resolve()), "zincCommit": git(a.zinc.resolve(), "rev-parse", "HEAD").strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }, indent=2) + "\n")
 
-    args = ["--build", str(build), "--work", str(out / "work"), "--scala", a.scala]
+    args = ["--build", str(build), "--work", str(out / "work"), *common]
     for m in a.mode:
         args += ["--mode", m]
-    for o in a.inc_option:
-        args += ["--inc-option", o]
     if a.profile:
         args.append("--profile")
-    classpath = a.classpath_file.read_text().strip() if a.classpath_file else zinc_classpath(a.zinc.resolve())
-    replay = Replay(classpath, a.jvm_opt or ["-Xmx6g", "-Xss4m"], args, out / "inchistory.log")
+    replay = Replay(classpath, jvm_opts, args, out / "inchistory.log")
     commits = open(out / "commits.jsonl", "w")
     try:
         replay.wait_for("ready")

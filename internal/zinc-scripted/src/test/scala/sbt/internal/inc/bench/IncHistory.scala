@@ -38,7 +38,9 @@ import IncBench.{ Runner, StepResult }
  * After the initial clean build of every copy, each `step NAME` on stdin brings the copies up to
  * date with the build, compiles every mode incrementally, one after the other in an order that
  * rotates, rebuilds `clean`, and appends to `steps.jsonl` in `--work` one line for the clean
- * build and one per mode. `shutdown` or the end of stdin stops it.
+ * build and one per mode. `shutdown` or the end of stdin stops it. Each step is answered on
+ * stdout with whether its clean build compiled; without a `--mode`, that is all a step does,
+ * which finds the states of a history that compile at all.
  *
  * A mode's line carries what it compiled and how long it took, as IncBench reports a step, and
  * its verdict against the clean build (see [[Session.judge]]). The clean line carries the
@@ -82,20 +84,17 @@ object IncHistory:
     case other :: _ => sys.error(s"Unknown argument $other")
 
   def main(args: Array[String]): Unit =
-    val o = parse(args.toList)
-    val session = new Session(if o.modes.isEmpty then o.copy(modes = Vector(Mode("inc", Map.empty))) else o)
+    val session = new Session(parse(args.toList))
     def say(s: String): Unit =
       println(s)
       Console.out.flush()
     try
-      session.start()
-      say("""{"ready":true}""")
+      say(s"""{"ready":true,"cleanOk":${session.start()}}""")
       Iterator.continually(scala.io.StdIn.readLine()).takeWhile(l => l != null && l != "shutdown")
         .foreach { line =>
           line.split(" ", 2) match
             case Array("step", name) =>
-              session.step(name)
-              say(s"""{"done":${Json.str(name)}}""")
+              say(s"""{"done":${Json.str(name)},"cleanOk":${session.step(name)}}""")
             case _ => sys.error(s"Unknown command $line")
         }
     finally session.close()
@@ -112,7 +111,13 @@ object IncHistory:
    * otherwise `compiler` if this step's compile wrote it and `stale` if it did not. `carried`
    * marks a difference an earlier step already reported: neither side has changed since.
    */
-  final case class Difference(key: String, kind: String, level: String, fresh: Boolean, carried: Boolean):
+  final case class Difference(
+      key: String,
+      kind: String,
+      level: String,
+      fresh: Boolean,
+      carried: Boolean
+  ):
     def json: String =
       Json.obj(
         "class" -> Json.str(key),
@@ -201,7 +206,12 @@ object IncHistory:
     }
 
   /** One copy of the build: a mode's, compiled incrementally, or the clean reference. */
-  final private class Copy(val name: String, val dir: Path, val overrides: Map[String, String], o: Options):
+  final private class Copy(
+      val name: String,
+      val dir: Path,
+      val overrides: Map[String, String],
+      o: Options
+  ):
     var modules: Vector[String] = Vector.empty
     var runner: Runner = null
     var carried: Map[String, (String, String)] = Map.empty
@@ -291,8 +301,11 @@ object IncHistory:
         StandardOpenOption.APPEND
       )
 
-    /** Builds every copy from scratch, and checks each mode's clean build against `clean`. */
-    def start(): Unit =
+    /**
+     * Builds every copy from scratch, and checks each mode's clean build against `clean`.
+     * Returns whether the clean build compiled.
+     */
+    def start(): Boolean =
       IO.delete(o.work.toFile)
       Files.createDirectories(o.work)
       for c <- clean +: modes do
@@ -306,13 +319,14 @@ object IncHistory:
         val verdict = judge("base", m, r.map(_ => m.products()), reference._1, start)
         emitMode("base", m, 0, r, Set.empty, verdict, Set.empty)
       previousClean = reference._1.getOrElse(Map.empty)
+      reference._1.isRight
 
-    /** Runs one step: the build has changed since the last. */
-    def step(name: String): Unit =
+    /** Runs one step: the build has changed since the last. Returns whether it compiles clean. */
+    def step(name: String): Boolean =
       index += 1
       val changed = clean.update()
       for m <- modes do m.update()
-      val order = modes.indices.map(i => modes((i + index) % modes.size))
+      val order = modes.indices.map(i => modes((i + index) % modes.size.max(1)))
       val results = order.zipWithIndex.map { (m, i) =>
         val start = System.currentTimeMillis()
         val r = m.runner.tryCompileAll()
@@ -346,6 +360,8 @@ object IncHistory:
             "reset" -> Json.str(reset._1)
           )
       for now <- reference do previousClean = now
+      reference.isRight
+    end step
 
     def close(): Unit = for c <- clean +: modes if c.runner != null do c.runner.finish()
 
@@ -391,7 +407,9 @@ object IncHistory:
                 case None    => (if fresh then "compiler" else "stale", "")
           Difference(k, kind, level, fresh, carried)
         }
-        mode.carried = diffs.map(d => d.key -> (a.get(d.key).fold("")(_.sha), b.get(d.key).fold("")(_.sha))).toMap
+        mode.carried = diffs.map(d =>
+          d.key -> (a.get(d.key).fold("")(_.sha), b.get(d.key).fold("")(_.sha))
+        ).toMap
         val counted = diffs.filterNot(_.carried)
         evidence(step, mode, counted.filter(_.kind != "noise") ++ counted.filter(_.kind == "noise"))
         val kinds = counted.map(_.kind).toSet
@@ -417,9 +435,13 @@ object IncHistory:
     ): Option[String] =
       def tastyBenign(i: Path, r: Path) =
         Files.exists(i) && Files.exists(r) &&
-          TastyNorm.benign(TastyNorm.read(Files.readAllBytes(i)), TastyNorm.read(Files.readAllBytes(r)))
+          TastyNorm.benign(
+            TastyNorm.read(Files.readAllBytes(i)),
+            TastyNorm.read(Files.readAllBytes(r))
+          )
       def sibling(f: Path) =
-        f.resolveSibling(f.getFileName.toString.takeWhile(_ != '$').stripSuffix(".class") + ".tasty")
+        f.resolveSibling(f.getFileName.toString.takeWhile(_ != '$').stripSuffix(".class") +
+          ".tasty")
       try
         if key.endsWith(".tasty") then Option.when(tastyBenign(inc, ref))("tasty")
         else
@@ -431,6 +453,7 @@ object IncHistory:
             else Option.when(tastyBenign(sibling(inc), sibling(ref)))("tasty")
           }
       catch case scala.util.control.NonFatal(_) => None
+    end explain
 
     private def evidence(step: String, mode: Copy, diffs: Seq[Difference]): Unit =
       val root = o.work.resolve("diffs").resolve(step).resolve(mode.name)
@@ -451,7 +474,11 @@ object IncHistory:
       if diffs.nonEmpty then
         for (m, lines) <- logs if lines.nonEmpty do
           Files.createDirectories(root)
-          Files.write(root.resolve(s"invalidation-$m.log"), lines.mkString("", "\n", "\n").getBytes(UTF_8))
+          Files.write(
+            root.resolve(s"invalidation-$m.log"),
+            lines.mkString("", "\n", "\n").getBytes(UTF_8)
+          )
+    end evidence
 
     private def outcome(r: Either[Seq[String], StepResult]): Seq[(String, String)] = r match
       case Left(errors) => Seq("ok" -> "false", "errors" -> Json.strs(errors.take(20)))
@@ -505,6 +532,7 @@ object IncHistory:
           "differenceCount" -> counted.size.toString
         ) ++ outcome(r))*
       )
+    end emitMode
   end Session
 
   object Session:
