@@ -119,8 +119,15 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
    * The previous source files are provided to successfully compile examples.
    * Only the names used in the last src file are returned.
    */
-  def extractUsedNamesFromSrc(sources: String*): Map[String, Set[String]] = {
-    val (srcFiles, analysisCallback) = compileSrcs(sources *)
+  def extractUsedNamesFromSrc(sources: String*): Map[String, Set[String]] =
+    extractUsedNamesFromSrcWithOptions(defaultOptions)(sources *)
+
+  def extractUsedNamesFromSrcWithOptions(
+      options: Seq[String]
+  )(sources: String*): Map[String, Set[String]] = {
+    val (srcFiles, analysisCallback) = IO.withTemporaryDirectory { tempDir =>
+      compileSrcs(tempDir.toPath, options = options)(List(sources.toList))
+    }
     srcFiles
       .map { srcFile =>
         val classesInSrc = analysisCallback.classNames(srcFile).map(_._1)
@@ -186,6 +193,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
     (si, sc)
   }
 
+  def defaultOptions: Seq[String] = Seq("-deprecation", "-Yrangepos")
+
   def compileSrcs(groupedSrcs: List[List[String]]): (Seq[VirtualFile], TestCallback) =
     IO.withTemporaryDirectory { tempDir =>
       compileSrcs(tempDir.toPath, mkReporter)(groupedSrcs)
@@ -205,7 +214,8 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
   def compileSrcs(
       baseDir: Path,
       reporter: Reporter = mkReporter,
-      scalaVersion0: String = scalaVersion
+      scalaVersion0: String = scalaVersion,
+      options: Seq[String] = defaultOptions
   )(groupedSrcs: List[List[String]]): (Seq[VirtualFile], TestCallback) = {
     val rootPaths: Map[String, Path] = Map(
       "BASE" -> baseDir,
@@ -232,7 +242,7 @@ trait CompilingSpecification extends AbstractBridgeProviderTestkit {
         classpath = cp,
         converter = converter,
         changes = emptyChanges,
-        options = Array("-deprecation", "-Yrangepos"),
+        options = options.toArray,
         output = CompileOutput(targetDir),
         callback = analysisCallback,
         reporter = reporter,

@@ -1,0 +1,8 @@
+# name-based-extractor-get-type on Scala 3, whose bridge (ExtractDependencies in scala/scala3)
+# does not register get and isEmpty, which the pattern matcher selects after it runs.
+
+> p/run 6
+
+# The pattern binds x through R.get, which the pattern matcher calls after typer
+$ copy-file changes/R.scala p/R.scala
+> p/run s51

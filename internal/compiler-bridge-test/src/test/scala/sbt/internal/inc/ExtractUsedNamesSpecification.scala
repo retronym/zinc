@@ -34,6 +34,16 @@ object ExtractUsedNamesSpecification
     // test for https://github.com/gkossakowski/sbt/issues/4
     // TODO: we should fix it by having special treatment of `selectDynamic` and `applyDynamic` calls
     example("extract names from method calls on Dynamic", pendingUntilFixed(dynamic)),
+    example("extract op= from an assignment operator typed as a reassignment", assignOp),
+    example(
+      "extract op= only where the source reads op=, with range positions",
+      assignOpSource(rangePos = true)
+    ),
+    example(
+      "extract op= only where the source reads op=, with offset positions",
+      assignOpSource(rangePos = false)
+    ),
+    example("extract the names that extractor patterns may select", extractorNames),
     // This doesn't work in 2.13.0-RC1
     example("extract sealed classes scope", sealedClassesScope),
   )
@@ -261,6 +271,97 @@ object ExtractUsedNamesSpecification
     val srcB = "class B { def foo(a: A): Int = a.bla }"
     val usedNames = extractUsedNamesFromSrc(srcA, srcB)
     usedNames("B") ==== standardNames ++ Set("B", "A", "a", "Int", "selectDynamic", "bla")
+  }
+
+  private def assignOp: Result = {
+    val srcA =
+      "class A { def +(i: Int): A = this; def apply(i: Int): A = this; def update(i: Int, a: A): Unit = () }"
+    val srcB = """|class B {
+                  |  var a: A = new A
+                  |  def opAssign(): Unit = a += 1
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  val a: A = new A
+                  |  def opAssign(): Unit = a(0) += 1
+                  |}""".stripMargin
+    val srcD = """|class D {
+                  |  val b: B = new B
+                  |  def opAssign(): Unit = b.a += 1
+                  |}""".stripMargin
+    val srcE = """|class E {
+                  |  var a: A = new A
+                  |  def reassign(): Unit = a = a + 1
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC, srcD, srcE)
+    Result.all(
+      List(
+        Result.assert(usedNames("B").contains("+=")).log("B uses += on a var"),
+        Result.assert(usedNames("C").contains("+=")).log("C uses += through update"),
+        Result.assert(usedNames("D").contains("+=")).log("D uses += through a setter"),
+        Result.assert(!usedNames("E").contains("+=")).log("E does not use +="),
+      )
+    )
+  }
+
+  private def assignOpSource(rangePos: Boolean): Result = {
+    val srcA =
+      """|class A {
+         |  def +(i: Int): A = this
+         |  def ++(i: Int): A = this
+         |  def ∘(i: Int): A = this
+         |  def <=(a: A): Boolean = true
+         |  def plus(i: Int): A = this
+         |  def apply(i: Int): A = this
+         |  def update(i: Int, a: A): Unit = ()
+         |}
+         |class E { def +=(i: Int): E = this }""".stripMargin
+    val cases = List(
+      "a += 1" -> Set("+="),
+      "a+=1" -> Set("+="),
+      "a.+=(1)" -> Set("+="),
+      "a(0) += 1" -> Set("+="),
+      "a ++= 1" -> Set("++="),
+      "a ∘= 1" -> Set("∘="),
+      "e +== 1" -> Set("+=", "+=="),
+      "a = a + 1" -> Set.empty[String],
+      "a = a.+(1)" -> Set.empty[String],
+      "a = a plus 1" -> Set.empty[String],
+      "if (a <= a) a = a ++ 1" -> Set.empty[String],
+    )
+    val opEqNames = cases.flatMap(_._2).toSet
+    val srcs = cases.zipWithIndex.map { case ((body, _), i) =>
+      s"class T$i { var a: A = new A; var e: E = new E; def m(): Unit = $body }"
+    }
+    val options = if (rangePos) Seq("-Yrangepos") else Seq("-Yrangepos:false")
+    val usedNames = extractUsedNamesFromSrcWithOptions(options)(srcA :: srcs *)
+    Result.all(cases.zipWithIndex.map { case ((body, expected), i) =>
+      (usedNames(s"T$i").intersect(opEqNames) ==== expected).log(body)
+    })
+  }
+
+  private def extractorNames: Result = {
+    val srcA =
+      """|class R(v: Int) { def isEmpty: Boolean = false; def get: (Int, Int) = (v, v) }
+         |object Ex { def unapply(i: Int): R = new R(i) }
+         |object ExSeq { def unapplySeq(i: Int): Option[Seq[Int]] = Some(Seq(i)) }""".stripMargin
+    val srcB = """|class B {
+                  |  def a(i: Int) = i match { case Ex(x, y) => x + y }
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  def a(i: Int) = i match { case ExSeq(x, rest @ _*) => x }
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    val names = Set("unapply", "unapplySeq", "isEmpty", "get")
+    val seqNames = Set("lengthCompare", "length", "apply", "drop", "toSeq")
+    Result.all(
+      List(
+        Result
+          .diff(usedNames("B"), names ++ Set("_1", "_2", "_3"))((a, b) => b.subsetOf(a))
+          .log("B"),
+        Result.assert(!usedNames("B").contains("lengthCompare")).log("B lengthCompare"),
+        Result.diff(usedNames("C"), names ++ seqNames)((a, b) => b.subsetOf(a)).log("C"),
+      )
+    )
   }
 
   private def sealedClassesScope: Result = {
