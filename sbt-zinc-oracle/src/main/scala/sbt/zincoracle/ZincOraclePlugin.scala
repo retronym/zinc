@@ -41,7 +41,5 @@ object ZincOraclePlugin extends AutoPlugin {
   )
 
   override def projectSettings: Seq[Setting[_]] =
-    inConfig(Compile)(Compat.verifySettings) ++ inConfig(Test)(Compat.verifySettings) ++ Seq(
-      incVerify := (Test / incVerify).dependsOn(Compile / incVerify).value
-    )
+    inConfig(Compile)(Compat.verifySettings) ++ inConfig(Test)(Compat.verifySettings) ++ Compat.bothSettings
 }

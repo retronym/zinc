@@ -31,7 +31,6 @@ object Compat {
         target.value / "inc-oracle" / configuration.value.name,
         incremental,
         (compile / compileInputs).value,
-        previousCompile.value,
         fileConverter.value,
         streams.value.log
       )
@@ -41,5 +40,9 @@ object Compat {
           s"incVerify: ${thisProject.value.id} / ${configuration.value.name} is $verdict"
         )
     }
+  )
+
+  def bothSettings: Seq[Setting[_]] = Seq(
+    incVerify := (Test / incVerify).dependsOn(Compile / incVerify).value
   )
 }

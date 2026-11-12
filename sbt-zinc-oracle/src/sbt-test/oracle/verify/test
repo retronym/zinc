@@ -13,7 +13,7 @@ $ copy-file changes/A-api.scala a/src/main/scala/A.scala
 > check b compile same compiled 1
 
 # A class left behind in the incremental output is not in the clean build.
-$ copy-file a/target/scala-2.13/classes/Other.class a/target/scala-2.13/classes/Gone.class
+> leaveBehind
 -> a/incVerify
 > check a compile stale
 

@@ -94,17 +94,36 @@ object Verify {
     a
   }
 
-  private def lastStart(a: Option[CompileAnalysis]): Long =
-    a.fold(0L)(_.readCompilations.getAllCompilations.map(_.getStartTime).foldLeft(0L)(math.max))
-
-  /** The sources whose classes the incremental compile wrote, and the number of Zinc cycles. */
-  private def compiledSince(before: Option[CompileAnalysis], after: CompileAnalysis): (Set[String], Int) = {
-    val since = lastStart(before)
+  /**
+   * The sources whose outputs the incremental compile wrote since the last `incVerify`, and the
+   * number of Zinc cycles if the analysis records them. Zinc deletes and rewrites the outputs of
+   * every source it compiles, so a changed modification time is a compile; the times from last
+   * time are kept beside the scratch output. The analysis cannot say: sbt 2 hands a task no
+   * analysis from before the compile and normalises the timestamps in the one after.
+   */
+  private def compiledSince(
+      scratch: Path,
+      after: CompileAnalysis,
+      classes: Path,
+      converter: FileConverter
+  ): (Set[String], Option[Int]) = {
     val a = after.asInstanceOf[Analysis]
-    val classes = a.apis.internal.collect { case (name, c) if c.compilationTimestamp > since => name }
-    val sources = classes.flatMap(c => a.relations.definesClass(c)).map(_.id).toSet
-    val cycles = after.readCompilations.getAllCompilations.count(_.getStartTime > since)
-    (sources, cycles)
+    val file = scratch.resolve("inc-products.tsv")
+    val before = readMap(file).getOrElse(Map.empty)
+    val now = files(classes).map { case (k, p) =>
+      k -> s"${Files.getLastModifiedTime(p).toMillis}/${Files.size(p)}"
+    }
+    val written = now.collect { case (k, stamp) if !before.get(k).contains(stamp) => k }.toSet
+    val sources = a.relations.allSources.filter { s =>
+      a.relations.products(s).exists { p =>
+        val path = converter.toPath(p).toAbsolutePath.normalize
+        path.startsWith(classes) && written(classes.relativize(path).toString.replace(File.separatorChar, '/'))
+      }
+    }.map(_.id).toSet
+    val compilations = after.readCompilations.getAllCompilations.length
+    val cycles = before.get("<compilations>").map(n => compilations - n.toInt).filter(_ > 0)
+    writeMap(file, now + ("<compilations>" -> compilations.toString))
+    (sources, if (before.isEmpty && compilations > 0) Some(compilations) else cycles)
   }
 
   /** The outputs of a set of sources, as paths below the classes directory. */
@@ -128,7 +147,6 @@ object Verify {
       scratchBase: File,
       incremental: Option[CompileAnalysis],
       inputs: Inputs,
-      previous: PreviousResult,
       fallbackConverter: FileConverter,
       log: Logger
   ): JsonObject = {
@@ -138,7 +156,6 @@ object Verify {
     val incDir = options.classesDirectory.toAbsolutePath.normalize
     val scratch = scratchBase.toPath.toAbsolutePath.normalize
     val cleanDir = scratch.resolve("classes")
-    val before = if (previous.analysis.isPresent) Some(previous.analysis.get) else None
 
     val previousDigests = readMap(scratch.resolve("clean-digests.tsv"))
     val previousSources = readMap(scratch.resolve("clean-sources.tsv"))
@@ -177,8 +194,10 @@ object Verify {
     out.add("step", step).add("project", project).add("config", config)
     out.add("incOk", incremental.isDefined).add("cleanOk", clean.isRight).add("cleanMillis", cleanMillis)
 
-    val (compiled, cycles) = incremental.fold((Set.empty[String], 0))(compiledSince(before, _))
-    out.add("compiled", array(compiled.toSeq.sorted)).add("cycles", cycles)
+    val (compiled, cycles) =
+      incremental.fold((Set.empty[String], Option.empty[Int]))(compiledSince(scratch, _, incDir, converter))
+    out.add("compiled", array(compiled.toSeq.sorted))
+    cycles.foreach(out.add("cycles", _))
 
     val verdict = (incremental, clean) match {
       case (None, Left(_)) => "same-fail"

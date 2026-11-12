@@ -16,3 +16,9 @@ check := {
     assert(count == args(4).toInt, json)
   }
 }
+
+val leaveBehind = taskKey[Unit]("copies a class of a's incremental output under another name")
+leaveBehind := {
+  val classes = (a / Compile / classDirectory).value
+  IO.copyFile(classes / "Other.class", classes / "Gone.class")
+}
