@@ -34,6 +34,8 @@ object ExtractUsedNamesSpecification
     // test for https://github.com/gkossakowski/sbt/issues/4
     // TODO: we should fix it by having special treatment of `selectDynamic` and `applyDynamic` calls
     example("extract names from method calls on Dynamic", pendingUntilFixed(dynamic)),
+    example("extract op= from an assignment operator typed as a reassignment", assignOp),
+    example("extract the names that extractor patterns may select", extractorNames),
     // This doesn't work in 2.13.0-RC1
     example("extract sealed classes scope", sealedClassesScope),
   )
@@ -261,6 +263,56 @@ object ExtractUsedNamesSpecification
     val srcB = "class B { def foo(a: A): Int = a.bla }"
     val usedNames = extractUsedNamesFromSrc(srcA, srcB)
     usedNames("B") ==== standardNames ++ Set("B", "A", "a", "Int", "selectDynamic", "bla")
+  }
+
+  private def assignOp: Result = {
+    val srcA =
+      "class A { def +(i: Int): A = this; def apply(i: Int): A = this; def update(i: Int, a: A): Unit = () }"
+    val srcB = """|class B {
+                  |  var a: A = new A
+                  |  def opAssign(): Unit = a += 1
+                  |  def update(): Unit = a(0) += 1
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  var a: A = new A
+                  |  def reassign(): Unit = a = a + 1
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    Result.all(
+      List(
+        Result.assert(usedNames("B").contains("+=")).log("B uses +="),
+        Result.assert(!usedNames("C").contains("+=")).log("C does not use +="),
+      )
+    )
+  }
+
+  private def extractorNames: Result = {
+    val srcA =
+      """|class R(v: Int) { def isEmpty: Boolean = false; def get: (Int, Int) = (v, v) }
+         |object Ex { def unapply(i: Int): R = new R(i) }
+         |object ExSeq { def unapplySeq(i: Int): Option[Seq[Int]] = Some(Seq(i)) }""".stripMargin
+    val srcB = """|class B {
+                  |  def a(i: Int) = i match { case Ex(x, y) => x + y }
+                  |}""".stripMargin
+    val srcC = """|class C {
+                  |  def a(i: Int) = i match { case ExSeq(x) => x }
+                  |}""".stripMargin
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    Result.all(
+      List(
+        Result
+          .diff(usedNames("B"), Set("unapply", "unapplySeq", "isEmpty", "get", "_1", "_2"))(
+            (a, b) => b.subsetOf(a)
+          )
+          .log("B"),
+        Result.assert(!usedNames("B").contains("lengthCompare")).log("B lengthCompare"),
+        Result
+          .diff(usedNames("C"), Set("unapply", "unapplySeq", "lengthCompare", "apply"))((a, b) =>
+            b.subsetOf(a)
+          )
+          .log("C"),
+      )
+    )
   }
 
   private def sealedClassesScope: Result = {
