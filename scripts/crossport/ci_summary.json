@@ -1,0 +1,9 @@
+{
+ "generated_at": "2026-11-11 04:20 UTC",
+ "paragraphs": [
+  "Both CI jobs last ran on 2026-10-20 and are green with unchanged results: Scala 2.13 (retronym/scala#139) 198 passed, 20 pending, 3 skipped; Scala 3 (retronym/scala3#26) 169 passed, 18 pending, 34 skipped. Both still pin Zinc b6c94565, so neither has exercised anything merged since, including zinc#1842, zinc#1851 and scala/scala#11360. Moving `ZINC_PINNED_SHA` is still the next step.",
+  "New on develop: sbt/zinc#1842 (2026-11-11) records dependencies on the annotations of definitions. It is the second confirmed bridge gap on 2.13 after zinc#1310, and the first new pending port since #1851. Its scripted tests `annotation-ctor-change-213-bin` and `annotation-ctor-change-3` are marked pending in Zinc (develop 98e05fc7, pending markers 15 to 17), waiting on the scala2-sbt-bridge port and on Scala 3's `ExtractDependencies`, which the PR says has the same gap. No port PR is open for either yet, and there is no 1.13.x backport.",
+  "Zinc merged more since 2026-11-04, but only #1842 touches the bridge. #1885 (write-only early analysis store), #1883, #1881 (pipelining backport to 1.13.x), #1877 to #1879 and #1869 are Zinc core or build changes, which this report does not track (the zinc-core lane is a TODO in PLAN.md).",
+  "Unchanged: five bridge gaps in the Scala 3 skip table (#1324, #1807, `empty-package`, `malformed-class-name-with-dollar`, `main-discovery`), 13 Scala 2 only scenarios and 14 not triaged. Once the pin moves, the 2.13 skip `module-inheritance-extra-hash` should be removable (#1807 landed as scala/scala#11360), as should the Scala 3 entries for `nested-type-params` and `no-type-annotation`."
+ ]
+}
