@@ -672,6 +672,7 @@ lazy val zincScripted = (projectMatrix in internalPath / "zinc-scripted")
     Test / buildInfoPackage := "sbt.internal.inc",
     Test / buildInfoKeys := Seq[BuildInfoKey]((zinc3 / sourceDirectory): SettingKey[File]),
     conflictWarning := ConflictWarning.disable,
+    libraryDependencies ++= Seq(asm % Test, asmUtil % Test),
   )
   .jvmPlatform(scalaVersions = scala3_only)
   .configure(addSbtUtilScripted)
