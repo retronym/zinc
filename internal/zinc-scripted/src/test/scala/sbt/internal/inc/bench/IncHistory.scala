@@ -40,7 +40,8 @@ import IncBench.{ Runner, StepResult }
  * rotates, rebuilds `clean`, and appends to `steps.jsonl` in `--work` one line for the clean
  * build and one per mode. `shutdown` or the end of stdin stops it. Each step is answered on
  * stdout with whether its clean build compiled; without a `--mode`, that is all a step does,
- * which finds the states of a history that compile at all.
+ * which finds the states of a history that compile at all. `rebase NAME` rebuilds every copy
+ * from scratch at the build's current state, so that a step can be tried from a known start.
  *
  * A mode's line carries what it compiled and how long it took, as IncBench reports a step, and
  * its verdict against the clean build (see [[Session.judge]]). The clean line carries the
@@ -95,6 +96,8 @@ object IncHistory:
           line.split(" ", 2) match
             case Array("step", name) =>
               say(s"""{"done":${Json.str(name)},"cleanOk":${session.step(name)}}""")
+            case Array("rebase", name) =>
+              say(s"""{"done":${Json.str(name)},"cleanOk":${session.rebase(name)}}""")
             case _ => sys.error(s"Unknown command $line")
         }
     finally session.close()
@@ -309,16 +312,24 @@ object IncHistory:
     def start(): Boolean =
       IO.delete(o.work.toFile)
       Files.createDirectories(o.work)
+      rebase("base")
+
+    /**
+     * Forgets every copy's outputs and analysis and builds the build as it is now from scratch,
+     * so that the next step starts from a clean build of this state, whatever came before.
+     */
+    def rebase(name: String): Boolean =
       for c <- clean +: modes do
         c.update()
         c.wipe()
+        c.carried = Map.empty
       val reference = build(clean)
-      emitClean("base", reference._2, reference._1, Nil, Set.empty)
+      emitClean(name, reference._2, reference._1, Nil, Set.empty)
       for m <- modes do
         val start = System.currentTimeMillis()
         val r = m.runner.tryCompileAll()
-        val verdict = judge("base", m, r.map(_ => m.products()), reference._1, start)
-        emitMode("base", m, 0, r, Set.empty, verdict, Set.empty)
+        val verdict = judge(name, m, r.map(_ => m.products()), reference._1, start)
+        emitMode(name, m, 0, r, Set.empty, verdict, Set.empty)
       previousClean = reference._1.getOrElse(Map.empty)
       reference._1.isRight
 

@@ -29,7 +29,10 @@ class IncHistorySuite extends AnyFunSuite:
     Files.writeString(f, content)
 
   private def field(line: String, name: String): String =
-    s""""$name":("[^"]*"|[^,}\\]]*)""".r.findFirstMatchIn(line).fold("")(_.group(1).replace("\"", ""))
+    s""""$name":("[^"]*"|[^,}\\]]*)""".r.findFirstMatchIn(line).fold("")(_.group(1).replace(
+      "\"",
+      ""
+    ))
 
   /** A session on a build of `a` and `b`, which depends on it, and what it logged so far. */
   private def history(test: (Path, Path, Session, () => Seq[String]) => Unit): Unit =
@@ -47,14 +50,18 @@ class IncHistorySuite extends AnyFunSuite:
       write(build, "a/src/main/scala/A.scala", "class A { def f: Int = 1 }\n")
       write(build, "a/src/main/scala/Other.scala", "class Other\n")
       write(build, "b/src/main/scala/B.scala", "class B { def g = new A().f }\n")
-      val session = new Session(Options(build = build, work = work, modes = Vector(Mode("inc", Map.empty))))
+      val session =
+        new Session(Options(build = build, work = work, modes = Vector(Mode("inc", Map.empty))))
       def lines() = Files.readAllLines(work.resolve("steps.jsonl")).asScala.toSeq
       try test(build, work, session, lines)
       finally session.close()
     finally IO.delete(root.toFile)
+  end history
 
   private def of(lines: Seq[String], step: String, mode: String): String =
-    lines.filter(l => field(l, "step") == step && field(l, "mode") == mode && !l.contains("\"reset\"")).last
+    lines.filter(l =>
+      field(l, "step") == step && field(l, "mode") == mode && !l.contains("\"reset\"")
+    ).last
 
   test("a body edit recompiles its source and is the same as clean"):
     history { (build, _, session, lines) =>
@@ -109,6 +116,20 @@ class IncHistorySuite extends AnyFunSuite:
       assert(field(of(lines(), "s2", "inc"), "verdict") == "same")
     }
 
+  test("a known undercompilation, the pending scripted test import-package, is a missed error"):
+    history { (build, _, session, lines) =>
+      write(build, "a/src/main/scala/P.scala", "package a.b\n\nclass P\n")
+      write(build, "a/src/main/scala/Q.scala", "import a.b\n\nclass Q\n")
+      session.start()
+      write(build, "a/src/main/scala/P.scala", "package a\n\nclass P\n")
+      assert(!session.step("s1"))
+      val verdict = field(of(lines(), "s1", "inc"), "verdict")
+      if verdict == "same-fail" then
+        cancel("this Zinc recompiles the importer of a package that is gone")
+      assert(verdict == "missed-error")
+      assert(lines().exists(l => field(l, "step") == "s1" && field(l, "reset") == "same-fail"))
+    }
+
   test("a module added to the build is compiled by every copy"):
     history { (build, _, session, lines) =>
       session.start()
@@ -133,20 +154,33 @@ class IncHistorySuite extends AnyFunSuite:
       val (from, to) = (root.resolve("from"), root.resolve("to"))
       write(from, "m/src/main/scala/A.scala", "class A\n")
       write(from, "m/incOptions.properties", "scalac.options = -deprecation\n")
-      assert(IncHistory.sync(from, to, Map("scalac.options" -> "-feature", "apiDebug" -> "false")).size == 2)
+      assert(IncHistory.sync(
+        from,
+        to,
+        Map("scalac.options" -> "-feature", "apiDebug" -> "false")
+      ).size == 2)
       val props = Files.readString(to.resolve("m/incOptions.properties"))
-      assert(props.contains("scalac.options=-deprecation -feature") && props.contains("apiDebug=false"))
+      assert(props.contains("scalac.options=-deprecation -feature") &&
+        props.contains("apiDebug=false"))
       write(to, "m/target/classes/A.class", "x")
-      assert(IncHistory.sync(from, to, Map("scalac.options" -> "-feature", "apiDebug" -> "false")).isEmpty)
+      assert(IncHistory.sync(
+        from,
+        to,
+        Map("scalac.options" -> "-feature", "apiDebug" -> "false")
+      ).isEmpty)
       Files.delete(from.resolve("m/src/main/scala/A.scala"))
       write(from, "m/src/main/scala/B.scala", "class B\n")
       val changed = IncHistory.sync(from, to, Map.empty).toSet
-      assert(changed == Set("m/src/main/scala/A.scala", "m/src/main/scala/B.scala", "m/incOptions.properties"))
+      assert(changed ==
+        Set("m/src/main/scala/A.scala", "m/src/main/scala/B.scala", "m/incOptions.properties"))
       assert(Files.exists(to.resolve("m/target/classes/A.class")))
       Files.delete(from.resolve("m/src/main/scala/B.scala"))
       write(from, "m/src/main/scala/b.scala", "class B\n")
       IncHistory.sync(from, to, Map.empty)
-      val names = Files.list(to.resolve("m/src/main/scala")).iterator.asScala.map(_.getFileName.toString).toSeq
+      val names = Files.list(
+        to.resolve("m/src/main/scala")
+      ).iterator.asScala.map(_.getFileName.toString).toSeq
       assert(names == Seq("b.scala"))
     finally IO.delete(root.toFile)
+    end try
 end IncHistorySuite

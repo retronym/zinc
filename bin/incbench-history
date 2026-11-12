@@ -209,6 +209,11 @@ class Replay:
         self.proc.stdin.flush()
         return self.wait_for("done")["cleanOk"]
 
+    def rebase(self, name):
+        self.proc.stdin.write(f"rebase {name}\n")
+        self.proc.stdin.flush()
+        return self.wait_for("done")["cleanOk"]
+
     def stop(self):
         try:
             self.proc.stdin.write("shutdown\n")
@@ -331,7 +336,8 @@ def main():
     (out / "replay.json").write_text(json.dumps({
         "repo": str(repo), "frozenBuild": str(frozen), "exportCommit": base_commit, "ref": ref, "start": start,
         "steps": len(steps), "stepsAvailable": available, "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "incOptions": a.inc_option,
-        "scala": a.scala, "zinc": str(a.zinc.resolve()), "zincCommit": git(a.zinc.resolve(), "rev-parse", "HEAD").strip(),
+        "scala": a.scala, "jvmOpts": jvm_opts, "classpathFile": str(a.classpath_file) if a.classpath_file else None,
+        "zinc": str(a.zinc.resolve()), "zincCommit": git(a.zinc.resolve(), "rev-parse", "HEAD").strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }, indent=2) + "\n")
 
