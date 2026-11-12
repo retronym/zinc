@@ -1,0 +1,9 @@
+# O inherits T.f(v: V). Making V a value class changes the erasure of T.f to f(I)I,
+# so O's static and mixin forwarders must be regenerated, although T's API is unchanged.
+> p/run
+$ copy-file changes/V1.scala p/V.scala
+> p/checkRecompilations 1 V
+> p/checkRecompilations 2 Main T O
+> p/run
+$ copy-file changes/J.java p/J.java
+> p/compile
