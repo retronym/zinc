@@ -236,6 +236,43 @@ object Incremental:
     end try
   end apply
 
+  /**
+   * Compiles every source in one cycle without incremental bookkeeping, for when
+   * [[IncOptions.enabled]] is false. Nothing is read from a previous analysis or written to the
+   * early analysis store, and the returned analysis is empty. The callback reports itself
+   * disabled, so compilers skip API and dependency extraction.
+   */
+  def compileClean(
+      sources: Set[VirtualFile],
+      converter: FileConverter,
+      options: IncOptions,
+      output: Output,
+      outputJarContent: JarUtils.OutputJarContent,
+      earlyOutput: Option[Output],
+      pickleJava: Boolean,
+      progress: Option[CompileProgress],
+      log: Logger
+  )(
+      compile: (
+          Set[VirtualFile],
+          DependencyChanges,
+          xsbti.AnalysisCallback,
+          XClassFileManager
+      ) => Unit
+  ): (Boolean, Analysis) =
+    log.debug(s"[zinc] clean build of ${sources.size} sources")
+    extractEarlyJar(earlyOutput).foreach { jar =>
+      Files.deleteIfExists(jar)
+      PickleJar.touch(jar)
+    }
+    if earlyOutput.isDefined then progress.foreach(_.afterEarlyOutput(false))
+    val callback = new CleanBuildCallback(converter, pickleJava)
+    withClassfileManager(options, converter, output, outputJarContent) { classFileManager =>
+      compile(sources, IncrementalCommon.emptyChanges, callback, classFileManager)
+    }
+    (sources.nonEmpty, Analysis.empty)
+  end compileClean
+
   def extractEarlyJar(earlyOutput: Option[Output]): Option[Path] =
     for
       early <- earlyOutput
