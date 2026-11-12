@@ -17,6 +17,7 @@ object ExtractAPISpecification
       stableExistentialNames
     ),
     example("extract children of a sealed class", sealedChildren),
+    example("keep the declared literal type of a def or var", literalTypes),
     example("extract correctly the definition type of a package object", packageObject),
     example("extract nested classes", nestedClasses),
     example("not extract local classes", localClasses),
@@ -42,6 +43,30 @@ object ExtractAPISpecification
 
   private def fooClassApi(src: String): ClassLike =
     extractApisFromSrc(src).find(_.name() == "Foo").get
+
+  private def literalTypes: Result =
+    if (!scalaVersion.startsWith("2.13")) Result.success
+    else
+      Result.all(
+        List(
+          Result
+            .assert(
+              !SameAPI(
+                fooClassApi("class Foo { def x: 1 = 1 }"),
+                fooClassApi("class Foo { def x: 2 = 2 }")
+              )
+            )
+            .log("def"),
+          Result
+            .assert(
+              !SameAPI(
+                fooClassApi("class Foo { var x: 1 = 1 }"),
+                fooClassApi("class Foo { var x: 2 = 2 }")
+              )
+            )
+            .log("var"),
+        )
+      )
 
   private def stableExistentialNames: Result = {
     def compileAndGetFooMethodApi(src: String): Def =
