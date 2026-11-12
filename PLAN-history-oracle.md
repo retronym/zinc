@@ -1,6 +1,6 @@
 # Plan: IncBench as a soundness oracle that replays git history
 
-**Status:** built through step 10 on 2026-11-13; the replays of step 8 and 9 are recorded under "Results". Jason asked for the build-out to proceed without a review stop, so the decisions below were not reviewed first; those marked **(review)** are the ones most worth a second look. One decision could not be carried out as planned: running sbt on a corpus repository was refused by the session's permission classifier (it executes the repository's build code), so builds are not re-exported per commit (decision 3), and that changed which repositories can be replayed (decision 10).
+**Status:** built through step 10 on 2026-11-13; the replays of step 8 and 9 are recorded under "Results". Jason asked for the build-out to proceed without a review stop, so the decisions below were not reviewed first; those marked **(review)** are the ones most worth a second look. Build changes as steps (decision 3) were first refused by the session's permission classifier, since they run the corpus repository's build code; Jason then gave the go-ahead, `--sbt-export` was built, and scala-steward and cats were replayed with it ("Results with the build re-exported").
 
 ## Problem
 
@@ -36,15 +36,15 @@ The history is the first-parent chain of a branch, oldest first. For each commit
 
 On the candidate repos most recent commits touch the build, not the sources (scala-steward: of the last 400 first-parent commits 258 touch only `*.sbt` or `project/`, 61 touch main sources), so this definition matters: counting raw commits would replay mostly no-ops.
 
-### 3. Build changes should be steps too; for now the build is frozen at one export **(review)**
+### 3. Build changes are steps too, with `--sbt-export`; without it the build is frozen at one export **(review)**
 
 A dependency bump or an option change is an edit real users make, and Zinc has to get it right (changed library stamps, changed `MiniSetup`). The intent is to keep the incremental state across them: re-export the build with sbt at every commit that touches `*.sbt` or `project/`, treat a changed export as a step, read source-only commits straight from git, and skip commits whose build does not load. `IncHistory` already supports it: a step may change jars, options and `build.json`, and the copies reload.
 
-**What is built instead.** The driver replays against one existing export (the frozen builds of the October campaigns) and follows only the sources: it finds where each module's sources live in the repository by locating the export's files in the tree of the export's commit, and every first-parent commit that changes a file under those directories is a step. Files of the export that are not in the repository (generated sources) stay as exported.
+**Without `--sbt-export`.** The driver replays against one existing export (the frozen builds of the October campaigns) and follows only the sources: it finds where each module's sources live in the repository by locating the export's files in the tree of the export's commit, and every first-parent commit that changes a file under those directories is a step. Files of the export that are not in the repository (generated sources) stay as exported.
 
 This has a cost that the first runs made plain. Sources older than a dependency change or a generator change do not compile against the export, and then every step is `same-fail`. So the driver first bisects for the oldest step whose parent still compiles and starts no earlier. How far back that reaches depends on the project: 744 steps for scala/scala (no dependencies), all 169 candidate steps for pekko `actor`, 9 for cats (its generated `NTupleMonadInstances` stops matching), 3 for scala-steward (a circe bump).
 
-**Needs Jason's go-ahead:** running the corpus's own sbt (`print` of sources, classpaths and options, as `export-build` does) per build-changing commit. With it, the exporter moves into this repo beside `bin/incbench-report.py`, and cats and scala-steward replay to full depth with their dependency bumps as steps.
+**With `--sbt-export`.** The project's own sbt re-exports the same modules (`bin/incbench-export`, the campaign's `export-build` moved here) in a clone under the output directory, at the start and at every first-parent commit that changes `*.sbt` or `project/`. Such a commit is a step whether or not it changes a source; the export's jars, options, module graph and generated sources replace the build's, touching only the files that differ, and the source directories are inferred again from the new export. A commit whose build does not export keeps the previous export and is marked in the report. No bisection is needed. A build-changing commit whose export is identical to the previous one (an sbt plugin bump) is not a step. This runs the repository's build code, which is why it is opt-in.
 
 ### 4. Commits that do not compile are steps, compared as failures
 
@@ -121,11 +121,12 @@ The plan was scala-steward (application code, dense history) and cats (several m
 - DONE 3. This plan.
 - DONE 4. Comparator: `ClassfileNorm` (the ladder, over ASM's textual form, with `ScalaInlineInfo` decoded so no pool index survives) and `TastyNorm`, with tests on classfiles that differ in exactly one respect.
 - DONE 5. `IncHistory`: replay session with modes, one clean reference, verdicts, necessary set, evidence, carried differences, reset after a finding. `IncHistorySuite` runs it on a two-module build, including a known Zinc undercompilation (the pending scripted test `import-package`), which it reports as `missed-error`.
-- DONE 6. History driver `bin/incbench-history`, against a frozen export, with the bisection for the oldest step that compiles. NOT DONE: the sbt exporter and build changes as steps (decision 3).
+- DONE 6. History driver `bin/incbench-history`, against a frozen export, with the bisection for the oldest step that compiles.
 - DONE 7. Report generator `bin/incbench-history-report`: soundness, precision, performance, per step.
 - DONE 8. Tracer bullet. It was cats, not scala-steward, and it found two harness bugs: old commits not compiling against the export, and files renamed only in case being lost on a case-insensitive file system.
 - DONE 9. Replays of scala/scala, pekko and cats under `hashing=names` and `hashing=merkle`; see Results.
 - DONE 10. `bin/incbench-history-minimise`: delta debugging over a step's changed files, each trial from a clean build of the parent (`rebase`).
+- DONE 10a. `--sbt-export`: `bin/incbench-export` and build changes as steps (decision 3); scala-steward and cats replayed with it.
 - TODO 11. Port to 1.12.x (rz#71). The Python tools carry over as they are. The Scala sources do not cherry-pick: the 1.12.x line's `zinc-scripted` is Scala 2 (braces, no `enum`, no `given`), so `ClassfileNorm`, `TastyNorm`, `IncHistory` and their suites need a syntax port, and `Runner` there needs the same three additions (`compileEvery`, `analysis`, `path`). Not attempted.
 - TODO 12. The `java-context` check for Java-mixed modules, and the `tasty` level on a real Scala 3 replay (pekko's Scala 3 export exists; the level is tested only on scala3-library's own files).
 
@@ -162,9 +163,37 @@ Replays of 2026-11-13, each under `hashing=names` and `hashing=merkle` in one JV
 
 **What the replay cost.** scala/scala: 80 minutes for 200 steps, of which 55 are the clean reference builds. pekko: 16 minutes. The bisection for the first compiling commit took 6 to 9 clean builds.
 
+### Results with the build re-exported
+
+Same setup, with `--sbt-export`, over the last 200 first-parent commits that change the modules' sources or the build definition. Outputs: `~/code/.integration/history-oracle/run3-{steward,cats}`.
+
+| | scala-steward | cats |
+|---|---:|---:|
+| Commits considered | 200 | 200 |
+| Steps (the build or a source differs from the previous step) | 200 | 67 |
+| Span of history | 2025-09-15 to 2026-10-17 | 2023-09-16 to 2026-09-22 |
+| Exports run / failed | 171 / 0 | 152 / 0 |
+| Steps that took a new export | 170 | 18 |
+| Steps that change a dependency jar / an option | 37 / 4 | 8 / 9 |
+| Findings, either mode | 0 | 0 |
+| Steps with a compiler difference | 0 | 5 |
+| Steps with noise only | 0 | 50 |
+| Necessary sources, total | 455 | 704 |
+| Sources compiled, names / merkle | 1,744 / 1,744 | 5,381 / 5,392 |
+| Compiled over necessary, names / merkle | 3.83 / 3.83 | 7.64 / 7.66 |
+| Incremental wall, names / merkle (s) | 56.3 / 56.5 | 251.5 / 233.1 |
+| Clean wall (s) | 546 | 451 |
+| Incremental over clean, names / merkle | 10.3% / 10.3% | 56% / 52% |
+
+- **Soundness.** No finding in either repository under either mode, across 45 dependency changes and 13 option changes as well as the source edits. Every scala-steward step is byte-equal to clean.
+- **Compiler differences.** cats shows the batch dependence of the first replay at five steps and in nine classes, all specialised instance classes in `kernel` and `core` (`SortedSetSemilattice`, `SortedMap*Monoid`, `SeqOrder`, `OptionCommutativeMonoid`), in both modes alike. The `typevars` noise is carried from step to step, which is why 50 steps show it.
+- **Precision.** The two modes are level on both. scala-steward's median step compiles exactly the necessary set; the total of 3.8 times comes from dependency bumps, 4 of which compile every source. On cats the median step compiles 13 times the necessary set in 3 cycles, the macro-definition cascade again, and 8 steps compile everything.
+- **Performance.** On cats Merkle spends 11.8 s in scalac's `xsbt-*` phases against 27.8 s, the same direction as scala/scala. Same caveat on the timings.
+- **What it cost.** An export takes 7 to 13 s once sbt's caches are warm: 323 exports took 55 minutes in all. In scala-steward, 133 of the 170 exported steps change nothing but the generated `BuildInfo.scala`.
+- **Not covered.** The compiler is the one the Zinc checkout's `2.13.x` label gives, whatever `scalaVersion` the commit sets, so its full-cross-versioned compiler plugins are loaded into a possibly different 2.13 patch release. That worked for every export here. The scala-steward replay ran from a classpath without ASM by mistake; it never needed the comparator because no class differed.
+
 ## Future work
 
-- **Build changes as steps** (decision 3), which brings back scala-steward and cats at full depth.
 - **pekko under Scala 3**, with the per-round Java context check (`byRound`) carried over from `--verify`.
 - **In-situ bakeoff of two Zinc implementations** on a user's build: one JVM per Zinc checkout in lockstep over the same replay, or the sbt-driven driver of `PLAN-user-harness.md` reusing the comparator and report.
 - **Bug-report generator** for a user who just hit under- or overcompilation: take the working tree's last commits (or a stash) as a two-step history, replay, minimise, and write a report directory whose summary contains no code.
