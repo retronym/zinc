@@ -1,0 +1,6 @@
+> p/compile
+
+# The match in D is no longer exhaustive, which is a warning, fatal here
+$ copy-file changes/Triangle.java p/Triangle.java
+$ copy-file changes/Shape.java p/Shape.java
+-> p/compile

@@ -20,12 +20,14 @@ import scala.util.Using
 import sbt.internal.inc.classfile.JavaCompilerForUnitTesting
 import sbt.io.IO
 import xsbti.{ AnalysisCallback, VirtualFileRef }
-import xsbti.api.{ ClassLike, ClassLikeDef, DefinitionType }
+import xsbti.api.{ ClassLike, ClassLikeDef, DefinitionType, Projection }
 
 object ClassToAPISpecification extends Properties:
   override def tests: List[Test] = List(
     example("ClassToAPI should extract api of inner classes", innerClasses),
     example("extract a private inner class", privateInnerClass),
+    example("extract the permitted subclasses of a sealed interface", sealedInterface),
+    example("leave an enum with constant bodies unsealed", enumWithBodies),
     property("extract every inner class, whatever its access", propInnerClasses).withTests(10),
     example("not throw NPE when a parent JDK class is bootstrap-loaded", bootstrapParent),
     example(
@@ -74,6 +76,35 @@ object ClassToAPISpecification extends Properties:
         |}
       """.stripMargin
     extractApisFromSrc("A.java" -> src).map(_.name) ==== Set("A", "A.B")
+
+  private def sealedInterface: Result =
+    val apis = extractApisFromSrcs(
+      "Shape.java" -> "public sealed interface Shape permits Circle, Square {}",
+      "Circle.java" -> "public final class Circle implements Shape {}",
+      "Square.java" -> "public non-sealed class Square implements Shape {}",
+    ).map(c => c.name -> c).toMap
+    val shape = apis("Shape")
+    Result.all(
+      List(
+        shape.classApi.modifiers.isSealed ==== true,
+        shape.classApi.childrenOfSealedClass.toList.collect { case p: Projection => p.id } ====
+          List("Circle", "Square"),
+        shape.objectApi.modifiers.isSealed ==== false,
+        apis("Circle").classApi.modifiers.isSealed ==== false,
+        apis("Square").classApi.modifiers.isSealed ==== false,
+        apis("Square").classApi.childrenOfSealedClass.isEmpty ==== true,
+      )
+    )
+
+  private def enumWithBodies: Result =
+    val e = extractApisFromSrc("E.java" -> "public enum E { A {}, B }").find(_.name == "E").get
+    Result.all(
+      List(
+        e.classApi.modifiers.isSealed ==== false,
+        e.classApi.childrenOfSealedClass.toList.collect { case p: Projection => p.id } ====
+          List("E"),
+      )
+    )
 
   private val genInnerClasses: Gen[Map[String, String]] =
     Gen
@@ -224,9 +255,12 @@ object ClassToAPISpecification extends Properties:
    * extracted by ClassToAPI class.
    */
   private def extractApisFromSrc(src: (String, String)): Set[Companions] =
-    val (Seq(tempSrcFile), analysisCallback) =
-      JavaCompilerForUnitTesting.compileJavaSrcs(src)(readAPI)
-    val apis = analysisCallback.apis(tempSrcFile)
+    extractApisFromSrcs(src)
+
+  private def extractApisFromSrcs(srcs: (String, String)*): Set[Companions] =
+    val (tempSrcFiles, analysisCallback) =
+      JavaCompilerForUnitTesting.compileJavaSrcs(srcs*)(readAPI)
+    val apis = tempSrcFiles.flatMap(analysisCallback.apis(_)).toSet
     apis.groupBy(_.name).map(companions.tupled).toSet
 
   private def companions(className: String, classes: Set[ClassLike]): Companions =
