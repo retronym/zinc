@@ -193,45 +193,47 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
     }
 
     /**
-     * Registers names that the typer looked up or the pattern matcher will select, but that do
-     * not appear as symbols in the typed tree.
+     * Registers names that the typer looked up, or that the pattern matcher will select, but that
+     * do not appear as symbols in the typed tree.
+     *
+     * `x op= y` is typed as `x = x op y` (or the setter or `update` equivalent) when the type of
+     * `x` has no member `op=`, so adding one changes the meaning. `convertToAssignment` positions
+     * the `op` selection at the `op=` in the source, which tells it apart from a hand-written
+     * `x = x op y`.
+     *
+     * The typer tries `unapply` before `unapplySeq`, and the pattern matcher selects the members
+     * of a name-based extractor's result after this phase. `_N+1` is included because adding it
+     * changes the arity of the pattern. This registers some names that are not involved, which
+     * only costs recompilation when such a name changes.
      */
     private def handleNamesNotInTree(tree: Tree): Unit = tree match {
-      // `x op= y` is typed as `x = x op y` (or the setter / `update` equivalent) when the type of
-      // `x` has no member `op=`. Adding one changes the meaning, so register `op=`. The typer
-      // positions the `op` selection at the `op=` of the source (`convertToAssignment`), which
-      // tells it apart from a hand-written `x = x op y`.
       case sel @ Select(_, op) if isDesugaredAssignmentOp(sel, op) =>
         getNamesOfEnclosingScope.add(newTermName(op.decoded + "=").encode)
         ()
-      // The typer tries `unapply` before `unapplySeq`, and the pattern matcher selects the members
-      // of a name-based extractor's result after this phase. This may register a few names that
-      // are not involved, which only costs recompilation when such a name changes.
       case UnApply(fun, args) =>
         val names = getNamesOfEnclosingScope
         extractorNames.foreach(names.add)
-        for (i <- 1 to args.length) names.add(newTermName("_" + i))
+        for (i <- 1 to args.length + 1) names.add(nme.productAccessorName(i))
         if (fun.symbol != null && fun.symbol.name == nme.unapplySeq)
           extractorSeqNames.foreach(names.add)
       case _ =>
     }
 
     private val extractorNames: List[Name] =
-      List("unapply", "unapplySeq", "isEmpty", "get").map(s => newTermName(s): Name)
+      List(nme.unapply, nme.unapplySeq, nme.isEmpty, nme.get)
     private val extractorSeqNames: List[Name] =
-      List("lengthCompare", "apply", "drop", "toSeq").map(s => newTermName(s): Name)
+      List(nme.lengthCompare, nme.length, nme.apply, nme.drop, newTermName("toSeq"))
 
-    private def isDesugaredAssignmentOp(sel: Select, op: Name): Boolean = {
-      val pos = sel.pos
-      op.isTermName && op.decoded != op.toString && pos.isDefined && {
-        val content = pos.source.content
-        val opEq = op.decoded + "="
-        val start = pos.point
-        val end = start + opEq.length
-        end <= content.length && new String(content, start, opEq.length) == opEq &&
-        (end == content.length || !isOperatorPart(content(end)))
+    private def isDesugaredAssignmentOp(sel: Select, op: Name): Boolean =
+      op.isTermName && op.isOperatorName && sel.pos.isDefined && {
+        val content = sel.pos.source.content
+        val decoded = op.decoded
+        val start = sel.pos.point
+        val eq = start + decoded.length
+        eq < content.length && content(eq) == '=' &&
+        (eq + 1 == content.length || !isOperatorPart(content(eq + 1))) &&
+        decoded.indices.forall(i => content(start + i) == decoded.charAt(i))
       }
-    }
 
     val addSymbol: (JavaSet[Name], Symbol) => Unit = { (names: JavaSet[Name], symbol: Symbol) =>
       // Synthetic names are no longer included. See https://github.com/sbt/sbt/issues/2537

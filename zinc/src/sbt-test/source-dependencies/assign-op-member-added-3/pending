@@ -1,0 +1,8 @@
+# assign-op-member-added on Scala 3, whose bridge (ExtractDependencies in scala/scala3)
+# does not register op= for an assignment operator typed as a reassignment.
+
+> p/run x
+
+# c += "x" was desugared to c = c + "x", so Main may not record the name +=
+$ copy-file changes/C.scala p/C.scala
+> p/run mutated

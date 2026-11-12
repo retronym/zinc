@@ -271,17 +271,26 @@ object ExtractUsedNamesSpecification
     val srcB = """|class B {
                   |  var a: A = new A
                   |  def opAssign(): Unit = a += 1
-                  |  def update(): Unit = a(0) += 1
                   |}""".stripMargin
     val srcC = """|class C {
+                  |  val a: A = new A
+                  |  def opAssign(): Unit = a(0) += 1
+                  |}""".stripMargin
+    val srcD = """|class D {
+                  |  val b: B = new B
+                  |  def opAssign(): Unit = b.a += 1
+                  |}""".stripMargin
+    val srcE = """|class E {
                   |  var a: A = new A
                   |  def reassign(): Unit = a = a + 1
                   |}""".stripMargin
-    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC, srcD, srcE)
     Result.all(
       List(
-        Result.assert(usedNames("B").contains("+=")).log("B uses +="),
-        Result.assert(!usedNames("C").contains("+=")).log("C does not use +="),
+        Result.assert(usedNames("B").contains("+=")).log("B uses += on a var"),
+        Result.assert(usedNames("C").contains("+=")).log("C uses += through update"),
+        Result.assert(usedNames("D").contains("+=")).log("D uses += through a setter"),
+        Result.assert(!usedNames("E").contains("+=")).log("E does not use +="),
       )
     )
   }
@@ -295,22 +304,18 @@ object ExtractUsedNamesSpecification
                   |  def a(i: Int) = i match { case Ex(x, y) => x + y }
                   |}""".stripMargin
     val srcC = """|class C {
-                  |  def a(i: Int) = i match { case ExSeq(x) => x }
+                  |  def a(i: Int) = i match { case ExSeq(x, rest @ _*) => x }
                   |}""".stripMargin
     val usedNames = extractUsedNamesFromSrc(srcA, srcB, srcC)
+    val names = Set("unapply", "unapplySeq", "isEmpty", "get")
+    val seqNames = Set("lengthCompare", "length", "apply", "drop", "toSeq")
     Result.all(
       List(
         Result
-          .diff(usedNames("B"), Set("unapply", "unapplySeq", "isEmpty", "get", "_1", "_2"))(
-            (a, b) => b.subsetOf(a)
-          )
+          .diff(usedNames("B"), names ++ Set("_1", "_2", "_3"))((a, b) => b.subsetOf(a))
           .log("B"),
         Result.assert(!usedNames("B").contains("lengthCompare")).log("B lengthCompare"),
-        Result
-          .diff(usedNames("C"), Set("unapply", "unapplySeq", "lengthCompare", "apply"))((a, b) =>
-            b.subsetOf(a)
-          )
-          .log("C"),
+        Result.diff(usedNames("C"), names ++ seqNames)((a, b) => b.subsetOf(a)).log("C"),
       )
     )
   }
