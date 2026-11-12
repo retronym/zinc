@@ -162,6 +162,7 @@ object ClassfileNorm:
           out += "+" + y(j)
           j += 1
       out.result()
+    end if
   end lineDiff
 
   private final val MaxLcsCells = 4000000L
@@ -357,6 +358,10 @@ object ClassfileNorm:
 
     private def kinds(values: Seq[Object]): Unit =
       if values.exists(_.isInstanceOf[Number]) then
-        this.text.add(values.map(_.getClass.getSimpleName).mkString(s"$tab2// constants: ", ", ", "\n"))
+        this.text.add(values.map(_.getClass.getSimpleName).mkString(
+          s"$tab2// constants: ",
+          ", ",
+          "\n"
+        ))
   end Text
 end ClassfileNorm

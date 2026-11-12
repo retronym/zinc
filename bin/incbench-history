@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Replay a project's git history through IncHistory: each commit compiled incrementally from the
+one before, under one or more incOptions modes, and compared with a clean build of that commit.
+
+    incbench-history REPO FROZEN_BUILD OUT [--zinc CHECKOUT] [--ref REF] [--steps N]
+                     [--mode NAME[=KEY=VALUE,...]]... [--inc-option KEY=VALUE]...
+
+REPO is a clone of the project with its history. FROZEN_BUILD is an export of some of its modules
+at one commit, as IncBench's --build reads it (build.json, <module>/src/main/{scala,java},
+<module>/lib/*.jar, <module>/incOptions.properties), with an export.json naming that commit. The
+export fixes the modules, their classpaths and their options for the whole replay; only sources
+follow the history. Where each module's sources live in REPO is inferred by finding the export's
+files in the tree of the export's commit. Files of the export that are not in that tree, such as
+generated sources, stay as exported.
+
+A step is a first-parent commit that changes a file under those source directories. The last
+--steps of them up to --ref (default: the export's commit) are replayed, oldest first, starting
+from the parent of the first.
+
+OUT gets:
+
+    build/            the build as of the current step, which IncHistory copies per mode
+    work/             IncHistory's copies, steps.jsonl and diffs/
+    commits.jsonl     one line per step: the commit, its subject and the files it changed
+    inchistory.log    everything IncHistory printed
+    report.md         written by incbench-history-report, after every step
+"""
+
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+MAIN = "sbt.internal.inc.bench.IncHistory"
+SOURCE_SUFFIXES = (".scala", ".java")
+
+
+def log(msg):
+    print(f"[incbench-history] {msg}", file=sys.stderr, flush=True)
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True, check=True).stdout
+
+
+def blob_sha(data):
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def tree(repo, commit, paths=()):
+    """The source files of a commit: path -> blob sha."""
+    out = git(repo, "ls-tree", "-r", "-z", commit, "--", *paths) if paths else git(repo, "ls-tree", "-r", "-z", commit)
+    files = {}
+    for entry in out.split("\0"):
+        if entry:
+            meta, path = entry.split("\t", 1)
+            mode, kind, sha = meta.split()
+            if kind == "blob" and path.endswith(SOURCE_SUFFIXES):
+                files[path] = sha
+    return files
+
+
+def lang_dir(path):
+    return "java" if path.endswith(".java") else "scala"
+
+
+def exported_sources(build, module):
+    """The export's sources of a module: path below src/main/<lang> -> file."""
+    out = {}
+    for lang in ("scala", "java"):
+        root = build / module / "src" / "main" / lang
+        for f in root.rglob("*") if root.exists() else []:
+            if f.is_file() and f.name.endswith(SOURCE_SUFFIXES):
+                out[(lang, str(f.relative_to(root)))] = f
+    return out
+
+
+def infer_roots(repo, commit, build, modules):
+    """Each module's source directories in the repository, and the exported files found nowhere."""
+    files = tree(repo, commit)
+    by_name = {}
+    for path, sha in files.items():
+        by_name.setdefault(path.rsplit("/", 1)[-1], []).append((path, sha))
+    roots, frozen = {}, {}
+    for m in modules:
+        found, missing = {}, []
+        for (lang, rel), f in exported_sources(build, m).items():
+            sha = blob_sha(f.read_bytes())
+            hits = [p for p, s in by_name.get(f.name, []) if s == sha and (p == rel or p.endswith("/" + rel))]
+            if hits:
+                for p in hits:
+                    root = p[: -len(rel)].rstrip("/")
+                    found[root] = found.get(root, 0) + 1
+            else:
+                missing.append(f"{lang}/{rel}")
+        # A file that matches under several directories (a copy elsewhere in the repository) votes
+        # for each; keep the directories that explain the most files, dropping ones a better
+        # directory already covers.
+        kept = []
+        covered = set()
+        for root in sorted(found, key=lambda r: -found[r]):
+            mine = {(lang, rel) for (lang, rel), f in exported_sources(build, m).items()
+                    if files.get(f"{root}/{rel}" if root else rel) == blob_sha(f.read_bytes())}
+            if mine - covered:
+                kept.append(root)
+                covered |= mine
+        roots[m] = kept
+        frozen[m] = missing
+    return roots, frozen
+
+
+def desired(repo, commit, roots):
+    """The sources a commit gives each module: path in the build -> blob sha."""
+    out = {}
+    for m, dirs in roots.items():
+        for root in dirs:
+            for path, sha in tree(repo, commit, [root] if root else []).items():
+                rel = path[len(root):].lstrip("/")
+                out[f"{m}/src/main/{lang_dir(path)}/{rel}"] = sha
+    return out
+
+
+def materialise(repo, build, want, have):
+    """Makes the build's history-tracked sources those of `want`; returns the paths that changed."""
+    changed = []
+    for path, sha in want.items():
+        if have.get(path) != sha:
+            f = build / path
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(subprocess.run(["git", "-C", str(repo), "cat-file", "blob", sha], capture_output=True, check=True).stdout)
+            changed.append(path)
+    for path in have:
+        if path not in want:
+            (build / path).unlink(missing_ok=True)
+            changed.append(path)
+    return changed
+
+
+def candidates(repo, ref, roots, limit):
+    """The last `limit` first-parent commits up to `ref` that change a source under `roots`, oldest first."""
+    dirs = sorted({r for rs in roots.values() for r in rs})
+    out = git(repo, "log", "--first-parent", "-m", "--name-only", "--format=@%H %P", f"-n{limit}", ref, "--",
+              *[d or "." for d in dirs])
+    keep, current = [], None
+    for line in out.split("\n"):
+        if line.startswith("@"):
+            rev, *parents = line[1:].split()
+            current = rev if parents else None
+        elif current and line.endswith(SOURCE_SUFFIXES):
+            keep.append(current)
+            current = None
+    return list(reversed(keep))
+
+
+def zinc_classpath(checkout):
+    """Compiles the checkout's 2.13 bridge and IncHistory, and returns IncHistory's classpath."""
+    r = subprocess.run(["sbt", "--client", "--color=false", "--supershell=false", "--batch",
+                        "compilerBridge2_13/compile; zincScripted/Test/compile; export zincScripted/Test/fullClasspath"],
+                       cwd=checkout, text=True, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(f"{checkout}: sbt failed:\n{r.stdout[-3000:]}{r.stderr[-2000:]}")
+    lines = [l for l in r.stdout.splitlines() if l.startswith("/") or l.startswith("List(")]
+    if not lines:
+        sys.exit(f"{checkout}: sbt printed no classpath")
+    cp = lines[-1]
+    if cp.startswith("List("):
+        # sbt 2 prints a list of entries under ${OUT}, ${BASE} and ${CSR_CACHE}, jars with a content hash appended.
+        import os
+        mac, linux = Path.home() / "Library/Caches/Coursier/v1", Path.home() / ".cache/coursier/v1"
+        cache = os.environ.get("COURSIER_CACHE") or str(mac if mac.exists() else linux)
+        subst = {"${OUT}": str(checkout / "target/out"), "${BASE}": str(checkout), "${CSR_CACHE}": cache}
+        entries = []
+        for e in cp[len("List("):-1].split(", "):
+            e = e.split(">")[0]
+            for k, v in subst.items():
+                e = e.replace(k, v)
+            entries.append(e)
+        missing = [e for e in entries if not Path(e).exists()]
+        if missing:
+            sys.exit(f"{checkout}: classpath entries not found: {missing[:5]}")
+        cp = ":".join(entries)
+    return cp
+
+
+class Replay:
+    def __init__(self, classpath, jvm_opts, args, logfile):
+        self.log = open(logfile, "w")
+        self.proc = subprocess.Popen(["java", *jvm_opts, "-cp", classpath, MAIN, *args], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+
+    def wait_for(self, key):
+        for line in self.proc.stdout:
+            self.log.write(line)
+            self.log.flush()
+            if line.startswith('{"' + key + '"'):
+                return json.loads(line)
+        raise RuntimeError(f"IncHistory stopped (exit {self.proc.wait()}) while waiting for {key}")
+
+    def step(self, name):
+        self.proc.stdin.write(f"step {name}\n")
+        self.proc.stdin.flush()
+        return self.wait_for("done")
+
+    def stop(self):
+        try:
+            self.proc.stdin.write("shutdown\n")
+            self.proc.stdin.flush()
+            self.proc.wait(timeout=60)
+        except Exception:
+            self.proc.kill()
+        self.log.close()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("repo", type=Path)
+    ap.add_argument("frozen_build", type=Path)
+    ap.add_argument("out", type=Path)
+    ap.add_argument("--zinc", type=Path, default=Path(__file__).resolve().parent.parent,
+                    help="the Zinc checkout whose IncHistory and bridge run (default: the one holding this script)")
+    ap.add_argument("--classpath-file", type=Path,
+                    help="IncHistory's classpath, instead of asking sbt in --zinc for it")
+    ap.add_argument("--ref", help="the last commit to replay (default: the export's commit)")
+    ap.add_argument("--steps", type=int, default=200)
+    ap.add_argument("--mode", action="append", default=[])
+    ap.add_argument("--inc-option", action="append",
+                    default=["pipelining=false", "recompileAllFraction=0.5", "recompileOnMacroDef=true"],
+                    help="for every mode and the clean build; the defaults are sbt's where scripted's differ")
+    ap.add_argument("--scala", default="2.13.x")
+    ap.add_argument("--profile", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--jvm-opt", action="append")
+    ap.add_argument("--report", default=str(Path(__file__).resolve().parent / "incbench-history-report"))
+    a = ap.parse_args()
+
+    repo, frozen, out = a.repo.resolve(), a.frozen_build.resolve(), a.out.resolve()
+    export = json.loads((frozen / "export.json").read_text())
+    base_commit = export["commit"]
+    modules = list(export["modules"])
+    ref = a.ref or base_commit
+
+    if out.exists():
+        shutil.rmtree(out)
+    build = out / "build"
+    shutil.copytree(frozen, build, ignore=shutil.ignore_patterns("target"))
+    for m in modules:
+        # An earlier IncBench run on the export leaves its own options in incOptions.properties and
+        # the build's in incOptions.base.properties.
+        saved = build / m / "incOptions.base.properties"
+        if saved.exists():
+            saved.replace(build / m / "incOptions.properties")
+
+    roots, frozen_only = infer_roots(repo, base_commit, build, modules)
+    for m in modules:
+        log(f"{m}: sources from {roots[m] or 'nowhere'}; {len(frozen_only[m])} exported files not in the repository")
+        if not roots[m]:
+            sys.exit(f"{m}: none of the export's sources are in {repo} at {base_commit}")
+    steps = candidates(repo, ref, roots, a.steps * 20)[-a.steps:]
+    if not steps:
+        sys.exit("no commit changes the exported modules' sources")
+    start = git(repo, "rev-parse", f"{steps[0]}^1").strip()
+    log(f"{len(steps)} steps, {start[:9]}..{steps[-1][:9]}")
+
+    # The export's sources that the history tracks are replaced by the start commit's.
+    have = {}
+    for m in modules:
+        for (lang, rel), f in exported_sources(build, m).items():
+            if f"{lang}/{rel}" not in frozen_only[m]:
+                have[f"{m}/src/main/{lang}/{rel}"] = None
+    materialise(repo, build, desired(repo, start, roots), have)
+    have = desired(repo, start, roots)
+
+    (out / "replay.json").write_text(json.dumps({
+        "repo": str(repo), "frozenBuild": str(frozen), "exportCommit": base_commit, "ref": ref, "start": start,
+        "modules": modules, "roots": roots, "frozenOnly": frozen_only, "modes": a.mode, "incOptions": a.inc_option,
+        "scala": a.scala, "zinc": str(a.zinc.resolve()), "zincCommit": git(a.zinc.resolve(), "rev-parse", "HEAD").strip(),
+        "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, indent=2) + "\n")
+
+    args = ["--build", str(build), "--work", str(out / "work"), "--scala", a.scala]
+    for m in a.mode:
+        args += ["--mode", m]
+    for o in a.inc_option:
+        args += ["--inc-option", o]
+    if a.profile:
+        args.append("--profile")
+    classpath = a.classpath_file.read_text().strip() if a.classpath_file else zinc_classpath(a.zinc.resolve())
+    replay = Replay(classpath, a.jvm_opt or ["-Xmx6g", "-Xss4m"], args, out / "inchistory.log")
+    commits = open(out / "commits.jsonl", "w")
+    try:
+        replay.wait_for("ready")
+        log("base built")
+        for i, commit in enumerate(steps, 1):
+            want = desired(repo, commit, roots)
+            changed = materialise(repo, build, want, have)
+            have = want
+            if not changed:
+                continue
+            name = f"{i:04d}-{commit[:9]}"
+            t = time.time()
+            replay.step(name)
+            subject, date = git(repo, "log", "-1", "--format=%s%x00%cI", commit).strip().split("\0")
+            commits.write(json.dumps({"step": name, "commit": commit, "subject": subject, "date": date,
+                                      "changed": changed, "seconds": round(time.time() - t, 1)}) + "\n")
+            commits.flush()
+            log(f"{name} {len(changed)} files, {time.time() - t:.1f}s: {subject[:70]}")
+            if a.report and Path(a.report).exists():
+                subprocess.run([sys.executable, a.report, str(out)], capture_output=True)
+    finally:
+        replay.stop()
+        commits.close()
+    if a.report and Path(a.report).exists():
+        subprocess.run([sys.executable, a.report, str(out)])
+
+
+if __name__ == "__main__":
+    main()

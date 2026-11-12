@@ -606,7 +606,8 @@ object IncBench:
       dir: Path,
       moduleNames: Seq[String],
       scalaVersion: String,
-      logLevel: Level.Value = Level.Warn
+      logLevel: Level.Value = Level.Warn,
+      compileEvery: Boolean = false
   ):
     private val handler =
       new IncHandler(dir, cacheDir, UnitSpec.newLogger(logLevel), compileToJar = false)
@@ -632,6 +633,24 @@ object IncBench:
           Left(problems(e).sorted)
 
     def classesDir(module: String): Path = handler.lookupProject(module).classesDir
+
+    /** A module's stored analysis, if it has been compiled. */
+    def analysis(module: String): Option[Analysis] =
+      val a = handler.lookupProject(module).prev().analysis
+      if a.isPresent then Some(a.get.asInstanceOf[Analysis]) else None
+
+    def path(ref: xsbti.VirtualFileRef): Path = handler.converter.toPath(ref)
+
+    /**
+     * The modules whose compile brings every module up to date: the last one, which the builds
+     * IncBench generates make depend on all the others, or with `compileEvery` each module
+     * that no other depends on.
+     */
+    private def targets: Seq[String] =
+      if !compileEvery then Seq(moduleNames.last)
+      else
+        val used = moduleNames.flatMap(handler.lookupProject(_).dependsOn).toSet
+        moduleNames.filterNot(used)
 
     def javaProducts(): JavaProducts =
       moduleNames.map { m =>
@@ -716,7 +735,7 @@ object IncBench:
 
     def compileAll(): StepResult =
       val start = System.currentTimeMillis()
-      state = handler.apply(s"${moduleNames.last}/compile", Nil, state)
+      targets.foreach(m => state = handler.apply(s"$m/compile", Nil, state))
       val wall = System.currentTimeMillis() - start
       StepResult(wall, moduleNames.map(result(_, start)), profile())
 

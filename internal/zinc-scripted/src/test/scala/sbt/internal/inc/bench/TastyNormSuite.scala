@@ -82,7 +82,10 @@ class TastyNormSuite extends AnyFunSuite:
   test("a section that only one has differs") {
     val without = tasty.copy(sections = tasty.sections.filterNot(_._1 == "ASTs"))
     assert(TastyNorm.differing(tasty, without) == Set("ASTs"))
-    assert(TastyNorm.benign(tasty, tasty.copy(sections = tasty.sections.filterNot(_._1 == "Positions"))))
+    assert(TastyNorm.benign(
+      tasty,
+      tasty.copy(sections = tasty.sections.filterNot(_._1 == "Positions"))
+    ))
   }
 
   test("other bytes are rejected") {
