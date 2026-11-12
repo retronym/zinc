@@ -74,7 +74,16 @@ Where the time goes (campaign `m5-zd-clean-prof`, async-profiler cpu, one fork p
 
 For `stream`, the direct costs on the compile thread add up to about 556 ms/op, against a 566 ms/op difference in wall time. About half is the two bridge phases, a quarter is building the analysis (two thirds of that is hashing classfiles), and the rest is classfile analysis of javac's output and the store write. In default mode Zinc also makes 7 to 11% more JIT compilations, a significant difference in both projects.
 
-`actor`'s profile also shows scalac's own phases 122 ms/op slower in default mode. That is spread thinly; the largest item is the `itable stub` of the typer's self-type dispatch. It would fit the extra phases polluting shared type profiles. But `stream` shows no such slowdown, and both profiles are one fork each, so this is not established.
+`actor`'s first profile also showed scalac's own phases 122 ms/op slower in default mode, the largest item being the `itable stub` of the typer's self-type dispatch. A second pair of campaigns (`m5-zd-clean-tip-ab`, `m5-zd-clean-tip-prof`) repeated the comparison on the 2.13.x tip (762d80f, built with the release optimiser), which includes scala/scala#11367 ("Avoid megamorphic interface calls to the analyzer"). Its profiles have 2 forks per variant:
+
+| actor, ms per op | 2.13.18 default | 2.13.18 clean | tip default | tip clean |
+|---|---|---|---|---|
+| compile thread | 2659 | 2123 | 2347 | 1901 |
+| Zinc-specific frames | 459 | 5 | 459 | 6 |
+| typer and transform | 1705 | 1647 | 1418 | 1432 |
+| typer self-type `itable stub` | 74 | 61 | 4 | 4 |
+
+The stub costs about as much in clean mode as in default mode, so it is a scalac cost, not one that Zinc adds, and #11367 removes it. In `stream` the same change cuts the JDK's secondary-supers lookups from 116 to 8 ms/op. The default-mode slowdown of typer and transform is small and inconsistent: +58 ms/op for actor on 2.13.18, about zero on the tip, and within noise for stream. Zinc's own cost is the same on both Scala versions, and the timing shows the same clean-mode saving on the tip (actor −19.2% ± 11.1%, stream −14.6% ± 8.2%).
 
 Product stamps are a cost in incremental builds too: after a compile Zinc opens and hashes every classfile it just wrote, mostly time in `open(2)` on macOS. The callback could hash the bytes as the classfiles are written. That would be worth its own change.
 
