@@ -1,0 +1,5 @@
+> run
+
+# Y becomes a class, so C's call to foo must change from invokeinterface to invokevirtual
+$ copy-file changes/Y.scala Y.scala
+> run
