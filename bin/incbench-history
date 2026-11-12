@@ -128,16 +128,18 @@ def desired(repo, commit, roots):
 
 def materialise(repo, build, want, have):
     """Makes the build's history-tracked sources those of `want`; returns the paths that changed."""
+    # Removals come first: on a case-insensitive file system, a file renamed only in case would
+    # otherwise be written under its new name and then deleted under its old one.
     changed = []
+    for path in have:
+        if path not in want:
+            (build / path).unlink(missing_ok=True)
+            changed.append(path)
     for path, sha in want.items():
         if have.get(path) != sha:
             f = build / path
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(subprocess.run(["git", "-C", str(repo), "cat-file", "blob", sha], capture_output=True, check=True).stdout)
-            changed.append(path)
-    for path in have:
-        if path not in want:
-            (build / path).unlink(missing_ok=True)
             changed.append(path)
     return changed
 

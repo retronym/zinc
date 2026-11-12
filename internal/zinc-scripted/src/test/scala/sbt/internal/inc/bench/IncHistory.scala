@@ -162,7 +162,8 @@ object IncHistory:
   /**
    * Brings `to` up to date with the build in `from`, leaving outputs alone, and returns the
    * paths that were added, changed or removed. A file is written only when its content differs,
-   * so that an unchanged jar keeps its timestamp. Each project's `incOptions.properties` is the
+   * so that an unchanged jar keeps its timestamp. Removals come first, so that a file renamed
+   * only in case survives on a case-insensitive file system. Each project's `incOptions.properties` is the
    * build's own with `overrides` on top; `scalac.options` there is appended to the build's.
    */
   def sync(from: Path, to: Path, overrides: Map[String, String]): Seq[String] =
@@ -170,6 +171,9 @@ object IncHistory:
       !rel.split('/').contains("target") && !rel.endsWith(IncBench.ScalacProfileFile)
     val changed = Vector.newBuilder[String]
     val source = relative(from).filter((rel, _) => kept(rel)).toMap
+    for (rel, f) <- relative(to) if kept(rel) && !source.contains(rel) do
+      Files.delete(f)
+      changed += rel
     for (rel, f) <- source.toSeq.sortBy(_._1) do
       val t = to.resolve(rel)
       val bytes =
@@ -179,9 +183,6 @@ object IncHistory:
         Files.createDirectories(t.getParent)
         Files.write(t, bytes)
         changed += rel
-    for (rel, f) <- relative(to) if kept(rel) && !source.contains(rel) do
-      Files.delete(f)
-      changed += rel
     changed.result()
 
   private def properties(file: Path, overrides: Map[String, String]): Array[Byte] =
