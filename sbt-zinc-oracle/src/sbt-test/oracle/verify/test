@@ -1,0 +1,23 @@
+> incVerify
+> check a compile same
+> check b compile same
+
+$ copy-file changes/A-body.scala a/src/main/scala/A.scala
+> incVerify
+> check a compile same compiled 1
+> check b compile same compiled 0
+
+$ copy-file changes/A-api.scala a/src/main/scala/A.scala
+> incVerify
+> check a compile same compiled 1
+> check b compile same compiled 1
+
+# A class left behind in the incremental output is not in the clean build.
+$ copy-file a/target/scala-2.13/classes/Other.class a/target/scala-2.13/classes/Gone.class
+-> a/incVerify
+> check a compile stale
+
+# A source that does not compile fails on both sides.
+$ copy-file changes/A-broken.scala a/src/main/scala/A.scala
+> a/Compile/incVerify
+> check a compile same-fail
