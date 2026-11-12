@@ -113,13 +113,16 @@ object IncHistory:
    * a normalisation `level` makes them equal, `missing` or `extra` when one side lacks it, and
    * otherwise `compiler` if this step's compile wrote it and `stale` if it did not. `carried`
    * marks a difference an earlier step already reported: neither side has changed since.
+   * `pickleOnly` marks an unexplained difference that is confined to the Scala signature: the
+   * bytecode is the same, and what differs is what the compiler recorded about types.
    */
   final case class Difference(
       key: String,
       kind: String,
       level: String,
       fresh: Boolean,
-      carried: Boolean
+      carried: Boolean,
+      pickleOnly: Boolean = false
   ):
     def json: String =
       Json.obj(
@@ -127,6 +130,7 @@ object IncHistory:
         "kind" -> Json.str(kind),
         "level" -> Json.str(level),
         "fresh" -> fresh.toString,
+        "pickleOnly" -> pickleOnly.toString,
         "carried" -> carried.toString
       )
 
@@ -417,7 +421,9 @@ object IncHistory:
               explain(k, mode.file(k), clean.file(k), a, b) match
                 case Some(l) => ("noise", l)
                 case None    => (if fresh then "compiler" else "stale", "")
-          Difference(k, kind, level, fresh, carried)
+          val pickleOnly = (kind == "stale" || kind == "compiler") &&
+            onlyPickle(mode.file(k), clean.file(k))
+          Difference(k, kind, level, fresh, carried, pickleOnly)
         }
         mode.carried = diffs.map(d =>
           d.key -> (a.get(d.key).fold("")(_.sha), b.get(d.key).fold("")(_.sha))
@@ -466,6 +472,13 @@ object IncHistory:
           }
       catch case scala.util.control.NonFatal(_) => None
     end explain
+
+    private def onlyPickle(inc: Path, ref: Path): Boolean =
+      try
+        val lines =
+          ClassfileNorm.diff(Files.readAllBytes(inc), Files.readAllBytes(ref), Int.MaxValue)
+        lines.nonEmpty && lines.forall(_.drop(1).trim.startsWith("@Lscala/reflect/Scala"))
+      catch case scala.util.control.NonFatal(_) => false
 
     private def evidence(step: String, mode: Copy, diffs: Seq[Difference]): Unit =
       val root = o.work.resolve("diffs").resolve(step).resolve(mode.name)

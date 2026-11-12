@@ -472,6 +472,8 @@ def diff_list(rp, s, m, kinds, cap=15):
     for d in diffs[:cap]:
         key = d.get("class", "")
         line = f"  - `{key}`: {d.get('kind')}" + (f" at level {d['level']}" if d.get("level") else "")
+        if d.get("pickleOnly"):
+            line += ", only in the Scala signature (bytecode equal)"
         line += ", written by this step" if d.get("fresh") else ", not written by this step"
         if (root / (key + ".diff")).exists():
             line += f"; diff `work/diffs/{s.name}/{m}/{key}.diff`"
