@@ -12,10 +12,14 @@
 package sbt.internal.inc
 package bench
 
+import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
+
 import org.objectweb.asm.{ Attribute, ByteVector, ClassWriter, Label, Opcodes }
 import org.scalatest.funsuite.AnyFunSuite
 
-import ClassfileNorm.Level
+import sbt.internal.inc.oracle.ClassfileNorm
+import sbt.internal.inc.oracle.ClassfileNorm.Level
 
 class ClassfileNormSuite extends AnyFunSuite:
 
@@ -107,24 +111,24 @@ class ClassfileNormSuite extends AnyFunSuite:
   end cls
 
   private def level(a: Array[Byte], b: Array[Byte]): Option[Level] =
-    ClassfileNorm.level(ClassfileNorm.digests(a), ClassfileNorm.digests(b))
+    ClassfileNorm.level(ClassfileNorm.digests(a), ClassfileNorm.digests(b)).toScala
 
   private val shifted = Seq("zzz", "n", "a", Erased, "m")
 
   test("identical bytes are equal at Raw") {
     assert(cls().sameElements(cls()))
-    assert(level(cls(), cls()) == Some(Level.Raw))
+    assert(level(cls(), cls()) == Some(Level.RAW))
   }
 
   test("a constant pool in another order is equal at Pool") {
     val (a, b) = (cls(), cls(internFirst = shifted))
     assert(!a.sameElements(b))
-    assert(level(a, b) == Some(Level.Pool))
+    assert(level(a, b) == Some(Level.POOL))
   }
 
   test("ScalaInlineInfo's references into a shifted pool are equal at Pool") {
     val (a, b) = (cls(attributes = Seq(inlineInfo)), cls(shifted, Seq(inlineInfo)))
-    assert(level(a, b) == Some(Level.Pool))
+    assert(level(a, b) == Some(Level.POOL))
     assert(ClassfileNorm.text(a).contains(s"m$Erased 1"))
     assert(ClassfileNorm.text(a) == ClassfileNorm.text(b))
     assert(level(a, cls()) == None)
@@ -134,20 +138,20 @@ class ClassfileNormSuite extends AnyFunSuite:
     def other(b: Int) = Blob("Other", _ => ByteVector().putByte(b))
     assert(level(cls(attributes = Seq(other(1))), cls(attributes = Seq(other(2)))) == None)
     assert(
-      level(cls(attributes = Seq(other(1))), cls(shifted, Seq(other(1)))) == Some(Level.Pool)
+      level(cls(attributes = Seq(other(1))), cls(shifted, Seq(other(1)))) == Some(Level.POOL)
     )
   }
 
   test("local variable names are equal at Locals") {
-    assert(level(cls(local = "x0$3"), cls(local = "x0$13")) == Some(Level.Locals))
+    assert(level(cls(local = "x0$3"), cls(local = "x0$13")) == Some(Level.LOCALS))
   }
 
   test("type variables that differ in a trailing $ are equal at TypeVars") {
     val dollar = s"<A$$:$ObjectDesc>(TA$$;)TA$$;"
-    assert(level(cls(), cls(signature = dollar)) == Some(Level.TypeVars))
+    assert(level(cls(), cls(signature = dollar)) == Some(Level.TYPE_VARS))
     assert(level(cls(), cls(signature = s"<B:$ObjectDesc>(TB;)TB;")) == None)
-    assert(ClassfileNorm.stripTypeVarSuffix(dollar, isType = false) == s"<A:$ObjectDesc>(TA;)TA;")
-    assert(ClassfileNorm.stripTypeVarSuffix("TA$$;", isType = true) == "TA;")
+    assert(ClassfileNorm.stripTypeVarSuffix(dollar, false) == s"<A:$ObjectDesc>(TA;)TA;")
+    assert(ClassfileNorm.stripTypeVarSuffix("TA$$;", true) == "TA;")
   }
 
   test("levels are cumulative") {
@@ -177,21 +181,23 @@ class ClassfileNormSuite extends AnyFunSuite:
   test("the TASTY attribute is apart from the normalised digests") {
     val a = ClassfileNorm.digests(cls(attributes = Seq(tasty(1))))
     val b = ClassfileNorm.digests(cls(attributes = Seq(tasty(2))))
-    assert(ClassfileNorm.level(a, b) != Some(Level.Raw))
+    assert(ClassfileNorm.level(a, b).toScala != Some(Level.RAW))
     assert(a.pool == b.pool && a.locals == b.locals && a.typeVars == b.typeVars)
-    assert(a.tastyUuid == Some("0102030405060708090a0b0c0d0e0f10"))
+    assert(a.tastyUuid.toScala == Some("0102030405060708090a0b0c0d0e0f10"))
     assert(a.tastyUuid != b.tastyUuid)
-    assert(ClassfileNorm.digests(cls()).tastyUuid == None)
+    assert(ClassfileNorm.digests(cls()).tastyUuid.isEmpty)
   }
 
   test("diff is the lines that differ") {
-    val lines = ClassfileNorm.diff(cls(line = 10), cls(line = 11))
+    val lines = ClassfileNorm.diff(cls(line = 10), cls(line = 11)).asScala.toSeq
     assert(lines.map(_.replaceAll("\\s+", " ")) == Seq("- LINENUMBER 10 L0", "+ LINENUMBER 11 L0"))
     assert(ClassfileNorm.diff(cls(), cls(internFirst = shifted)).isEmpty)
-    assert(ClassfileNorm.diff(cls(), cls(nFirst = true), max = 3).size == 3)
+    assert(ClassfileNorm.diff(cls(), cls(nFirst = true), 3).size == 3)
     assert(
-      ClassfileNorm.lineDiff(Vector("a", "b", "c", "d"), Vector("a", "c", "e", "d")) ==
-        Seq("-b", "+e")
+      ClassfileNorm.lineDiff(
+        java.util.List.of("a", "b", "c", "d"),
+        java.util.List.of("a", "c", "e", "d")
+      ).asScala.toSeq == Seq("-b", "+e")
     )
   }
 end ClassfileNormSuite

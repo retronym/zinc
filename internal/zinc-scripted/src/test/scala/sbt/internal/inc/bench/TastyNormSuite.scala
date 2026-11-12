@@ -15,9 +15,13 @@ package bench
 import java.nio.file.Paths
 import java.util.zip.ZipFile
 
+import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 import scala.util.Using
 
 import org.scalatest.funsuite.AnyFunSuite
+
+import sbt.internal.inc.oracle.{ ClassfileNorm, TastyNorm }
 
 class TastyNormSuite extends AnyFunSuite:
 
@@ -41,51 +45,52 @@ class TastyNormSuite extends AnyFunSuite:
     TastyNorm.read(copy)
 
   private def range(name: String): (Int, Int) =
-    val section = TastyNorm.layout(bytes).find(_.name == name).get
+    val section = TastyNorm.layout(bytes).asScala.find(_.name == name).get
     (section.start, section.end)
 
+  private def differing(a: TastyNorm.Tasty, b: TastyNorm.Tasty): Set[String] =
+    TastyNorm.differing(a, b).asScala.toSet
+
   private val uuid: (Int, Int) =
-    val start = range(TastyNorm.Header)._2
+    val start = range(TastyNorm.HEADER)._2
     (start, start + 16)
 
   test("the UUID is the one in the class's TASTY attribute") {
     assert(tasty.uuid.length == 32)
-    assert(ClassfileNorm.digests(mirror("class")).tastyUuid == Some(tasty.uuid))
+    assert(ClassfileNorm.digests(mirror("class")).tastyUuid.toScala == Some(tasty.uuid))
   }
 
   test("the sections are read to the end of the file") {
-    val names = tasty.sections.map(_._1)
-    assert(names.take(2) == Seq(TastyNorm.Header, TastyNorm.Names))
+    val names = tasty.sections.asScala.toSeq.map(_.name)
+    assert(names.take(2) == Seq(TastyNorm.HEADER, TastyNorm.NAMES))
     assert(names.contains("ASTs") && names.contains("Positions"))
-    assert(TastyNorm.layout(bytes).last.end == bytes.length)
-    assert(uuid._2 == range(TastyNorm.Names)._1)
+    assert(TastyNorm.layout(bytes).asScala.last.end == bytes.length)
+    assert(uuid._2 == range(TastyNorm.NAMES)._1)
   }
 
   test("a file is equal to itself") {
-    assert(TastyNorm.differing(tasty, TastyNorm.read(bytes)).isEmpty)
+    assert(differing(tasty, TastyNorm.read(bytes)).isEmpty)
     assert(TastyNorm.benign(tasty, tasty))
   }
 
   test("differences in the UUID and Positions are benign") {
     val other = mutated(uuid, range("Positions"))
     assert(other.uuid != tasty.uuid)
-    assert(TastyNorm.differing(tasty, other) == Set("Positions"))
+    assert(differing(tasty, other) == Set("Positions"))
     assert(TastyNorm.benign(tasty, other))
   }
 
   test("a difference in ASTs is not benign") {
     val other = mutated(range("ASTs"))
-    assert(TastyNorm.differing(tasty, other) == Set("ASTs"))
+    assert(differing(tasty, other) == Set("ASTs"))
     assert(!TastyNorm.benign(tasty, other))
   }
 
   test("a section that only one has differs") {
-    val without = tasty.copy(sections = tasty.sections.filterNot(_._1 == "ASTs"))
-    assert(TastyNorm.differing(tasty, without) == Set("ASTs"))
-    assert(TastyNorm.benign(
-      tasty,
-      tasty.copy(sections = tasty.sections.filterNot(_._1 == "Positions"))
-    ))
+    def without(name: String) =
+      TastyNorm.Tasty(tasty.uuid, tasty.sections.asScala.filterNot(_.name == name).asJava)
+    assert(differing(tasty, without("ASTs")) == Set("ASTs"))
+    assert(TastyNorm.benign(tasty, without("Positions")))
   }
 
   test("other bytes are rejected") {

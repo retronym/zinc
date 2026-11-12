@@ -17,7 +17,9 @@ import java.nio.file.{ Files, Path, Paths, StandardCopyOption, StandardOpenOptio
 import java.security.MessageDigest
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
+import sbt.internal.inc.oracle.{ ClassDirDiff, ClassfileNorm }
 import sbt.io.IO
 import sbt.util.Level
 
@@ -418,11 +420,11 @@ object IncHistory:
             case (None, _) => ("missing", "")
             case (_, None) => ("extra", "")
             case _         =>
-              explain(k, mode.file(k), clean.file(k), a, b) match
+              ClassDirDiff.explain(mode.file(k), clean.file(k)).toScala match
                 case Some(l) => ("noise", l)
                 case None    => (if fresh then "compiler" else "stale", "")
           val pickleOnly = (kind == "stale" || kind == "compiler") &&
-            onlyPickle(mode.file(k), clean.file(k))
+            ClassDirDiff.onlyPickle(mode.file(k), clean.file(k))
           Difference(k, kind, level, fresh, carried, pickleOnly)
         }
         mode.carried = diffs.map(d =>
@@ -438,48 +440,6 @@ object IncHistory:
           else "same"
         (verdict, diffs)
 
-    /**
-     * The normalisation that makes two products equal, if one does. For a classfile, the lowest
-     * level of [[ClassfileNorm]]; when the classfiles also name different TASTy, the TASTy files
-     * beside them must differ only in sections that hold no semantics, which is `tasty`. A TASTy
-     * file is `tasty` under the same condition.
-     */
-    private def explain(
-        key: String,
-        inc: Path,
-        ref: Path,
-        a: Map[String, Product],
-        b: Map[String, Product]
-    ): Option[String] =
-      def tastyBenign(i: Path, r: Path) =
-        Files.exists(i) && Files.exists(r) &&
-          TastyNorm.benign(
-            TastyNorm.read(Files.readAllBytes(i)),
-            TastyNorm.read(Files.readAllBytes(r))
-          )
-      def sibling(f: Path) =
-        f.resolveSibling(f.getFileName.toString.takeWhile(_ != '$').stripSuffix(".class") +
-          ".tasty")
-      try
-        if key.endsWith(".tasty") then Option.when(tastyBenign(inc, ref))("tasty")
-        else
-          val x = ClassfileNorm.digests(Files.readAllBytes(inc))
-          val y = ClassfileNorm.digests(Files.readAllBytes(ref))
-          val sameTasty = x.tastyUuid == y.tastyUuid
-          ClassfileNorm.level(x, y).flatMap { l =>
-            if sameTasty then Some(l.toString.toLowerCase)
-            else Option.when(tastyBenign(sibling(inc), sibling(ref)))("tasty")
-          }
-      catch case scala.util.control.NonFatal(_) => None
-    end explain
-
-    private def onlyPickle(inc: Path, ref: Path): Boolean =
-      try
-        val lines =
-          ClassfileNorm.diff(Files.readAllBytes(inc), Files.readAllBytes(ref), Int.MaxValue)
-        lines.nonEmpty && lines.forall(_.drop(1).trim.startsWith("@Lscala/reflect/Scala"))
-      catch case scala.util.control.NonFatal(_) => false
-
     private def evidence(step: String, mode: Copy, diffs: Seq[Difference]): Unit =
       val root = o.work.resolve("diffs").resolve(step).resolve(mode.name)
       for d <- diffs.take(o.maxEvidence) do
@@ -490,7 +450,9 @@ object IncHistory:
           Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING)
         if d.key.endsWith(".class") && sides.forall((_, f) => Files.exists(f)) then
           val lines =
-            try ClassfileNorm.diff(Files.readAllBytes(sides(0)._2), Files.readAllBytes(sides(1)._2))
+            try
+              ClassfileNorm.diff(Files.readAllBytes(sides(0)._2), Files.readAllBytes(sides(1)._2))
+                .asScala.toSeq
             catch case scala.util.control.NonFatal(e) => Seq(s"no diff: $e")
           val to = root.resolve(d.key + ".diff")
           Files.createDirectories(to.getParent)
