@@ -369,7 +369,24 @@ class ExtractAPI[GlobalType <: Global](
           (tpe.typeArgs.head, ByName)
         else
           (tpe, Plain)
-      xsbti.api.MethodParameter.of(name, processType(in, t), hasDefault(paramSym), special)
+      xsbti.api.MethodParameter.of(name, parameterType(t, paramSym), hasDefault(paramSym), special)
+    }
+
+    /**
+     * `MethodParameter` has no annotations, so the static annotations of a parameter, such as
+     * `@deprecatedName`, are recorded by wrapping its type in `Annotated`.
+     *
+     * Parameters of Java-defined methods are left alone: scalac attaches their annotations when
+     * it parses the Java source but not when it reads the class file, so a Scala class inheriting
+     * the method would get a different API depending on whether the Java source is in the run.
+     */
+    def parameterType(tpe: Type, paramSym: Symbol): xsbti.api.Type = {
+      val processed = processType(in, tpe)
+      if (paramSym == NoSymbol || s.isJavaDefined || paramSym.annotations.isEmpty) processed
+      else {
+        val anns = mkAnnotations(in, paramSym.annotations)
+        if (anns.isEmpty) processed else xsbti.api.Annotated.of(processed, anns)
+      }
     }
     val t = viewer(in).memberInfo(s)
     build(t, Array(), Nil)
