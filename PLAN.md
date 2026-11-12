@@ -85,6 +85,20 @@ For `stream`, the direct costs on the compile thread add up to about 556 ms/op, 
 
 The stub costs about as much in clean mode as in default mode, so it is a scalac cost, not one that Zinc adds, and #11367 removes it. In `stream` the same change cuts the JDK's secondary-supers lookups from 116 to 8 ms/op. The default-mode slowdown of typer and transform is small and inconsistent: +58 ms/op for actor on 2.13.18, about zero on the tip, and within noise for stream. Zinc's own cost is the same on both Scala versions, and the timing shows the same clean-mode saving on the tip (actor −19.2% ± 11.1%, stream −14.6% ± 8.2%).
 
-Product stamps are a cost in incremental builds too: after a compile Zinc opens and hashes every classfile it just wrote, mostly time in `open(2)` on macOS. The callback could hash the bytes as the classfiles are written. That would be worth its own change.
+Product stamps are a cost in incremental builds too: after a compile Zinc opens and hashes every classfile it just wrote, mostly time in `open(2)`, which endpoint security software makes dearer still (see the M4 results below). The callback could hash the bytes as the classfiles are written. That would be worth its own change.
 
 The classfiles are byte-identical between the two modes.
+
+### On the M4
+
+The M5 Pro runs endpoint security software (JumpCloud) that inflates file-open costs, so the comparison was repeated on an M4 laptop without it (testbed `m4`, campaigns `m4-zd-clean-tip-ab` and `m4-zd-clean-tip-prof`, same JDK, Zinc build and variants). Timing, 3 forks per variant, mean ± 99.9% CI over forks:
+
+| | default | clean | Δ |
+|---|---|---|---|
+| actor, 2.13.18 | 2.532 ± 0.07 s/op | 2.202 ± 0.06 s/op | −13.0% ± 2.8% |
+| actor, 2.13.x tip | 2.337 ± 0.06 s/op | 2.025 ± 0.05 s/op | −13.4% ± 2.8% |
+| stream, 2.13.18 | 4.545 ± 0.34 s/op | 4.020 ± 0.30 s/op | −11.5% ± 7.9% |
+| stream, 2.13.x tip | 4.365 ± 0.32 s/op | 3.866 ± 0.29 s/op | −11.4% ± 7.9% |
+
+On the quiet machine the saving is 11–13%, below the M5 Pro's figures, and the intervals are much tighter. Product stamping costs about half as much on the M4 (38 against 75 ms/op for actor, 52 against 101 for stream, at nearly equal total compile times), so on a quiet machine it is roughly 1–1.5% of a full compile. The bridge phases remain the largest item (`xsbt-api` +184 and +227 ms/op, `xsbt-dependency` +88 and +109 ms/op), followed by building the analysis (+85 and +100 ms/op) and javac classfile analysis (+39 ms/op each). Default mode makes 10–16% more JIT compilations on the M4.
+
