@@ -34,7 +34,11 @@ import xsbti.compile.{ CompileAnalysis, Inputs, PreviousResult }
 object Verify {
 
   /** Where the build keeps what `incVerify` writes. */
-  def home(buildRoot: File): File = new File(buildRoot, "target/inc-oracle")
+  def home(buildRoot: File): File =
+    sys.props.get("inc.oracle.home").fold(new File(buildRoot, "target/inc-oracle"))(new File(_))
+
+  /** Whether this sbt is a replay's child, where a finding is recorded and the replay goes on. */
+  def replaying: Boolean = sys.props.contains("inc.oracle.home")
 
   def currentStep(buildRoot: File): String = {
     val f = new File(home(buildRoot), "current-step")
@@ -146,11 +150,21 @@ object Verify {
       buildRoot: File,
       scratchBase: File,
       incremental: Option[CompileAnalysis],
-      inputs: Inputs,
+      upstreamOk: Boolean,
+      inputs: => Inputs,
       fallbackConverter: FileConverter,
       log: Logger
   ): JsonObject = {
     val step = currentStep(buildRoot)
+    val file = home(buildRoot).toPath.resolve("results").resolve(step).resolve(s"$project-$config.json")
+    Files.createDirectories(file.getParent)
+    if (!upstreamOk) {
+      val skipped = new JsonObject().add("step", step).add("project", project).add("config", config)
+        .add("verdict", "upstream-failed")
+      Files.write(file, skipped.toString.getBytes(UTF_8))
+      log.info(s"[incVerify] $project / $config: not checked, a module it depends on does not compile")
+      return skipped
+    }
     val options = inputs.options
     val converter = if (options.converter.isPresent) options.converter.get else fallbackConverter
     val incDir = options.classesDirectory.toAbsolutePath.normalize
@@ -253,9 +267,12 @@ object Verify {
     }
     out.add("verdict", verdict)
 
-    val file = home(buildRoot).toPath.resolve("results").resolve(step).resolve(s"$project-$config.json")
-    Files.createDirectories(file.getParent)
     Files.write(file, out.toString.getBytes(UTF_8))
+    if (isFinding(verdict)) {
+      val dir = home(buildRoot).toPath.resolve("findings").resolve(step).resolve(s"$project-$config")
+      Finding.write(dir, out, incDir, cleanDir)
+      log.error(s"[incVerify] a report without source code is in $dir/summary.md; the classfiles beside it are from your build")
+    }
     val summary = s"$project / $config: $verdict"
     verdict match {
       case "same" | "same-fail" => log.info(s"[incVerify] $summary (${compiled.size} sources compiled incrementally)")
@@ -263,7 +280,7 @@ object Verify {
         log.info(s"[incVerify] $summary: differences from the clean build are explained by normalisation")
       case "compiler" =>
         log.warn(s"[incVerify] $summary: recompiled classes differ from the clean build's (the compiler's output depends on what is compiled together)")
-      case _ => log.error(s"[incVerify] $summary; see ${file}")
+      case _ => log.error(s"[incVerify] $summary")
     }
     out
   }

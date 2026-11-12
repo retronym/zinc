@@ -32,6 +32,9 @@ object ZincOraclePlugin extends AutoPlugin {
     val incVerifyFailOnFinding = settingKey[Boolean](
       "Whether incVerify fails when incremental compilation differs from the clean build in a way the oracle cannot explain."
     )
+    val incOracleCompileAll = taskKey[Unit]("Compiles every module and configuration, without failing.")
+    val incOracleVerifyAll = taskKey[Unit]("Runs incVerify in every module and configuration.")
+    val incOracleCleanAll = taskKey[Unit]("Cleans every module.")
   }
   import autoImport._
 
