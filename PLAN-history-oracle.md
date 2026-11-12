@@ -192,6 +192,31 @@ Same setup, with `--sbt-export`, over the last 200 first-parent commits that cha
 - **What it cost.** An export takes 7 to 13 s once sbt's caches are warm: 323 exports took 55 minutes in all. In scala-steward, 133 of the 170 exported steps change nothing but the generated `BuildInfo.scala`.
 - **Not covered.** The compiler is the one the Zinc checkout's `2.13.x` label gives, whatever `scalaVersion` the commit sets, so its full-cross-versioned compiler plugins are loaded into a possibly different 2.13 patch release. That worked for every export here. The scala-steward replay ran from a classpath without ASM by mistake; it never needed the comparator because no class differed.
 
+## Deployment to users
+
+**Problem.** Everything above is a Zinc developer's tool: test sources in `zinc-scripted`, Python drivers, a frozen export, a compiled Zinc checkout. A user who suspects under- or overcompilation in their own build, or who wants to check a Zinc release against their history, can run none of it. The in-process harness also never exercises sbt's side of incremental compilation (pipelining, sbt 2's action cache and jar outputs, the `MiniSetup` sbt computes), which is where the next bugs are likely.
+
+**Decisions.**
+
+1. **The comparators and tools are a Java module, `zinc-oracle`** (`internal/zinc-oracle`, package `sbt.internal.inc.oracle`, Java 17, depends on ASM and minimal-json only). Java, so that one artifact serves sbt 1 (Scala 2.12), sbt 2 (Scala 3), the 1.12.x line and other build tools, with no cross-building and no syntax port. It holds `ClassfileNorm`, `TastyNorm`, `ClassDirDiff` (two output directories in, differences with their levels out; also a CLI, which is the whole integration for Mill, Bloop, scala-cli or Maven), `Report`, and the history driver, exporter and minimiser, which replace the Python scripts. `IncHistory` stays in `zinc-scripted`, in Scala, because it drives scripted's `IncHandler`. **(review: Java 17 excludes sbt 1 users on JDK 8 and 11.)**
+2. **sbt users get a plugin, `sbt-zinc-oracle`**, that drives their own sbt instead of an export, so the build's own `scalaVersion`, compiler plugins, options and generated sources are used and the export's caveats go away.
+   - `incVerify`: after `compile`, compile the same inputs again into a scratch directory with no previous analysis, and compare. Verdicts as in decision 5 above, with `missed-error` and `spurious-error` from the two compiles' outcomes. Modules are verified in dependency order, and a module's clean compile reads its upstream modules' incremental output, so a stale upstream class is reported once, upstream.
+   - `incReplay N`: clone the repository into a scratch directory, add the plugin to the clone, and in a child sbt check out each of the last N commits, `reload` when the build changed, and `incVerify`. It writes the same `steps.jsonl`, so `Report` works unchanged.
+   - On a finding, a report directory whose summary names classes, verdicts and versions but contains no source, with the evidence beside it for the user to decide about.
+3. **The plugin is its own small sbt build**, in `sbt-zinc-oracle/`, cross-built for sbt 1 and sbt 2, compiling the module's Java sources into its own jar. A plugin project inside Zinc's sbt 2 build would have to build for sbt 1 from there, and would make Zinc's build depend on sbt. **(review)**
+4. **One mode per session.** A user's sbt has one Zinc, so comparing two hashing modes or two Zincs is two replays (two `incOptions`, or two sbt launchers), not one warm JVM. Timing comparisons get noisier; soundness and precision do not. The in-process harness stays as the tool for Zinc's own CI.
+
+**Steps.**
+
+- DONE D1. Module skeleton in the build.
+- TODO D2. Comparators ported to Java; `zinc-scripted` uses them.
+- TODO D3. `Report` in Java, byte-identical to the Python on the six existing replays.
+- TODO D4. `History`, `Export`, `Minimise` in Java; the Python scripts removed; `bin/` wrappers.
+- TODO D5. Plugin: `incVerify`, with scripted tests on sbt 1 and sbt 2.
+- TODO D6. Plugin: `incReplay` and the report directory.
+- TODO D7. Run on scala-steward (sbt 1) and on an sbt 2 build.
+- Future: the minimiser through sbt; phase timings (they need rz#90's hooks in the user's Zinc); two Zincs in lockstep.
+
 ## Future work
 
 - **pekko under Scala 3**, with the per-round Java context check (`byRound`) carried over from `--verify`.
