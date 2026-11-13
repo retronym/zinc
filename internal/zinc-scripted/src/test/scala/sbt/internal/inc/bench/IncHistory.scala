@@ -117,6 +117,8 @@ object IncHistory:
    * marks a difference an earlier step already reported: neither side has changed since.
    * `pickleOnly` marks an unexplained difference that is confined to the Scala signature: the
    * bytecode is the same, and what differs is what the compiler recorded about types.
+   * `alone` is set for a `compiler` difference, and says what compiling this step's sources on
+   * their own, without Zinc's cycles, gave for the product (see `Session.alone`).
    */
   final case class Difference(
       key: String,
@@ -124,7 +126,8 @@ object IncHistory:
       level: String,
       fresh: Boolean,
       carried: Boolean,
-      pickleOnly: Boolean = false
+      pickleOnly: Boolean = false,
+      alone: String = ""
   ):
     def json: String =
       Json.obj(
@@ -133,7 +136,8 @@ object IncHistory:
         "level" -> Json.str(level),
         "fresh" -> fresh.toString,
         "pickleOnly" -> pickleOnly.toString,
-        "carried" -> carried.toString
+        "carried" -> carried.toString,
+        "alone" -> Json.str(alone)
       )
 
   object Json:
@@ -364,7 +368,8 @@ object IncHistory:
       )
       emitClean(name, cleanResult, reference, changed, necessary)
       for (m, i, start, r, outcome, compiled) <- results do
-        val verdict = judge(name, m, outcome, reference, start)
+        val judged = judge(name, m, outcome, reference, start)
+        val verdict = (judged._1, alone(name, m, compiled, judged._2))
         emitMode(name, m, i, r, compiled, verdict, necessary)
         if Session.Findings(verdict._1) then
           m.wipe()
@@ -439,6 +444,95 @@ object IncHistory:
           else if kinds("noise") then "noise"
           else "same"
         (verdict, diffs)
+
+    /**
+     * Checks the `compiler` differences of a step, which so far are only inferred: a product
+     * this step wrote cannot be stale, so its difference from the clean build is put down to
+     * what the compiler was given to compile together. This compiles exactly the sources the
+     * step compiled, in one run with no previous analysis, against the incremental build's other
+     * classes, and records for each such product what that gave:
+     *
+     *  - `batch`: the incremental build's product. The compiler alone reproduces it from these
+     *    sources, so the difference from the clean build is the compiler's dependence on the batch.
+     *  - `clean`: the clean build's product. Compiling these sources together does not give what
+     *    the incremental build has, so how Zinc split them into cycles matters, or Zinc is involved.
+     *  - `neither`: something else again.
+     *  - `failed`: the sources do not compile on their own.
+     */
+    private def alone(
+        step: String,
+        mode: Copy,
+        compiled: Set[String],
+        diffs: Seq[Difference]
+    ): Seq[Difference] =
+      val unconfirmed = diffs.filter(d => d.kind == "compiler" && !d.carried)
+      if unconfirmed.isEmpty then diffs
+      else
+        val root = o.work.resolve("alone").resolve(step).resolve(mode.name)
+        IO.delete(root.toFile)
+        val (sourceOf, _) = mode.sources()
+        val results = unconfirmed.groupBy(_.key.takeWhile(_ != '/')).flatMap { (module, ds) =>
+          val base = root.resolve(module)
+          Files.createDirectories(base.resolve("lib"))
+          for
+            (rel, f) <- relative(mode.dir.resolve(module))
+            if rel == "incOptions.properties" || rel.startsWith("lib/") ||
+              rel.startsWith("plugins/")
+          do
+            Files.createDirectories(base.resolve(rel).getParent)
+            Files.copy(f, base.resolve(rel))
+          val mine = compiled.filter(_.startsWith(s"$module/src/"))
+          for src <- mine do
+            val to = root.resolve(src)
+            Files.createDirectories(to.getParent)
+            Files.copy(mode.dir.resolve(src), to)
+          for m <- mode.modules do
+            val entries = relative(mode.runner.classesDir(m)).filter((rel, _) =>
+              !sourceOf.get(s"$m/$rel").exists(mine)
+            )
+            if entries.nonEmpty then
+              IO.zip(
+                entries.map((rel, f) => f.toFile -> rel),
+                base.resolve("lib").resolve(s"000-incremental-$m.jar").toFile,
+                None
+              )
+          Files.writeString(
+            root.resolve("build.json"),
+            s"""{"projects":[{"name":"$module","dependsOn":[],"scalaVersion":"${scalaLabel(
+                mode.dir,
+                module
+              )}"}]}"""
+          )
+          val runner =
+            new Runner(root, Vector(module), o.scalaVersion, o.logLevel, compileEvery = true)
+          try
+            val ok = runner.tryCompileAll().isRight
+            ds.map { d =>
+              val f = runner.classesDir(module).resolve(d.key.drop(module.length + 1))
+              def same(other: Path) =
+                Files.exists(f) &&
+                  (java.util.Arrays.equals(Files.readAllBytes(f), Files.readAllBytes(other)) ||
+                    ClassDirDiff.explain(f, other).isPresent)
+              d.key -> (
+                if !ok then "failed"
+                else if same(mode.file(d.key)) then "batch"
+                else if same(clean.file(d.key)) then "clean"
+                else "neither"
+              )
+            }
+          finally runner.finish()
+        }
+        IO.delete(root.toFile)
+        diffs.map(d => results.get(d.key).fold(d)(r => d.copy(alone = r)))
+      end if
+    end alone
+
+    private def scalaLabel(build: Path, module: String): String =
+      val json = Files.readString(build.resolve("build.json"))
+      "\\{[^{}]*\\}".r.findAllIn(json).toSeq.collectFirst {
+        case obj if obj.contains(s"\"$module\"") =>
+          """"scalaVersion"\s*:\s*"([^"]+)"""".r.findFirstMatchIn(obj).map(_.group(1))
+      }.flatten.getOrElse("2.13.x")
 
     private def evidence(step: String, mode: Copy, diffs: Seq[Difference]): Unit =
       val root = o.work.resolve("diffs").resolve(step).resolve(mode.name)

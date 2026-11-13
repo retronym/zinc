@@ -1030,6 +1030,17 @@ public final class Report {
     return new DiffList(lines, diffs.size());
   }
 
+  private static String aloneLabel(Set<String> alone) {
+    if (alone.isEmpty()) return "-";
+    return alone.stream()
+        .map(a -> switch (a) {
+          case "batch" -> "confirmed";
+          case "clean" -> "as clean";
+          default -> a;
+        })
+        .collect(Collectors.joining(", "));
+  }
+
   /** The id of the known issue that a recompiled class's difference matches, or a dash. */
   private static String knownIssue(Replay rp, Step s, Collection<String> modes, String key) {
     for (String m : modes) {
@@ -1062,6 +1073,7 @@ public final class Report {
     final Map<String, Step> steps = new LinkedHashMap<>();
     final Set<String> modes = new LinkedHashSet<>();
     final Set<String> levels = new TreeSet<>(BY_CODE_POINT);
+    final Set<String> alone = new TreeSet<>(BY_CODE_POINT);
     int count;
   }
 
@@ -1274,6 +1286,7 @@ public final class Report {
             ClassGroup g = groups.computeIfAbsent(str(d.get("class")), k -> new ClassGroup());
             g.steps.put(s.name, s);
             g.modes.add(m);
+            if (truthy(d.get("alone"))) g.alone.add(str(d.get("alone")));
           } else if ("noise".equals(d.get("kind"))) {
             String level = orElse(d.get("level"), "?");
             levels.merge(level, 1L, Long::sum);
@@ -1315,10 +1328,17 @@ public final class Report {
                 String.join(", ", g.modes),
                 first.label(),
                 knownIssue(rp, first, g.modes, e.getKey()),
+                aloneLabel(g.alone),
                 evidencePath(rp, first, g.modes, e.getKey())));
       }
       lines.addAll(
-          table(List.of("Class", "Steps", "Modes", "First step", "Known issue", "Evidence"), rows, i -> i == 1, CAP, "classes"));
+          table(List.of("Class", "Steps", "Modes", "First step", "Known issue", "scalac alone", "Evidence"), rows, i -> i == 1, CAP, "classes"));
+      lines.add("");
+      lines.add(
+          "\"scalac alone\" is what compiling the step's sources in one run, without Zinc's cycles, gave for the class:"
+              + " `confirmed` is the incremental build's class again, so the difference is the compiler's dependence on what it"
+              + " compiles together; `as clean` is the clean build's class, so how Zinc split the sources into cycles matters and"
+              + " the step deserves a look; `neither` and `failed` likewise. A dash is a replay made before this check existed.");
       lines.add("");
     }
 

@@ -130,6 +130,36 @@ class IncHistorySuite extends AnyFunSuite:
       assert(lines().exists(l => field(l, "step") == "s1" && field(l, "reset") == "same-fail"))
     }
 
+  test("a class that scalac compiles differently on its own is a compiler difference, confirmed"):
+    history { (build, _, session, lines) =>
+      write(
+        build,
+        "a/src/main/scala/Semi.scala",
+        """trait Semi[@specialized(Int, Long) A] {
+          |  def combine(x: A, y: A): A
+          |  def combineN(a: A, n: Int): A = if (n <= 1) a else combine(a, combineN(a, n - 1))
+          |}
+          |trait Lattice[@specialized(Int, Long) A] extends Semi[A]
+          |""".stripMargin
+      )
+      val instance =
+        """class SetLattice[A] extends Lattice[Set[A]] {
+          |  def combine(x: Set[A], y: Set[A]): Set[A] = x | y
+          |  def marker = %d
+          |}
+          |""".stripMargin
+      write(build, "a/src/main/scala/SetLattice.scala", instance.format(1))
+      session.start()
+      write(build, "a/src/main/scala/SetLattice.scala", instance.format(2))
+      session.step("s1")
+      val inc = of(lines(), "s1", "inc")
+      if field(inc, "verdict") == "same" then
+        cancel("this compiler gives SetLattice the same members on its own")
+      assert(field(inc, "verdict") == "compiler")
+      assert(inc.contains(""""class":"a/SetLattice.class","kind":"compiler""""))
+      assert(inc.contains(""""alone":"batch""""))
+    }
+
   test("a module added to the build is compiled by every copy"):
     history { (build, _, session, lines) =>
       session.start()
