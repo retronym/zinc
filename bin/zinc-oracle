@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Runs a tool of the zinc-oracle module:
+#
+#     zinc-oracle history|sbt-replay|export|minimise|report|diff ARGS...
+#
+# history     replay a project's git history through IncHistory, against a frozen export
+# sbt-replay  replay it through the project's own sbt and the sbt-zinc-oracle plugin
+# export      freeze modules of an sbt build as a build IncBench can compile
+# minimise    the fewest changed files of a replay's step that still give its verdict
+# report      write a replay's report.md
+# diff        compare an incremental output directory with a clean one
+#
+# The module's classpath is asked of sbt once and kept in target/zinc-oracle.classpath; pass
+# --refresh first to compile the module and ask again.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cache="$root/target/zinc-oracle.classpath"
+if [[ "${1:-}" == "--refresh" ]]; then rm -f "$cache"; shift; fi
+if [[ ! -s "$cache" ]]; then
+  out="$(cd "$root" && sbt --client --color=false --supershell=false --batch "zincOracle/package; export zincOracle/Runtime/fullClasspath")"
+  line="$(grep '^List(' <<<"$out" | tail -1)"
+  [[ -n "$line" ]] || { echo "$out" >&2; echo "zinc-oracle: sbt printed no classpath" >&2; exit 1; }
+  csr="${COURSIER_CACHE:-$HOME/Library/Caches/Coursier/v1}"
+  [[ -d "$csr" ]] || csr="$HOME/.cache/coursier/v1"
+  line="${line#List(}"; line="${line%)}"
+  cp=""
+  IFS=',' read -ra entries <<<"$line"
+  for e in "${entries[@]}"; do
+    e="${e# }"; e="${e%%>*}"
+    e="${e//\$\{OUT\}/$root/target/out}"; e="${e//\$\{BASE\}/$root}"; e="${e//\$\{CSR_CACHE\}/$csr}"
+    cp="${cp:+$cp:}$e"
+  done
+  mkdir -p "$(dirname "$cache")"
+  printf '%s' "$cp" > "$cache"
+fi
+case "${1:-}" in
+  history) main=History ;;
+  sbt-replay) main=SbtReplay ;;
+  export) main=Export ;;
+  minimise) main=Minimise ;;
+  report) main=Report ;;
+  diff) main=ClassDirDiff ;;
+  *) sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
+shift
+exec java -cp "$(cat "$cache")" "sbt.internal.inc.oracle.$main" "$@"

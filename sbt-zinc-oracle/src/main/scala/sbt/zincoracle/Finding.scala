@@ -17,7 +17,7 @@ import java.nio.file.{ Files, Path, StandardCopyOption }
 import scala.collection.JavaConverters._
 
 import com.eclipsesource.json.JsonObject
-import sbt.internal.inc.oracle.ClassfileNorm
+import sbt.internal.inc.oracle.{ ClassfileNorm, KnownIssues }
 
 /**
  * What a user can attach to a bug report after a finding: a summary that names classes, verdicts
@@ -42,16 +42,20 @@ object Finding {
         lines += "The incremental compile succeeded. A clean compile of the same sources fails, so a source that needed recompiling was not recompiled."
         lines += ""
         lines += s"Clean build's errors (first five): ${Option(result.get("cleanErrors")).fold("")(_.asString)}"
+        lines += ""
+        lines += KnownIssues.ofMissedError(Option(result.get("cleanErrors")).fold("")(_.asString)).map[String](i =>
+          s"Known issue ${i.label}"
+        ).orElse("This matches no known issue.")
       case "spurious-error" =>
         lines += "The incremental compile failed. A clean compile of the same sources succeeds."
       case _ =>
         lines += "Classes in the incremental output that the last compile did not write, and that differ from a clean build's in a way no normalisation explains, or that the clean build does not have, or lacks:"
         lines += ""
-        lines += "| Class | Kind | Verdict | Signature only |"
-        lines += "|---|---|---|---|"
+        lines += "| Class | Kind | Verdict | Signature only | Known issue |"
+        lines += "|---|---|---|---|---|"
         val rows = result.get("differences").asArray.values.asScala.map(_.asObject).filter(_.get("level") == null)
         rows.foreach { r =>
-          lines += s"| `${r.get("class").asString}` | ${r.get("kind").asString} | ${r.get("verdict").asString} | ${if (r.get("pickleOnly").asBoolean) "yes" else "no"} |"
+          lines += s"| `${r.get("class").asString}` | ${r.get("kind").asString} | ${r.get("verdict").asString} | ${if (r.get("pickleOnly").asBoolean) "yes" else "no"} | ${KnownIssues.ofDifference(r.get("fresh").asBoolean, r.get("pickleOnly").asBoolean, java.util.Collections.emptyList[String]()).map[String](_.id).orElse("none")} |"
         }
         val prefix = result.get("project").asString + "/"
         rows.take(Evidence).foreach { r =>

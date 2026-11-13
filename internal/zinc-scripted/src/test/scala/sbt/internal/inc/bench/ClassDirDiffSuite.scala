@@ -54,6 +54,7 @@ class ClassDirDiffSuite extends AnyFunSuite:
     mv.visitEnd()
     cw.visitEnd()
     cw.toByteArray
+  end cls
 
   /** Two directories of products, the incremental build's and the clean build's. */
   private def dirs(inc: Map[String, Array[Byte]], clean: Map[String, Array[Byte]])(
@@ -80,8 +81,12 @@ class ClassDirDiffSuite extends AnyFunSuite:
     val files = Map("p/C.class" -> cls(), "p/notes.txt" -> Array[Byte](1))
     dirs(files, files.updated("p/notes.txt", Array[Byte](2))): (inc, clean) =>
       assert(ClassDirDiff.compare(inc, clean).isEmpty)
-      assert(run(inc, clean) == (0, Seq("0 differences: 0 explained, 0 unexplained " +
-        "(0 missing, 0 extra, 0 pickle only)")))
+      assert(run(inc, clean) ==
+        (
+          0,
+          Seq("0 differences: 0 explained, 0 unexplained " +
+            "(0 missing, 0 extra, 0 pickle only)")
+        ))
   }
 
   test("a difference a normalisation explains has its level, and is no failure") {

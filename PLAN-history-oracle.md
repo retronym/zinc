@@ -44,7 +44,7 @@ A dependency bump or an option change is an edit real users make, and Zinc has t
 
 This has a cost that the first runs made plain. Sources older than a dependency change or a generator change do not compile against the export, and then every step is `same-fail`. So the driver first bisects for the oldest step whose parent still compiles and starts no earlier. How far back that reaches depends on the project: 744 steps for scala/scala (no dependencies), all 169 candidate steps for pekko `actor`, 9 for cats (its generated `NTupleMonadInstances` stops matching), 3 for scala-steward (a circe bump).
 
-**With `--sbt-export`.** The project's own sbt re-exports the same modules (`bin/incbench-export`, the campaign's `export-build` moved here) in a clone under the output directory, at the start and at every first-parent commit that changes `*.sbt` or `project/`. Such a commit is a step whether or not it changes a source; the export's jars, options, module graph and generated sources replace the build's, touching only the files that differ, and the source directories are inferred again from the new export. A commit whose build does not export keeps the previous export and is marked in the report. No bisection is needed. A build-changing commit whose export is identical to the previous one (an sbt plugin bump) is not a step. This runs the repository's build code, which is why it is opt-in.
+**With `--sbt-export`.** The project's own sbt re-exports the same modules (`bin/zinc-oracle export`, the campaign's `export-build` moved here) in a clone under the output directory, at the start and at every first-parent commit that changes `*.sbt` or `project/`. Such a commit is a step whether or not it changes a source; the export's jars, options, module graph and generated sources replace the build's, touching only the files that differ, and the source directories are inferred again from the new export. A commit whose build does not export keeps the previous export and is marked in the report. No bisection is needed. A build-changing commit whose export is identical to the previous one (an sbt plugin bump) is not a step. This runs the repository's build code, which is why it is opt-in.
 
 ### 4. Commits that do not compile are steps, compared as failures
 
@@ -121,12 +121,12 @@ The plan was scala-steward (application code, dense history) and cats (several m
 - DONE 3. This plan.
 - DONE 4. Comparator: `ClassfileNorm` (the ladder, over ASM's textual form, with `ScalaInlineInfo` decoded so no pool index survives) and `TastyNorm`, with tests on classfiles that differ in exactly one respect.
 - DONE 5. `IncHistory`: replay session with modes, one clean reference, verdicts, necessary set, evidence, carried differences, reset after a finding. `IncHistorySuite` runs it on a two-module build, including a known Zinc undercompilation (the pending scripted test `import-package`), which it reports as `missed-error`.
-- DONE 6. History driver `bin/incbench-history`, against a frozen export, with the bisection for the oldest step that compiles.
-- DONE 7. Report generator `bin/incbench-history-report`: soundness, precision, performance, per step.
+- DONE 6. History driver `bin/zinc-oracle history`, against a frozen export, with the bisection for the oldest step that compiles.
+- DONE 7. Report generator `bin/zinc-oracle report`: soundness, precision, performance, per step.
 - DONE 8. Tracer bullet. It was cats, not scala-steward, and it found two harness bugs: old commits not compiling against the export, and files renamed only in case being lost on a case-insensitive file system.
 - DONE 9. Replays of scala/scala, pekko and cats under `hashing=names` and `hashing=merkle`; see Results.
-- DONE 10. `bin/incbench-history-minimise`: delta debugging over a step's changed files, each trial from a clean build of the parent (`rebase`).
-- DONE 10a. `--sbt-export`: `bin/incbench-export` and build changes as steps (decision 3); scala-steward and cats replayed with it.
+- DONE 10. `bin/zinc-oracle minimise`: delta debugging over a step's changed files, each trial from a clean build of the parent (`rebase`).
+- DONE 10a. `--sbt-export`: `bin/zinc-oracle export` and build changes as steps (decision 3); scala-steward and cats replayed with it.
 - TODO 11. Port to 1.12.x (rz#71). The Python tools carry over as they are. The Scala sources do not cherry-pick: the 1.12.x line's `zinc-scripted` is Scala 2 (braces, no `enum`, no `given`), so `ClassfileNorm`, `TastyNorm`, `IncHistory` and their suites need a syntax port, and `Runner` there needs the same three additions (`compileEvery`, `analysis`, `path`). Not attempted.
 - TODO 12. The `java-context` check for Java-mixed modules, and the `tasty` level on a real Scala 3 replay (pekko's Scala 3 export exists; the level is tested only on scala3-library's own files).
 
@@ -209,13 +209,25 @@ Same setup, with `--sbt-export`, over the last 200 first-parent commits that cha
 **Steps.**
 
 - DONE D1. Module skeleton in the build.
-- TODO D2. Comparators ported to Java; `zinc-scripted` uses them.
-- TODO D3. `Report` in Java, byte-identical to the Python on the six existing replays.
-- TODO D4. `History`, `Export`, `Minimise` in Java; the Python scripts removed; `bin/` wrappers.
-- TODO D5. Plugin: `incVerify`, with scripted tests on sbt 1 and sbt 2.
-- TODO D6. Plugin: `incReplay` and the report directory.
-- TODO D7. Run on scala-steward (sbt 1) and on an sbt 2 build.
-- Future: the minimiser through sbt; phase timings (they need rz#90's hooks in the user's Zinc); two Zincs in lockstep.
+- DONE D2. Comparators ported to Java (`ClassfileNorm`, `TastyNorm`, and `ClassDirDiff` with a CLI); `zinc-scripted` uses them. Checked against the Scala originals on 7,324 classes and 941 TASTy files before those were deleted.
+- DONE D3. `Report` in Java, byte-identical to the Python on the six existing replays and on edge cases derived from them.
+- DONE D4. `History`, `Export`, `Minimise` in Java, agreeing with the Python on a cats replay and a minimisation; the Python scripts are removed and `bin/zinc-oracle` launches the tools.
+- DONE D5. Plugin: `incVerify`, with scripted tests on sbt 1.9.9 and sbt 2.0.10.
+- DONE D6. Plugin: `incReplay` and the report directory, with a scripted test that replays a five-commit history.
+- DONE D7. Run on scala-steward through its own sbt 1, and on a small sbt 2 build.
+- DONE D7a. `KnownIssues`: a table of causes already understood, matched against a difference's evidence. The report's compiler-difference table has a "Known issue" column and each finding says which issue it matches or that it matches none; the plugin's finding summary says the same. Three entries, each from a replay or test here: `scalac-specialisation-batch` (all nine cats classes match), `zinc-signature-only-stale` (pekko's `UdpSender`), `zinc-import-removed-package` (the `import-package` test).
+- TODO D7b. Confirm `compiler` directly instead of inferring it: run scalac alone on the sources of the cycle that wrote the class, against the same classpath, and compare. Today a recompiled class that differs is attributed to the compiler because Zinc cannot have left it stale.
+- TODO D8. Publishing: coordinates, a release, and whether `zinc-oracle` is published from Zinc's build as well as inside the plugin's jar.
+- Future: the minimiser through sbt; phase timings (they need rz#90's hooks in the user's Zinc); two Zincs in lockstep; the necessary set and compiled sources as paths relative to the build, which sbt 2 gives and sbt 1 does not.
+
+**What running it showed.**
+
+- **It finds a real bug through real sbt.** The scripted test `import-package` (Zinc's own pending test) passes because sbt 1.9.9 and sbt 2.0.10 both leave the importer of a deleted package uncompiled, and `incVerify` reports `missed-error` and fails the build.
+- **scala-steward through its own sbt 1.13:** 12 commits, every step `same`, the report rendering from the plugin's `steps.jsonl`. A step costs 10 to 20 s once caches are warm (the incremental compile, a clean compile of every module and configuration, and a `reload` when the build changed). The first run took 26 minutes because older commits download their own sbt and dependencies.
+- **A full clone, not a worktree.** The replay clones the repository with its own `.git` directory and its submodules, since some builds do not work in a git worktree.
+- **A commit that does not compile** is `same-fail` for the module that fails, and the modules that depend on it are not checked: their clean compile would read the failed module's older output and could succeed where sbt rightly did not try.
+- **sbt 2 differences.** A task gets no analysis from before the compile and the timestamps in the one after are normalised, so which sources were compiled is read from the modification times of their outputs. A second replay of the same history is served from sbt 2's disk cache and compiles nothing, which is the cache working but makes precision numbers meaningless on a repeat; a replay should have its own cache directory. Not done.
+- **Not covered.** A build whose root is not the repository's root is handled but untested. Java 17 is required. The child sbt is the `sbt` on the `PATH`.
 
 ## Future work
 

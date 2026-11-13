@@ -36,6 +36,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
@@ -46,7 +47,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Reports on a replay written by incbench-history: soundness, precision and performance of each
+ * Reports on a replay written by `zinc-oracle history` or the sbt plugin: soundness, precision and performance of each
  * mode's incremental compiles against the clean build of the same commit.
  *
  * <pre>
@@ -75,7 +76,7 @@ public final class Report {
   private static final Comparator<String> BY_CODE_POINT = Report::compareCodePoints;
   private static final IntPredicate NONE = i -> false;
 
-  private static final String USAGE = "usage: incbench-history-report [-h] [--json] out [out ...]";
+  private static final String USAGE = "usage: zinc-oracle report [-h] [--json] out [out ...]";
 
   private static final String HOW_TO_READ =
       """
@@ -134,13 +135,13 @@ public final class Report {
         json = true;
       } else {
         stderr.println(USAGE);
-        stderr.println("incbench-history-report: error: unrecognized arguments: " + arg);
+        stderr.println("zinc-oracle report: error: unrecognized arguments: " + arg);
         return 2;
       }
     }
     if (outs.isEmpty()) {
       stderr.println(USAGE);
-      stderr.println("incbench-history-report: error: the following arguments are required: out");
+      stderr.println("zinc-oracle report: error: the following arguments are required: out");
       return 2;
     }
     List<Object> summaries = new ArrayList<>();
@@ -1010,6 +1011,12 @@ public final class Report {
           "  - `" + key + "`: " + str(d.get("kind")) + (truthy(d.get("level")) ? " at level " + str(d.get("level")) : "");
       if (truthy(d.get("pickleOnly"))) line += ", only in the Scala signature (bytecode equal)";
       line += truthy(d.get("fresh")) ? ", written by this step" : ", not written by this step";
+      if (!truthy(d.get("level"))) {
+        line +=
+            KnownIssues.ofDifference(truthy(d.get("fresh")), truthy(d.get("pickleOnly")), root.resolve(key + ".diff"))
+                .map(i -> "; known issue " + i.label())
+                .orElse("; matches no known issue");
+      }
       if (Files.exists(root.resolve(key + ".diff"))) {
         line += "; diff `work/diffs/" + s.name + "/" + m + "/" + key + ".diff`";
       } else {
@@ -1021,6 +1028,15 @@ public final class Report {
     }
     if (diffs.size() > cap) lines.add("  - and " + commas(diffs.size() - cap) + " more.");
     return new DiffList(lines, diffs.size());
+  }
+
+  /** The id of the known issue that a recompiled class's difference matches, or a dash. */
+  private static String knownIssue(Replay rp, Step s, Collection<String> modes, String key) {
+    for (String m : modes) {
+      Optional<KnownIssues.Issue> issue = KnownIssues.ofDifference(true, false, rp.diffs(s, m).resolve(key + ".diff"));
+      if (issue.isPresent()) return code(issue.get().id());
+    }
+    return "-";
   }
 
   private static String evidencePath(Replay rp, Step s, Collection<String> modes, String key) {
@@ -1298,9 +1314,11 @@ public final class Report {
                 g.steps.size(),
                 String.join(", ", g.modes),
                 first.label(),
+                knownIssue(rp, first, g.modes, e.getKey()),
                 evidencePath(rp, first, g.modes, e.getKey())));
       }
-      lines.addAll(table(List.of("Class", "Steps", "Modes", "First step", "Evidence"), rows, i -> i == 1, CAP, "classes"));
+      lines.addAll(
+          table(List.of("Class", "Steps", "Modes", "First step", "Known issue", "Evidence"), rows, i -> i == 1, CAP, "classes"));
       lines.add("");
     }
 
