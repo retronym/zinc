@@ -56,6 +56,9 @@ public final class SbtReplay {
 
   private static final String STATE = "replay-state.json";
 
+  /** The untracked file in the clone's build root that tells the plugin where the replay's results go. */
+  public static final String HOME_FILE = ".inc-oracle-home";
+
   /** The commit the child sbt is to verify next. */
   public record Next(String name, String commit, boolean build, boolean checkedOut, String repository) {}
 
@@ -269,6 +272,7 @@ public final class SbtReplay {
     Path build = rel.isEmpty() ? checkout : checkout.resolve(rel);
     Files.createDirectories(build.resolve("project"));
     Files.writeString(build.resolve("project/zz-inc-oracle.sbt"), pluginLine(plugin));
+    Files.writeString(build.resolve(HOME_FILE), out.resolve("work").toString());
 
     JsonArray commits = new JsonArray();
     commits.add(new JsonObject().add("name", "base").add("commit", start).add("build", false));
@@ -322,7 +326,6 @@ public final class SbtReplay {
         + ", in " + out);
 
     List<String> command = new ArrayList<>(sbt);
-    command.add("-Dinc.oracle.home=" + out.resolve("work"));
     command.add("incReplayRun");
     File sbtLog = out.resolve("sbt.log").toFile();
     while (true) {
@@ -356,6 +359,17 @@ public final class SbtReplay {
       checkout(checkout, commits.get(next).asObject().get("commit").asString());
       state.set("checkedOut", true);
       save(out, state);
+    }
+    if (Files.exists(build.resolve("project/target/active.json"))) {
+      List<String> shutdown = new ArrayList<>(sbt);
+      shutdown.add("shutdown");
+      new ProcessBuilder(shutdown)
+          .directory(build.toFile())
+          .redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")))
+          .redirectErrorStream(true)
+          .redirectOutput(ProcessBuilder.Redirect.appendTo(sbtLog))
+          .start()
+          .waitFor();
     }
     try {
       Report.write(out);

@@ -91,6 +91,7 @@ object Steps {
     val (compiledState, _) = extracted.runTask(LocalRootProject / incOracleCompileAll, state)
     val incMillis = (System.nanoTime - started) / 1000000
     val (verified, _) = Project.extract(compiledState).runTask(LocalRootProject / incOracleVerifyAll, compiledState)
+    val verifyMillis = (System.nanoTime - started) / 1000000 - incMillis
     val dir = home.resolve("results").resolve(name).toFile
     val results = Option(dir.listFiles).toList.flatten.filter(_.getName.endsWith(".json")).sortBy(_.getName).map(Verify.read)
     val log = home.resolve("steps.jsonl")
@@ -98,7 +99,7 @@ object Steps {
     val out = rows(name, index, results, incMillis)
     Files.write(log, out.map(_.toString).mkString("", "\n", "\n").getBytes(UTF_8), StandardOpenOption.CREATE, StandardOpenOption.APPEND)
     val verdict = out(1).get("verdict").asString
-    verified.log.info(s"[incReplay] $name: $verdict, ${out(1).get("compiledCount").asInt} sources compiled incrementally in ${incMillis} ms")
+    verified.log.info(s"[incReplay] $name: $verdict, ${out(1).get("compiledCount").asInt} sources compiled incrementally in ${incMillis} ms; clean builds and comparison ${verifyMillis} ms; at ${java.time.LocalTime.now.withNano(0)}")
     SbtReplay.stepDone(home.getParent, name, Verify.isFinding(verdict))
     try Report.write(home.getParent)
     catch { case e: Exception => verified.log.warn(s"[incReplay] no report: $e") }

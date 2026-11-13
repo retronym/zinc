@@ -34,29 +34,36 @@ object Compat {
     own && others.forall(ok)
   }
 
-  def verifySettings: Seq[Setting[_]] = Seq(
-    incVerify := {
-      val incremental = compile.result.value match {
-        case Value(a) => Some(a)
-        case Inc(_)   => None
-      }
-      val out = Verify.run(
-        thisProject.value.id,
-        configuration.value.name,
-        (LocalRootProject / baseDirectory).value,
-        target.value / "inc-oracle" / configuration.value.name,
-        incremental,
-        upstream.value,
-        (compile / compileInputs).value,
-        fileConverter.value,
-        streams.value.log
-      )
-      val verdict = out.get("verdict").asString
-      if (incVerifyFailOnFinding.value && !Verify.replaying && Verify.isFinding(verdict))
-        throw new MessageOnlyException(
-          s"incVerify: ${thisProject.value.id} / ${configuration.value.name} is $verdict"
-        )
+  private def check: Def.Initialize[Task[Unit]] = Def.task {
+    val incremental = compile.result.value match {
+      case Value(a) => Some(a)
+      case Inc(_)   => None
     }
+    val root = (LocalRootProject / baseDirectory).value
+    val out = Verify.run(
+      thisProject.value.id,
+      configuration.value.name,
+      root,
+      target.value / "inc-oracle" / configuration.value.name,
+      incremental,
+      (compile / compileInputs).value,
+      fileConverter.value,
+      streams.value.log
+    )
+    val verdict = out.get("verdict").asString
+    if (incVerifyFailOnFinding.value && !Verify.replaying(root) && Verify.isFinding(verdict))
+      throw new MessageOnlyException(
+        s"incVerify: ${thisProject.value.id} / ${configuration.value.name} is $verdict"
+      )
+  }
+
+  private def skip: Def.Initialize[Task[Unit]] = Def.task {
+    Verify.skip(thisProject.value.id, configuration.value.name, (LocalRootProject / baseDirectory).value, streams.value.log)
+    ()
+  }
+
+  def verifySettings: Seq[Setting[_]] = Seq(
+    incVerify := Def.taskDyn(if (upstream.value) check else skip).value
   )
 
   def bothSettings: Seq[Setting[_]] = Seq(

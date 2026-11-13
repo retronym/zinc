@@ -34,11 +34,20 @@ import xsbti.compile.{ CompileAnalysis, Inputs, PreviousResult }
 object Verify {
 
   /** Where the build keeps what `incVerify` writes. */
-  def home(buildRoot: File): File =
-    sys.props.get("inc.oracle.home").fold(new File(buildRoot, "target/inc-oracle"))(new File(_))
+  def home(buildRoot: File): File = replayHome(buildRoot).getOrElse(new File(buildRoot, "target/inc-oracle"))
+
+  /**
+   * Where a replay keeps its results, if this build is a replay's clone. It is a file in the
+   * clone, not a system property, because an sbt 2 client may reach a server that is already
+   * running with other properties.
+   */
+  private def replayHome(buildRoot: File): Option[File] = {
+    val f = new File(buildRoot, sbt.internal.inc.oracle.SbtReplay.HOME_FILE)
+    if (f.isFile) Some(new File(new String(Files.readAllBytes(f.toPath), UTF_8).trim)) else None
+  }
 
   /** Whether this sbt is a replay's child, where a finding is recorded and the replay goes on. */
-  def replaying: Boolean = sys.props.contains("inc.oracle.home")
+  def replaying(buildRoot: File): Boolean = replayHome(buildRoot).isDefined
 
   def currentStep(buildRoot: File): String = {
     val f = new File(home(buildRoot), "current-step")
@@ -150,21 +159,13 @@ object Verify {
       buildRoot: File,
       scratchBase: File,
       incremental: Option[CompileAnalysis],
-      upstreamOk: Boolean,
-      inputs: => Inputs,
+      inputs: Inputs,
       fallbackConverter: FileConverter,
       log: Logger
   ): JsonObject = {
     val step = currentStep(buildRoot)
     val file = home(buildRoot).toPath.resolve("results").resolve(step).resolve(s"$project-$config.json")
     Files.createDirectories(file.getParent)
-    if (!upstreamOk) {
-      val skipped = new JsonObject().add("step", step).add("project", project).add("config", config)
-        .add("verdict", "upstream-failed")
-      Files.write(file, skipped.toString.getBytes(UTF_8))
-      log.info(s"[incVerify] $project / $config: not checked, a module it depends on does not compile")
-      return skipped
-    }
     val options = inputs.options
     val converter = if (options.converter.isPresent) options.converter.get else fallbackConverter
     val incDir = options.classesDirectory.toAbsolutePath.normalize
@@ -283,6 +284,18 @@ object Verify {
       case _ => log.error(s"[incVerify] $summary")
     }
     out
+  }
+
+  /** The result of a module that was not checked because something it compiles against failed. */
+  def skip(project: String, config: String, buildRoot: File, log: Logger): JsonObject = {
+    val step = currentStep(buildRoot)
+    val file = home(buildRoot).toPath.resolve("results").resolve(step).resolve(s"$project-$config.json")
+    Files.createDirectories(file.getParent)
+    val skipped = new JsonObject().add("step", step).add("project", project).add("config", config)
+      .add("verdict", "upstream-failed")
+    Files.write(file, skipped.toString.getBytes(UTF_8))
+    log.info(s"[incVerify] $project / $config: not checked, a module it depends on does not compile")
+    skipped
   }
 
   def isFinding(verdict: String): Boolean =
