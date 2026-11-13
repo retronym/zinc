@@ -73,6 +73,9 @@ object Dependencies:
   val scalaCheck = "org.scalacheck" %% "scalacheck" % "1.20.0"
   val scalatest = "org.scalatest" %% "scalatest" % "3.2.20"
   val verify = "com.eed3si9n.verify" %% "verify" % "1.0.0"
+  val asm = "org.ow2.asm" % "asm" % "9.9.1"
+  val asmUtil = "org.ow2.asm" % "asm-util" % "9.9.1"
+  val minimalJson = "com.eclipsesource.minimal-json" % "minimal-json" % "0.9.5"
   val sjsonnew = Def.setting {
     "com.eed3si9n" %% "sjson-new-core" % sjsonNewVersion
   }

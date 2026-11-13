@@ -659,9 +659,22 @@ lazy val zincClassfile = (projectMatrix in internalPath / "zinc-classfile")
   .jvmPlatform(scalaVersions = scala3_only)
   .configure(addBaseSettingsAndTestDeps, addSbtIO, addSbtUtilLogging)
 
+lazy val zincOracle = (projectMatrix in internalPath / "zinc-oracle")
+  .settings(
+    baseSettings,
+    name := "zinc Oracle",
+    scalaVersion := scala3,
+    crossPaths := false,
+    autoScalaLibrary := false,
+    exportJars := true,
+    compile / javacOptions ++= Seq("--release", "17"),
+    libraryDependencies ++= Seq(asm, asmUtil, minimalJson),
+  )
+  .jvmPlatform(autoScalaLibrary = false)
+
 // re-implementation of scripted engine
 lazy val zincScripted = (projectMatrix in internalPath / "zinc-scripted")
-  .dependsOn(zinc % "compile;test->test")
+  .dependsOn(zinc % "compile;test->test", zincOracle % "test->compile")
   .enablePlugins(BuildInfoPlugin)
   .settings(
     baseSettings,

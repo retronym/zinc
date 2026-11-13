@@ -1,0 +1,8 @@
+# The pending Zinc scripted test source-dependencies/import-package: the importer of a package
+# that no longer exists is not recompiled, so the incremental compile succeeds where a clean
+# build fails.
+> a/Compile/incVerify
+> check a compile same
+$ copy-file changes/P.scala a/src/main/scala/P.scala
+-> a/Compile/incVerify
+> check a compile missed-error

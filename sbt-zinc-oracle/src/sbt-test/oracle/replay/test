@@ -1,0 +1,4 @@
+# Replays the repository's history in a clone, through the sbt on the PATH.
+> root/makeHistory
+> incReplay 10
+> root/checkReplay
