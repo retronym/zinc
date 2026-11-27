@@ -1,0 +1,4 @@
+# Client relies on the default of Ann.value, which the change removes.
+> compile
+$ copy-file changes/Ann.java src/main/java/a/Ann.java
+-> compile

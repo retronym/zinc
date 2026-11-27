@@ -165,6 +165,19 @@ private[sbt] object Parser:
         (classConstantReferences ++ fieldTypes ++ methodTypes ++
           annotationsReferencesCarefully).toSet
 
+      def memberNames: Set[String] =
+        constants.iterator.flatMap { c =>
+          c.tag match
+            case ConstantField | ConstantMethod | ConstantInterfaceMethod =>
+              val name = toUTF8(constantPool(c.typeIndex).nameIndex)
+              if name == "<init>" then
+                Some(getClassConstantName(c.nameIndex).replace('.', ';') + ";init;")
+              else Some(name)
+            case ConstantNameAndType =>
+              Some(toUTF8(c.nameIndex)).filterNot(n => n == "<init>" || n == "<clinit>")
+            case _ => None
+        }.toSet
+
       private def getTypes(fieldsOrMethods: Array[FieldOrMethodInfo]) =
         fieldsOrMethods.flatMap { fieldOrMethod =>
           descriptorToTypes(fieldOrMethod.descriptor)

@@ -833,7 +833,21 @@ object IncrementalCommon:
   def comesFromScalaSource(
       previous: Relations,
       current: Option[Relations] = None
-  )(className: String): Boolean =
+  ): String => Boolean =
+    // Experimental: a Java class whose used names javac recorded is filtered by name like a Scala
+    // one. A Java class without them (forked javac) keeps today's unfiltered invalidation.
+    val hasJavaUsedNames: String => Boolean =
+      if java.lang.Boolean.getBoolean("zinc.experimental.javaNameHashing") then
+        val withNames = current.getOrElse(previous).names.toMultiMap.keySet
+        withNames.contains
+      else _ => false
+    className => comesFromScalaSource0(previous, current, className) || hasJavaUsedNames(className)
+
+  private def comesFromScalaSource0(
+      previous: Relations,
+      current: Option[Relations],
+      className: String
+  ): Boolean =
     val previousSourcesWithClassName = previous.classes.reverse(className)
     val newSourcesWithClassName = current.map(_.classes.reverse(className)).getOrElse(Set.empty)
     if previousSourcesWithClassName.isEmpty && newSourcesWithClassName.isEmpty then
