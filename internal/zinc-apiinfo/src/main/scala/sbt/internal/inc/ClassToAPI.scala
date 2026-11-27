@@ -122,9 +122,10 @@ object ClassToAPI:
     import api.DefinitionType.{ ClassDef, Module, Trait }
     val enclPkg = packageName(c)
     val mods = modifiers(c.getModifiers)
+    val clsMods =
+      if c.isSealed && !c.isEnum then modifiers(c.getModifiers, isSealed = true) else mods
     val acc = access(c.getModifiers, enclPkg)
     val annots = annotations(c.getAnnotations)
-    val children = childrenOfSealedClass(c)
     val topLevel = c.getEnclosingClass == null
     val name = classCanonicalName(c)
     val tpe = if Modifier.isInterface(c.getModifiers) then Trait else ClassDef
@@ -132,18 +133,18 @@ object ClassToAPI:
     val cls = api.ClassLike.of(
       name,
       acc,
-      mods,
+      clsMods,
       annots,
       tpe,
       lzyS(Empty),
       lzy(instance, cmap),
       emptyStringArray,
-      children.toArray,
+      childrenOfSealedClass(c),
       topLevel,
       typeParameters(typeParameterTypes(c))
     )
     val clsDef =
-      api.ClassLikeDef.of(name, acc, mods, annots, typeParameters(typeParameterTypes(c)), tpe)
+      api.ClassLikeDef.of(name, acc, clsMods, annots, typeParameters(typeParameterTypes(c)), tpe)
     val stat = api.ClassLike.of(
       name,
       acc,
@@ -523,9 +524,10 @@ object ClassToAPI:
       case m: Method         => m.getName
       case c: Constructor[?] => c.getName
 
-  def modifiers(i: Int): api.Modifiers =
+  def modifiers(i: Int): api.Modifiers = modifiers(i, isSealed = false)
+  private def modifiers(i: Int, isSealed: Boolean): api.Modifiers =
     import Modifier.{ isAbstract, isFinal }
-    new api.Modifiers(isAbstract(i), false, isFinal(i), false, false, false, false, false)
+    new api.Modifiers(isAbstract(i), false, isFinal(i), isSealed, false, false, false, false)
   def access(i: Int, pkg: Option[String]): api.Access =
     import Modifier.{ isPublic, isPrivate, isProtected }
     if isPublic(i) then Public
@@ -539,18 +541,20 @@ object ClassToAPI:
     api.Annotation.of(reference(a.annotationType), Array(javaAnnotation(a.toString)))
 
   /**
-   * This method mimics Scala compiler's behavior of `Symbol.children` method when Symbol corresponds to
-   * a Java-defined enum class. Java's enum is modelled as a sealed class and enum's constants are modelled as
-   * children.
+   * This method mimics Scala compiler's behavior of `Symbol.children`. Java's enum is modelled as
+   * a sealed class and enum's constants are modelled as children, and a sealed class or interface
+   * has its permitted subclasses as children.
    *
    * We need this logic to trigger recompilation due to changes to pattern exhaustivity checking results.
    */
-  private def childrenOfSealedClass(c: Class[?]): Seq[api.Type] =
-    if !c.isEnum then emptyTypeArray.toIndexedSeq
-    else
+  private def childrenOfSealedClass(c: Class[?]): Array[api.Type] =
+    if c.isEnum then
       // Calling getCanonicalName() on classes from enum constants yields same string as enumClazz.getCanonicalName
       // Moreover old behaviour create new instance of enum - what may fail (e.g. in static block )
-      Seq(reference(c))
+      Array(reference(c))
+    else
+      val permitted = c.getPermittedSubclasses
+      if permitted == null then emptyTypeArray else arrayMap(permitted)(reference)
 
   // full information not available from reflection
   def javaAnnotation(s: String): api.AnnotationArgument =
