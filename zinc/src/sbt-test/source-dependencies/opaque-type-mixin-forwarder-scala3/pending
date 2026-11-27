@@ -1,0 +1,6 @@
+# K's mixin forwarder for Tr.h erases O.T to its right-hand side.
+> p/run int
+# T's right-hand side changes. Tr uses O, so it recompiles, but its API does not move (h renders
+# O.T by name); K uses neither O nor T, so it keeps the forwarder h(I)I. A clean build has h(Object).
+$ copy-file changes/O.scala p/O.scala
+> p/run java.lang.Object
