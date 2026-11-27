@@ -37,6 +37,13 @@ private[sbt] trait ClassFile:
    */
   def enclosingClass: Option[String]
   def types: Set[String]
+
+  /**
+   * The names of the fields, methods and constructors this class refers to, including those javac
+   * calls implicitly (boxing, enhanced `for`, a lambda's functional method). A constructor is named
+   * as [[sbt.internal.inc.ClassToAPI]] names it (`pkg;C;init;`).
+   */
+  def memberNames: Set[String]
   def stringValue(a: AttributeInfo): String
 
   /**

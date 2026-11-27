@@ -317,10 +317,17 @@ private[sbt] object JavaAnalyze:
         onBinaryName <- constantDeps.getOrElse(binaryClassName, Set.empty)
       do processDependency(onBinaryName, DependencyByMemberRef, binaryClassName)
 
+      // Experimental: the members a class refers to, including those javac calls implicitly, which
+      // name hashing for Java dependents needs on top of the names the source looks up.
+      val memberNames: Map[String, Set[String]] =
+        if usedNames.nonEmpty && java.lang.Boolean.getBoolean("zinc.experimental.javaNameHashing")
+        then classFiles.iterator.map(cf => cf.className -> cf.memberNames).toMap
+        else Map.empty
       for
         binaryClassName <- typesInSource.keysIterator
         className <- getMappedSource(binaryClassName)
-        name <- usedNames.getOrElse(binaryClassName, Set.empty)
+        name <- usedNames.getOrElse(binaryClassName, Set.empty) ++
+          memberNames.getOrElse(binaryClassName, Set.empty)
       do analysis.usedName(className, name, java.util.EnumSet.of(xsbti.UseScope.Default))
 
       def readInheritanceDependencies(classes: Seq[Class[?]]) =

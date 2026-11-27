@@ -27,6 +27,7 @@ import com.sun.source.tree.{
   ClassTree,
   CompilationUnitTree,
   IdentifierTree,
+  MemberReferenceTree,
   MemberSelectTree,
   Tree
 }
@@ -641,6 +642,17 @@ private[sbt] final class UsedNameScanner(trees: Trees, elements: Elements, names
   override def visitIdentifier(node: IdentifierTree, p: Void): Void =
     if owner != null then names.add(owner, node.getName.toString)
     super.visitIdentifier(node, p)
+
+  // Experimental (name hashing for Java dependents): qualified selections are uses too.
+  private val qualified = java.lang.Boolean.getBoolean("zinc.experimental.javaNameHashing")
+
+  override def visitMemberSelect(node: MemberSelectTree, p: Void): Void =
+    if qualified && owner != null then names.add(owner, node.getIdentifier.toString)
+    super.visitMemberSelect(node, p)
+
+  override def visitMemberReference(node: MemberReferenceTree, p: Void): Void =
+    if qualified && owner != null then names.add(owner, node.getName.toString)
+    super.visitMemberReference(node, p)
 end UsedNameScanner
 
 /**
