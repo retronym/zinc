@@ -17,7 +17,7 @@ package javac
 import java.nio.file.Path
 import java.net.URLClassLoader
 
-import sbt.internal.inc.classfile.{ ClassFile, JavaAnalyze, Parser }
+import sbt.internal.inc.classfile.{ ClassFile, JavaAnalyze }
 import sbt.internal.inc.classpath.ClasspathUtil
 import xsbti.compile.*
 import xsbti.{
@@ -214,20 +214,14 @@ final class AnalyzingJavaCompiler private[sbt] (
           case (from, to) => (from.getName, to.getName)
         }
 
-      // Read a parent class's bytes (for inherited members) without loading/linking it — so this
-      // stays immune to the module/classpath issues that motivated the classfile path (sbt/zinc#837).
-      def resolveParent(binaryName: String): Option[ClassFile] =
-        val resource = binaryName.replace('.', '/') + ".class"
-        Option(loader.getResource(resource))
-          .orElse(Option(ClassLoader.getSystemResource(resource)))
-          .flatMap(u =>
-            try Some(Parser(u, log))
-            catch case _: Throwable => None
-          )
       // Read the API of classes that couldn't be reflectively loaded, from their classfiles
       // (sbt/zinc#837), so name-hashing still tracks changes to their own public shape.
-      def readClassfileAPI(source: VirtualFileRef, classFiles: Seq[(String, ClassFile)]): Unit =
-        val (apis, mainClasses) = ClassfileToAPI.process(classFiles, resolveParent(_), log)
+      def readClassfileAPI(
+          source: VirtualFileRef,
+          classFiles: Seq[(String, ClassFile)],
+          resolveParent: String => Option[ClassFile]
+      ): Unit =
+        val (apis, mainClasses) = ClassfileToAPI.process(classFiles, resolveParent, log)
         apis.foreach(callback.api(source, _))
         mainClasses.foreach(callback.mainClass(source, _))
 
