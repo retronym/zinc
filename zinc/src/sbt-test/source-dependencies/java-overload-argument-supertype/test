@@ -1,0 +1,6 @@
+> compile
+-> run
+# X becomes a Number, so a clean build resolves the call to foo(Number).
+$ copy-file changes/X.java src/main/java/a/X.java
+> compile
+> run
