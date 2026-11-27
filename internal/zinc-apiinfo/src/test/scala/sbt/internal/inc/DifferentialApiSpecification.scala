@@ -117,9 +117,9 @@ object DifferentialApiSpecification extends Properties:
     "InheritNested" ->
       ("class HasNested { public static class Shared { public int v() { return 0; } } } " +
         "public class InheritNested extends HasNested {}"),
-    // ...but a *parameterized* inner supertype (Outer<String>.Inner) is a ParameterizedType that
-    // reflection's inner-class walk filters out, so Inner.Member must NOT be inherited by either path
-    // — even though the erased superclass name (Outer$Inner) looks non-generic.
+    // A *parameterized* inner supertype (Outer<String>.Inner) is a ParameterizedType that
+    // reflection's inner-class walk filters out; the classfile path lists Inner.Member, which the
+    // language inherits (see expectedClassfileOnlyInherited).
     "GenericInnerSuper" ->
       ("class Outer<T> { public class Inner { public class Member {} } } " +
         "public class GenericInnerSuper extends Outer<String>.Inner { " +
@@ -129,6 +129,13 @@ object DifferentialApiSpecification extends Properties:
     "HiddenField" ->
       ("class HiddenBase { public int x; } " +
         "public class HiddenField extends HiddenBase { public int x; }")
+  )
+
+  // Member classes inherited from a parameterized supertype, which ClassfileToAPI lists and
+  // reflection drops.
+  private val expectedClassfileOnlyInherited: Map[String, Set[String]] = Map(
+    "Color" -> Set("java.lang.Enum.EnumDesc"),
+    "GenericInnerSuper" -> Set("Outer.Inner.Member")
   )
 
   private def declared(apis: Seq[ClassLike]): Set[String] =
@@ -207,7 +214,7 @@ object DifferentialApiSpecification extends Properties:
           Option.when(dR != dC)(
             s"$name declared: onlyReflect=${dR -- dC} onlyClassfile=${dC -- dR}"
           ),
-          Option.when(iR != iC)(
+          Option.when(iR ++ expectedClassfileOnlyInherited.getOrElse(name, Set.empty) != iC)(
             s"$name inherited: onlyReflect=${iR -- iC} onlyClassfile=${iC -- iR}"
           ),
           Option.when(kR != kC)(s"$name kinds: onlyReflect=${kR -- kC} onlyClassfile=${kC -- kR}"),
