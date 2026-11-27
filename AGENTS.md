@@ -6,8 +6,10 @@ The main developer documentation is [CONTRIBUTING.md](./CONTRIBUTING.md).
 Compiling with sbt
 ------------------
 
+The sbt 2 launcher starts a background server even with `--batch`; `--server` runs the command in the foreground and exits, so no server outlives the command.
+
 ```bash
-sbt --client --color=false --supershell=false --batch compile
+sbt --server --color=false --supershell=false --batch compile
 ```
 
 Pull request guideline
@@ -22,7 +24,7 @@ Coding style
 ------------
 
 ```bash
-sbt --client --color=false --supershell=false --batch scalafmtAll
+sbt --server --color=false --supershell=false --batch scalafmtAll
 ```
 
 - Follow [Coding style and best practices](contributing-docs/01_coding_style.md)
@@ -40,7 +42,7 @@ For changes that require coordination with file changes and tasks, use scripted 
 For example, here's how to run "source-dependencies/abstract-override" scripted test:
 
 ```bash
-sbt --color=false --supershell=false --client --batch scripted source-dependencies/abstract-override
+sbt --color=false --supershell=false --server --batch scripted source-dependencies/abstract-override
 ```
 
 Binary compatibility
@@ -52,7 +54,7 @@ This means removing public method signature MUST be avoided.
 Use mima to check:
 
 ```bash
-sbt --client --color=false --supershell=false --batch mimaReportBinaryIssues
+sbt --server --color=false --supershell=false --batch mimaReportBinaryIssues
 ```
 
 Copyright
