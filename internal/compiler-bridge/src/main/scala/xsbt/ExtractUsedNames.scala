@@ -85,7 +85,7 @@ class ExtractUsedNames[GlobalType <: CallbackGlobal](val global: GlobalType)
     }
   }
 
-  private def DefaultScopes = EnumSet.of(UseScope.Default)
+  private val DefaultScopes = EnumSet.of(UseScope.Default)
   private def PatmatScopes = EnumSet.of(UseScope.PatMatTarget)
 
   def extractAndReport(unit: CompilationUnit): Unit = {
