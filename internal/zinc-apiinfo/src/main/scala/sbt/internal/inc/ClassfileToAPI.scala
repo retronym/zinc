@@ -45,10 +45,9 @@ import sbt.util.Logger
  * `resolveParent` resolver (bytes only — no class loading), so this stays immune to the module /
  * classpath issues that motivated the classfile path. The output need not match the reflection-derived
  * API byte-for-byte (e.g. type-variable names are unqualified, and wildcards keep only their bound);
- * it only needs to be deterministic and to change when the class's public shape changes. See
- * docs/design/classfile-based-java-api.md.
+ * it only needs to be deterministic and to change when the class's public shape changes.
  *
- * Two differences from [[ClassToAPI]] are intentional and do not under-invalidate:
+ * Three differences from [[ClassToAPI]] are intentional and do not under-invalidate:
  *   - Annotations are read from both the RuntimeVisible and RuntimeInvisible attributes, so
  *     CLASS-retention annotations (the default when no `@Retention` is given) are captured here even
  *     though reflection's `getAnnotations` does not see them. The relevant criterion for invalidation
@@ -64,6 +63,8 @@ import sbt.util.Logger
  *     type parameters or annotations, whereas reflection's reference does. The member class's own
  *     `ClassLike` entry models them in full, so a change there still invalidates its dependents; only
  *     the outer's view of it is abbreviated.
+ *   - Public member classes inherited from a parameterized supertype (`extends Base<String>`,
+ *     `Enum<E>`) are listed, as the language inherits them; reflection's walk drops them.
  */
 object ClassfileToAPI:
   import api.DefinitionType.{ ClassDef, Module, Trait }
@@ -395,26 +396,6 @@ object ClassfileToAPI:
       i.outerClassName == cf.className && i.innerName.isDefined && (!publicOnly || i.isPublic)
     )
 
-  // Erased names of supertypes this class references WITH type arguments (from the Signature
-  // attribute). ClassToAPI collects inherited member classes only from raw (non-generic) supertypes —
-  // a generic supertype surfaces as a ParameterizedType that its inner-class walk filters out — so we
-  // mirror that, otherwise an enum would inherit java.lang.Enum.EnumDesc that reflection never lists.
-  // (Inherited methods/fields are unaffected: those come from every supertype in both paths.)
-  // A supertype is "generic" if its outer OR any inner suffix carries type arguments — e.g.
-  // `Outer<String>.Inner` is a parameterized type even though `Inner` itself has none. The key is the
-  // erased ($-joined) binary name so it matches superTypeNames/cf.superClassName ("Outer$Inner").
-  private def genericSuperNames(cf: ClassFile): Set[String] =
-    cf.attributes
-      .find(_.isSignature)
-      .map(cf.stringValue)
-      .flatMap(SignatureParser.classSignature) match
-      case Some(cs) =>
-        (cs.superclass +: cs.interfaces).collect {
-          case SigClass(n, args, inners) if args.nonEmpty || inners.exists(_.args.nonEmpty) =>
-            (n +: inners.map(_.name)).mkString("$")
-        }.toSet
-      case None => Set.empty
-
   // Supertypes whose members are inherited. An interface's classfile lists Object as its super_class,
   // but it does not inherit Object's members (reflection's getMethods agrees), so for interfaces we
   // walk only the super-interfaces.
@@ -445,13 +426,10 @@ object ClassfileToAPI:
     val instance = ArrayBuffer.empty[api.ClassDefinition]
     val static = ArrayBuffer.empty[api.ClassDefinition]
     val visited = scala.collection.mutable.Set.empty[String]
-    // (parent binary name, whether to collect that parent's member classes — false for a generically
-    // referenced parent, matching reflection). Methods/fields are always collected.
-    val queue = scala.collection.mutable.Queue.empty[(String, Boolean)]
-    val rootGeneric = genericSuperNames(cf)
-    queue ++= superTypeNames(cf).map(n => (n, !rootGeneric.contains(n)))
+    val queue = scala.collection.mutable.Queue.empty[String]
+    queue ++= superTypeNames(cf)
     while queue.nonEmpty do
-      val (parentName, collectNested) = queue.dequeue()
+      val parentName = queue.dequeue()
       if visited.add(parentName) then
         resolveParent(parentName).foreach { pcf =>
           val penc = ClassToAPI.packageAndName(pcf.className)._1
@@ -469,15 +447,15 @@ object ClassfileToAPI:
             if f.isPublic then
               val (isStat, fl) = fieldDef(pcf, f, penc)
               if isStat then static += fl else instance += fl
-          // Public member classes of a raw (non-generic) parent are inherited too (ClassToAPI lists them).
-          if collectNested then
-            val parentCanonical = canonicalName(pcf)
-            for i <- memberClasses(pcf, publicOnly = true) do
-              if seenNested.add(parentCanonical + "." + i.innerName.getOrElse("")) then
-                val defs = nestedClassDefs(parentCanonical, i, penc)
-                if i.isStatic then static ++= defs else instance ++= defs
-          val parentGeneric = genericSuperNames(pcf)
-          queue ++= superTypeNames(pcf).map(n => (n, !parentGeneric.contains(n)))
+          // Public member classes are inherited from every supertype, generic or not (JLS 8.5).
+          // ClassToAPI drops those of a parameterized supertype, which is a limitation of its
+          // reflective walk: `import static W.*` still sees them, so they belong in W's API.
+          val parentCanonical = canonicalName(pcf)
+          for i <- memberClasses(pcf, publicOnly = true) do
+            if seenNested.add(parentCanonical + "." + i.innerName.getOrElse("")) then
+              val defs = nestedClassDefs(parentCanonical, i, penc)
+              if i.isStatic then static ++= defs else instance ++= defs
+          queue ++= superTypeNames(pcf)
         }
       end if
     end while

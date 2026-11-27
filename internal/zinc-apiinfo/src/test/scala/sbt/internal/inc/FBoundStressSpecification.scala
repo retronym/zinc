@@ -132,9 +132,15 @@ object FBoundStressSpecification extends Properties:
           val iC = classfile.flatMap(inherited).toSet
           if dR != dC then
             failures += s"$name declared: onlyReflect=${dR -- dC} onlyClassfile=${dC -- dR}"
-          if iR != iC then
+          // The classfile path also lists member classes inherited from a parameterized
+          // supertype (e.g. Enum.EnumDesc), which reflection drops; nothing else may differ.
+          val inheritedClasses = classfile
+            .flatMap(_.structure.inherited.collect { case d: xsbti.api.ClassLikeDef => d.name })
+            .toSet
+          if !iR.subsetOf(iC) || !(iC -- iR).subsetOf(inheritedClasses) then
             failures += s"$name inherited: onlyReflect=${iR -- iC} onlyClassfile=${iC -- iR}"
       }
+    end for
     Result.all(
       List(
         corpusCompiled(classes),
