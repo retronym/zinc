@@ -177,6 +177,9 @@ object ClassfileToAPISpecification extends Properties:
       "Marker.java" -> "public interface Marker {}",
       "B.java" -> "public class B implements Marker {}",
       "C.java" -> "public class C extends B {}",
+      "G.java" -> "public class G<T> {}",
+      "H.java" ->
+        "public class H extends G<String> implements Comparable<H> { public int compareTo(H h) { return 0; } }",
       "D.java" ->
         """|public class D {
            |  Object anon = new C() {};

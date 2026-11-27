@@ -1,0 +1,8 @@
+# Client resolves `Foo` to `a.q.Foo`, the only on-demand import that supplies it.
+> compile
+
+# `V.Foo`, inherited by `W` from its parameterized supertype `V<String>`, now comes through
+# `import static a.W.*` too, so `Foo` is ambiguous. `W` is recompiled because it inherits from `V`;
+# Client is recompiled only if `W`'s API lists the member class it inherits from `V<String>`.
+$ copy-file changes/V.java src/main/java/a/V.java
+-> compile
