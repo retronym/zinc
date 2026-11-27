@@ -1,0 +1,9 @@
+# As refinement-projection-same-file, on Scala 2.13, where the eta-expanded alias's type
+# parameter is owned by a local dummy when typed from source and by nothing once unpickled.
+
+> p/compile
+
+$ copy-file p/changes/B.scala p/B.scala
+> p/compile
+> p/checkIterations 2
+> p/checkRecompilations 1 p.B p.C
