@@ -1,0 +1,25 @@
+[inv] Cycle 2
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/B.scala
+[inv]     ${BASE}/C.scala
+[inv] Cycle 3
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/A.scala
+[inv]     ${BASE}/B.scala
+[inv] Cycle 4
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/A.scala
+[inv]     ${BASE}/C.scala
+[inv] Cycle 5
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/B.scala
+[inv]     ${BASE}/C.scala
+[inv] Cycle 6
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/A.scala
+[inv]     ${BASE}/B.scala
+[inv] Cycle 7
+[inv]   sources selected for recompilation:
+[inv]     ${BASE}/A.scala
+[inv]     ${BASE}/B.scala
+[inv]     ${BASE}/C.scala
