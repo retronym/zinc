@@ -1,0 +1,8 @@
+# deprecated-name-removed on Scala 3, whose bridge (ExtractAPI in scala/scala3) does not
+# include parameter annotations in the API.
+
+> p/compile
+
+# Without @deprecatedName, the named argument old in B no longer resolves
+$ copy-file changes/A.scala p/A.scala
+-> p/compile
