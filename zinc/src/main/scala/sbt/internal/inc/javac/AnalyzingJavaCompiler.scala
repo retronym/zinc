@@ -113,7 +113,18 @@ final class AnalyzingJavaCompiler private[sbt] (
   ): Unit =
     val sourceDirs = collection.mutable.Map.empty[Path, VirtualFileRef]
 
-    if sources.nonEmpty then
+    if sources.nonEmpty && !callback.enabled() then
+      compileWithoutAnalysis(
+        sources,
+        extraClasspath,
+        converter,
+        options,
+        output,
+        incToolOptions,
+        reporter,
+        log
+      )
+    else if sources.nonEmpty then
       // Make the classpath absolute for Java compilation
       val absClasspath = (extraClasspath ++ classpath).map(VirtualFileUtil.toAbsolute)
 
@@ -254,6 +265,31 @@ final class AnalyzingJavaCompiler private[sbt] (
       }
     end if
   end compile
+
+  private def compileWithoutAnalysis(
+      sources: Seq[VirtualFile],
+      extraClasspath: Seq[VirtualFile],
+      converter: FileConverter,
+      options: Seq[String],
+      output: Output,
+      incToolOptions: IncToolOptions,
+      reporter: XReporter,
+      log: XLogger,
+  ): Unit =
+    val absClasspath = (extraClasspath ++ classpath).map(VirtualFileUtil.toAbsolute)
+    val args = sbt.internal.inc.javac.JavaCompiler.commandArguments(
+      absClasspath,
+      converter,
+      options,
+      scalaInstance,
+      classpathOptions
+    ).toArray
+    val javaSources = sources.sortBy(_.id).toArray
+    timed("Java compilation", log) {
+      if !javac.run(javaSources, args, output, incToolOptions, reporter, log) then
+        throw new CompileFailed(args, "javac returned non-zero exit code", reporter.problems())
+    }
+  end compileWithoutAnalysis
 
   /**
    * Compile some java code using the current configured compiler. This
