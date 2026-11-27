@@ -56,6 +56,10 @@ object IncrementalCompilerSpec extends Properties with BaseCompilerSpec:
       "drive the same Java invalidation under classfileJavaApi as reflection",
       classfileJavaApiInvalidation
     ),
+    example(
+      "load none of the compiled Java classes under classfileJavaApi",
+      classfileJavaApiLoadsNoClass
+    ),
     example("track dependencies on constants", constants),
     example(
       "not exapand the invalidation the first round when oneHopInvalidation is off",
@@ -412,6 +416,68 @@ object IncrementalCompilerSpec extends Properties with BaseCompilerSpec:
       )
     )
   }
+
+  // The point of classfileJavaApi is that analysis never loads the classes javac just wrote, so
+  // their static initializers never run and their linkage is never checked. JFR's ClassLoad events
+  // observe that directly; the reflection run checks that the probe sees loads at all.
+  private def classfileJavaApiLoadsNoClass: Result = withTmpDir { tmp =>
+    val sources = Seq(
+      StringVirtualFile(
+        "JfrProbeA.java",
+        "public class JfrProbeA { static { if (true) throw new IllegalStateException(); } " +
+          "Object anon = new Object() {}; public class Inner {} }"
+      ),
+      StringVirtualFile("JfrProbeB.java", "public class JfrProbeB extends JfrProbeA {}")
+    )
+    def probeClassesLoaded(subdir: String, opts: IncOptions): Set[String] =
+      val comp = VirtualSubproject(tmp.toPath / subdir).setup.createCompiler(scalaVersion, opts)
+      try
+        loadedClassesDuring("JfrProbe") {
+          comp.doCompileWithStore(newInputs =
+            (in: Inputs) =>
+              comp.withSrcs(sources.toArray)(
+                in.withOptions(
+                  in.options
+                    .withEarlyOutput(Optional.empty[Output])
+                    .withScalacOptions(comp.scalacOptions.toArray)
+                ).withSetup(
+                  in.setup.withIncrementalCompilerOptions(
+                    in.setup.incrementalCompilerOptions.withPipelining(false)
+                  )
+                )
+              )
+          )
+        }
+      finally comp.close()
+    val withReflection = probeClassesLoaded("reflect", incOptions)
+    val withClassfile = probeClassesLoaded("classfile", incOptions.withClassfileJavaApi(true))
+    Result.all(
+      List(
+        Result.assert(withReflection.nonEmpty).log("the probe saw no load under reflection"),
+        (withClassfile ==== Set.empty[String]).log("classes loaded under classfileJavaApi"),
+      )
+    )
+  }
+
+  private def loadedClassesDuring(prefix: String)(body: => Any): Set[String] =
+    import scala.jdk.CollectionConverters.*
+    val recording = new jdk.jfr.Recording()
+    recording.enable("jdk.ClassLoad").withoutThreshold().withoutStackTrace()
+    recording.start()
+    try body
+    finally recording.stop()
+    val file = java.nio.file.Files.createTempFile("zinc-classload", ".jfr")
+    try
+      recording.dump(file)
+      jdk.jfr.consumer.RecordingFile
+        .readAllEvents(file)
+        .asScala
+        .flatMap(e => Option(e.getClass("loadedClass")).map(_.getName))
+        .filter(_.startsWith(prefix))
+        .toSet
+    finally
+      recording.close()
+      java.nio.file.Files.deleteIfExists(file)
 
   private def constants: Result = withTmpDir { tmp =>
     withCompiler(VirtualSubproject(tmp.toPath / "p1").setup.createCompiler()) { comp =>
