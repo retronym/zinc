@@ -1,0 +1,8 @@
+# Client switches exhaustively over the sealed interface S.
+> compile
+
+# S now permits B, so Client's switch is no longer exhaustive: a clean build fails. Client's
+# classfile does not change, so it is recompiled only if S's API covers its permitted subclasses.
+$ copy-file changes/S.java src/main/java/a/S.java
+$ copy-file changes/B.java src/main/java/a/B.java
+-> compile

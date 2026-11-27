@@ -121,7 +121,11 @@ object ClassToAPI:
   def toDefinitions0(c: Class[?], cmap: ClassMap): Seq[api.ClassLikeDef] =
     import api.DefinitionType.{ ClassDef, Module, Trait }
     val enclPkg = packageName(c)
-    val mods = modifiers(c.getModifiers)
+    val mods =
+      val m = modifiers(c.getModifiers)
+      if c.isSealed then
+        new api.Modifiers(m.isAbstract, false, m.isFinal, true, false, false, false, false)
+      else m
     val acc = access(c.getModifiers, enclPkg)
     val annots = annotations(c.getAnnotations)
     val children = childrenOfSealedClass(c)
@@ -544,9 +548,11 @@ object ClassToAPI:
    * children.
    *
    * We need this logic to trigger recompilation due to changes to pattern exhaustivity checking results.
+   * A sealed class's children are its permitted subclasses, for the same reason.
    */
   private def childrenOfSealedClass(c: Class[?]): Seq[api.Type] =
-    if !c.isEnum then emptyTypeArray.toIndexedSeq
+    if c.isSealed then c.getPermittedSubclasses.toIndexedSeq.map(p => reference(p.getName))
+    else if !c.isEnum then emptyTypeArray.toIndexedSeq
     else
       // Calling getCanonicalName() on classes from enum constants yields same string as enumClazz.getCanonicalName
       // Moreover old behaviour create new instance of enum - what may fail (e.g. in static block )
