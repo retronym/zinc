@@ -124,29 +124,21 @@ object JavaCompilerForUnitTesting:
           Seq[(String, ClassFile)],
           String => Option[ClassFile]
       ) => Unit = (_, _, _, _) => (),
-      classfileApiOnly: Boolean = false
+      classfileApiOnly: Boolean = false,
+      readAPI: Seq[Class[?]] => Set[(String, String)] = extractParents
   ): TestCallback =
     val srcs: List[VirtualFile] = srcFiles.toList.map(f => new TestVirtualFile(f.toPath))
     val analysisCallback = new TestCallback
     val classFiles = (sbt.io.PathFinder(classesDir) ** "*.class").get().map(_.toPath)
     val classloader = new URLClassLoader(Array(classesDir.toURI.toURL), null)
-    // Read a parent class's bytes (for inherited members) without loading/linking it.
-    val resolve: String => Option[ClassFile] = binaryName =>
-      val resource = binaryName.replace('.', '/') + ".class"
-      Option(classloader.getResource(resource))
-        .orElse(Option(ClassLoader.getSystemResource(resource)))
-        .flatMap(u =>
-          try Some(Parser(u, ConsoleLogger()))
-          catch case _: Throwable => None
-        )
     val output = new SingleOutput:
       override def getOutputDirectoryAsPath: Path = classesDir.toPath
       override def getOutputDirectory: File = classesDir
     JavaAnalyze(classFiles, srcs, ConsoleLogger(), output, finalJarOutput = None)(
       analysisCallback,
       classloader,
-      (_, classes) => extractParents(classes),
-      readClassfileAPI(analysisCallback, _, _, resolve),
+      (_, classes) => readAPI(classes),
+      readClassfileAPI(analysisCallback, _, _, _),
       classfileApiOnly = classfileApiOnly
     )
     analysisCallback

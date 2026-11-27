@@ -30,6 +30,10 @@ object ClassfileToAPISpecification extends Properties:
     ),
     example("record API for an un-loadable inner class through JavaAnalyze", unloadableInnerClass),
     example(
+      "record the same inheritance dependencies as the reflection path under classfileApiOnly",
+      inheritanceDepsAgree
+    ),
+    example(
       "route loadable classes through the classfile path when classfileApiOnly is set",
       classfileApiOnlyRouting
     ),
@@ -132,6 +136,52 @@ object ClassfileToAPISpecification extends Properties:
           innerClass.structure.declared.collect { case d: xsbti.api.Def => d.name }.toSet
         Result.assert(memberDefs.contains("answer")).log(s"members: $memberDefs")
       case None => Result.failure.log(s"recorded: ${recorded.map(_.name)}")
+  }
+
+  // Inheritance edges bypass name hashing, so the classfile path must record the same ones as
+  // reflection: every ancestor (ClassToAPI's allSuperTypes), and the local inheritance of anonymous
+  // and local classes against their enclosing class.
+  private def inheritanceDepsAgree: Result = IO.withTemporaryDirectory { temp =>
+    val classesDir = new File(temp, "classes")
+    classesDir.mkdir()
+    val sources = Seq(
+      "Marker.java" -> "public interface Marker {}",
+      "B.java" -> "public class B implements Marker {}",
+      "C.java" -> "public class C extends B {}",
+      "D.java" ->
+        """|public class D {
+           |  Object anon = new C() {};
+           |  void m() { class Local extends B {} }
+           |}
+           |""".stripMargin
+    ).map {
+      case (name, src) =>
+        val f = new File(temp, name)
+        IO.write(f, src)
+        f
+    }
+    JavaCompilerForUnitTesting.compileJava(sources, classesDir, Seq.empty)
+    val reflectAPI: Seq[Class[?]] => Set[(String, String)] = classes =>
+      ClassToAPI.process(classes)._3.map { case (from, to) => from.getName -> to.getName }
+    def inheritanceDeps(classfileApiOnly: Boolean) =
+      JavaCompilerForUnitTesting
+        .analyze(
+          classesDir,
+          sources,
+          (cb, src, named, resolve) => ClassfileToAPI.process(named, resolve),
+          classfileApiOnly = classfileApiOnly,
+          readAPI = reflectAPI
+        )
+        .classDependencies
+        .filter(d =>
+          d._3 == xsbti.api.DependencyContext.DependencyByInheritance ||
+            d._3 == xsbti.api.DependencyContext.LocalDependencyByInheritance
+        )
+        .toSet
+    val reflect = inheritanceDeps(classfileApiOnly = false)
+    val classfile = inheritanceDeps(classfileApiOnly = true)
+    (classfile ==== reflect)
+      .log(s"onlyReflect=${reflect -- classfile}\nonlyClassfile=${classfile -- reflect}")
   }
 
   // Step D (de-reflection): with classfileApiOnly set, JavaAnalyze must route *loadable* classes
