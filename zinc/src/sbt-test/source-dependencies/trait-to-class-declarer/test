@@ -1,0 +1,5 @@
+> run p.X
+
+# Y becomes a class, so X with Y now erases to Y, and A's own descriptor for m must change
+$ copy-file changes/Y.scala Y.scala
+> run p.Y
