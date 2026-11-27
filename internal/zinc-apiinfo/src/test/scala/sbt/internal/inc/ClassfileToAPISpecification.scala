@@ -29,6 +29,7 @@ object ClassfileToAPISpecification extends Properties:
       deterministicHash
     ),
     example("record API for an un-loadable inner class through JavaAnalyze", unloadableInnerClass),
+    example("model a sealed class's permitted subclasses", sealedPermits),
     example(
       "record the same inheritance dependencies as the reflection path under classfileApiOnly",
       inheritanceDepsAgree
@@ -136,6 +137,34 @@ object ClassfileToAPISpecification extends Properties:
           innerClass.structure.declared.collect { case d: xsbti.api.Def => d.name }.toSet
         Result.assert(memberDefs.contains("answer")).log(s"members: $memberDefs")
       case None => Result.failure.log(s"recorded: ${recorded.map(_.name)}")
+  }
+
+  // Adding a permitted subclass makes a dependent's exhaustive `switch` over the sealed type fail
+  // to compile, so the permits list must be part of the sealed type's API.
+  private def sealedPermits: Result = IO.withTemporaryDirectory { temp =>
+    def api(idx: Int, permits: String, bImplements: String) =
+      val dir = new File(temp, s"d$idx")
+      dir.mkdir()
+      val src = new File(dir, "S.java")
+      IO.write(
+        src,
+        s"public sealed interface S permits $permits {} " +
+          s"final class A implements S {} final class B $bImplements {}"
+      )
+      JavaCompilerForUnitTesting.compileJava(Seq(src), dir, Seq.empty)
+      val cf = Parser(new File(dir, "S.class").toPath, Logger.Null)
+      ClassfileToAPI.process(Seq("S" -> cf))._1
+        .find(_.definitionType == DefinitionType.Trait)
+        .get
+    val one = api(0, "A", "")
+    val two = api(1, "A, B", "implements S")
+    Result.all(
+      List(
+        Result.assert(one.modifiers.isSealed).log("S should be sealed"),
+        (two.childrenOfSealedClass.toList.map(_.toString).size ==== 2).log("children of S"),
+        Result.diff(HashAPI(one), HashAPI(two))(_ != _).log("hash must change with permits"),
+      )
+    )
   }
 
   // Inheritance edges bypass name hashing, so the classfile path must record the same ones as

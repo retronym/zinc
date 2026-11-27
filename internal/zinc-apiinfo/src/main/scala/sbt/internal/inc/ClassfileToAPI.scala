@@ -94,6 +94,20 @@ object ClassfileToAPI:
     if args.isEmpty then noAnnotations
     else Array(api.Annotation.of(SyntheticRef, args.toArray))
 
+  /** Binary names from the `PermittedSubclasses` attribute of a sealed class (JVMS 4.7.31). */
+  private def permittedSubclasses(cf: ClassFile): Seq[String] =
+    cf.attributes.find(_.isNamed("PermittedSubclasses")) match
+      case None    => Nil
+      case Some(a) =>
+        try
+          val in = new DataInputStream(new ByteArrayInputStream(a.value))
+          val count = in.readUnsignedShort()
+          List.fill(count) {
+            val classConstant = cf.constantPool(in.readUnsignedShort())
+            cf.constantPool(classConstant.nameIndex).value.fold("")(_.toString).replace('/', '.')
+          }
+        catch case NonFatal(_) => Nil
+
   /** Resolved checked-exception type names from a method's `Exceptions` attribute (JVMS 4.7.5). */
   private def exceptionNames(cf: ClassFile, attrs: Seq[AttributeInfo]): Seq[String] =
     attrs.find(_.isNamed("Exceptions")) match
@@ -198,7 +212,11 @@ object ClassfileToAPI:
     // Use the binary name's package (last '.' before the simple/binary name); the canonical name's
     // dots would mis-split nested classes (e.g. "pkg.Outer.Inner").
     val enclPkg = ClassToAPI.packageAndName(cf.className)._1
-    val mods = ClassToAPI.modifiers(cf.accessFlags)
+    val permitted = permittedSubclasses(cf)
+    val mods =
+      val m = ClassToAPI.modifiers(cf.accessFlags)
+      if permitted.isEmpty then m
+      else new api.Modifiers(m.isAbstract, false, m.isFinal, true, false, false, false, false)
     val acc = ClassToAPI.access(cf.accessFlags, enclPkg)
     val isInterface = Modifier.isInterface(cf.accessFlags)
     val tpe = if isInterface then Trait else ClassDef
@@ -242,8 +260,11 @@ object ClassfileToAPI:
     )
 
     // ClassToAPI models a Java enum's sealed children as a single self-reference; mirror that.
+    // A sealed class's permitted subclasses decide which `switch`es over it are exhaustive.
     val children: Array[api.Type] =
-      if (cf.accessFlags & AccEnum) != 0 then Array(ClassToAPI.reference(name)) else noTypes
+      if (cf.accessFlags & AccEnum) != 0 then Array(ClassToAPI.reference(name))
+      else if permitted.nonEmpty then permitted.map(ClassToAPI.reference).toArray
+      else noTypes
 
     val (instanceInherited, staticInherited) = collectInherited(cf, resolveParent)
     val instanceStructure =
