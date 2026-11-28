@@ -31,6 +31,10 @@ object ClassfileToAPISpecification extends Properties:
     example("record API for an un-loadable inner class through JavaAnalyze", unloadableInnerClass),
     example("model a sealed class's permitted subclasses", sealedPermits),
     example(
+      "record the used names of anonymous and local classes on their enclosing class",
+      localUsedNames
+    ),
+    example(
       "record the same inheritance dependencies as the reflection path under classfileApiOnly",
       inheritanceDepsAgree
     ),
@@ -137,6 +141,39 @@ object ClassfileToAPISpecification extends Properties:
           innerClass.structure.declared.collect { case d: xsbti.api.Def => d.name }.toSet
         Result.assert(memberDefs.contains("answer")).log(s"members: $memberDefs")
       case None => Result.failure.log(s"recorded: ${recorded.map(_.name)}")
+  }
+
+  // javac keys the names a class looks up by binary name, so those of an anonymous or local class
+  // arrive as `D$1`. Like its dependencies, they belong to the enclosing class, in both modes.
+  private def localUsedNames: Result = IO.withTemporaryDirectory { temp =>
+    val classesDir = new File(temp, "classes")
+    classesDir.mkdir()
+    val src = new File(temp, "D.java")
+    IO.write(
+      src,
+      "public class D { Object anon = new Object() {}; void m() { class Local {} } }"
+    )
+    JavaCompilerForUnitTesting.compileJava(Seq(src), classesDir, Seq.empty)
+    val names = Map("D$1" -> Set("FromAnon"), "D$1Local" -> Set("FromLocal"), "D" -> Set("Own"))
+    def recorded(classfileApiOnly: Boolean): Set[String] =
+      JavaCompilerForUnitTesting
+        .analyze(
+          classesDir,
+          Seq(src),
+          classfileApiOnly = classfileApiOnly,
+          usedNames = names
+        )
+        .usedNames
+        .getOrElse("D", Set.empty)
+        .toSet
+    Result.all(
+      List(
+        (recorded(classfileApiOnly = false) ==== Set("FromAnon", "FromLocal", "Own"))
+          .log("reflection"),
+        (recorded(classfileApiOnly = true) ==== Set("FromAnon", "FromLocal", "Own"))
+          .log("classfile"),
+      )
+    )
   }
 
   // Adding a permitted subclass makes a dependent's exhaustive `switch` over the sealed type fail

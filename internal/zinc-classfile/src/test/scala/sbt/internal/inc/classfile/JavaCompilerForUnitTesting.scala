@@ -125,7 +125,8 @@ object JavaCompilerForUnitTesting:
           String => Option[ClassFile]
       ) => Unit = (_, _, _, _) => (),
       classfileApiOnly: Boolean = false,
-      readAPI: Seq[Class[?]] => Set[(String, String)] = extractParents
+      readAPI: Seq[Class[?]] => Set[(String, String)] = extractParents,
+      usedNames: Map[String, Set[String]] = Map.empty
   ): TestCallback =
     val srcs: List[VirtualFile] = srcFiles.toList.map(f => new TestVirtualFile(f.toPath))
     val analysisCallback = new TestCallback
@@ -139,6 +140,7 @@ object JavaCompilerForUnitTesting:
       classloader,
       (_, classes) => readAPI(classes),
       readClassfileAPI(analysisCallback, _, _, _),
+      usedNames = usedNames,
       classfileApiOnly = classfileApiOnly
     )
     analysisCallback

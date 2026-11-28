@@ -1,0 +1,7 @@
+# Client resolves `Foo` to `a.q.Foo`, the only on-demand import that supplies it.
+> compile
+
+# `W.Foo` comes through `import static a.W.*` too: two on-demand imports supply `Foo`, which javac
+# reports as ambiguous. The static import records an edge to `W`, whose API changed.
+$ copy-file changes/W.java src/main/java/a/W.java
+-> compile

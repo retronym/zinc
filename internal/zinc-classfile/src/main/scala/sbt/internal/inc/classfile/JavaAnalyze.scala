@@ -48,6 +48,8 @@ private[sbt] object JavaAnalyze:
       // sbt/zinc#145: extra member-ref edges for inlined `static final` constants that javac erases
       // from the bytecode, recovered from the attributed AST. Keyed `fromBinaryName -> onBinaryNames`.
       constantDeps: Map[String, Set[String]] = Map.empty,
+      // The simple names each class looks up, from the attributed AST, keyed by binary name.
+      usedNames: Map[String, Set[String]] = Map.empty,
       classfileApiOnly: Boolean = false
   ): Unit =
     // A Java class file's parents are declared by the class. Its statics become a module of
@@ -314,6 +316,19 @@ private[sbt] object JavaAnalyze:
         binaryClassName <- typesInSource.keysIterator
         onBinaryName <- constantDeps.getOrElse(binaryClassName, Set.empty)
       do processDependency(onBinaryName, DependencyByMemberRef, binaryClassName)
+
+      // Experimental: the members a class refers to, including those javac calls implicitly, which
+      // name hashing for Java dependents needs on top of the names the source looks up.
+      val memberNames: Map[String, Set[String]] =
+        if usedNames.nonEmpty && java.lang.Boolean.getBoolean("zinc.experimental.javaNameHashing")
+        then classFiles.iterator.map(cf => cf.className -> cf.memberNames).toMap
+        else Map.empty
+      for
+        binaryClassName <- typesInSource.keysIterator
+        className <- getMappedSource(binaryClassName)
+        name <- usedNames.getOrElse(binaryClassName, Set.empty) ++
+          memberNames.getOrElse(binaryClassName, Set.empty)
+      do analysis.usedName(className, name, java.util.EnumSet.of(xsbti.UseScope.Default))
 
       def readInheritanceDependencies(classes: Seq[Class[?]]) =
         val api = readAPI(source, classes)

@@ -203,13 +203,16 @@ private[inc] abstract class IncrementalCommon(
         val nextInvalidations =
           if isFullCompilation then Set.empty[String]
           else
+            val compiledClasses = invalidatedSources.flatMap(analysis.relations.classNames)
             invalidateAfterInternalCompilation(
               analysis,
               newApiChanges,
               recompiledClasses,
               cycleNum >= options.transitiveStep,
               IncrementalCommon.comesFromScalaSource(previous.relations, Some(analysis.relations))
-            )
+            ) ++
+              (invalidateByAddedClasses(compiledClasses, previous, analysis) --
+                recompiledClasses -- compiledClasses)
 
         // No matter what shouldDoIncrementalCompilation returns, we are not in fact going to
         // continue if there are no invalidations.
@@ -565,6 +568,45 @@ private[inc] abstract class IncrementalCommon(
     nextInvalidations
   end invalidateAfterInternalCompilation
 
+  /**
+   * Invalidates the classes that use the simple name of a top-level class added by this cycle.
+   *
+   * An added class can change how an existing class resolves a name, although neither depends on
+   * the other: `a.b.Foo` shadows `a.Foo` in a client in `package a; package b`, and `q.Foo`
+   * shadows `a.Foo` or `scala.Foo` in a client in package `a` that imports `q._`. Zinc does not
+   * record the scopes that a lookup searched, so this invalidates every class that uses the name.
+   *
+   * @param compiledClasses The classes defined by the sources compiled in this cycle.
+   * @param previous The analysis before this cycle.
+   * @param current The analysis after this cycle.
+   */
+  def invalidateByAddedClasses(
+      compiledClasses: Set[String],
+      previous: Analysis,
+      current: Analysis
+  ): Set[String] =
+    def isTopLevel(className: String): Boolean =
+      // A class without a companion has an empty, top-level placeholder for it.
+      val api = current.apis.internalAPI(className).api()
+      api.classApi.topLevel && api.objectApi.topLevel
+    val added =
+      compiledClasses.filter(c => previous.relations.definesClass(c).isEmpty && isTopLevel(c))
+    if added.isEmpty then Set.empty
+    else
+      // No reference resolves to a package object by its name, `package`.
+      val names = added.map(c => c.substring(c.lastIndexOf('.') + 1)) - "package"
+      val invalidated = current.relations.names.iterator.collect {
+        case (className, used) if used.exists(u => names(u.name)) => className
+      }.toSet
+      invalidationLog.debug(
+        InvalidationLog.section(
+          "Added classes",
+          Seq("added classes" -> added, "classes using their names" -> invalidated)
+        )
+      )
+      invalidated
+  end invalidateByAddedClasses
+
   /** Invalidates classes and sources based on initially detected 'changes' to the sources, products, and dependencies.*/
   def invalidateInitial(
       previous: Relations,
@@ -791,7 +833,21 @@ object IncrementalCommon:
   def comesFromScalaSource(
       previous: Relations,
       current: Option[Relations] = None
-  )(className: String): Boolean =
+  ): String => Boolean =
+    // Experimental: a Java class whose used names javac recorded is filtered by name like a Scala
+    // one. A Java class without them (forked javac) keeps today's unfiltered invalidation.
+    val hasJavaUsedNames: String => Boolean =
+      if java.lang.Boolean.getBoolean("zinc.experimental.javaNameHashing") then
+        val withNames = current.getOrElse(previous).names.toMultiMap.keySet
+        withNames.contains
+      else _ => false
+    className => comesFromScalaSource0(previous, current, className) || hasJavaUsedNames(className)
+
+  private def comesFromScalaSource0(
+      previous: Relations,
+      current: Option[Relations],
+      className: String
+  ): Boolean =
     val previousSourcesWithClassName = previous.classes.reverse(className)
     val newSourcesWithClassName = current.map(_.classes.reverse(className)).getOrElse(Set.empty)
     if previousSourcesWithClassName.isEmpty && newSourcesWithClassName.isEmpty then
