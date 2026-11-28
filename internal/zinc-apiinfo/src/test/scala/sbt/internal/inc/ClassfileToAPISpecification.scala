@@ -29,6 +29,11 @@ object ClassfileToAPISpecification extends Properties:
       deterministicHash
     ),
     example("record API for an un-loadable inner class through JavaAnalyze", unloadableInnerClass),
+    example("model a sealed class's permitted subclasses", sealedPermits),
+    example(
+      "record the same inheritance dependencies as the reflection path under classfileApiOnly",
+      inheritanceDepsAgree
+    ),
     example(
       "route loadable classes through the classfile path when classfileApiOnly is set",
       classfileApiOnlyRouting
@@ -132,6 +137,83 @@ object ClassfileToAPISpecification extends Properties:
           innerClass.structure.declared.collect { case d: xsbti.api.Def => d.name }.toSet
         Result.assert(memberDefs.contains("answer")).log(s"members: $memberDefs")
       case None => Result.failure.log(s"recorded: ${recorded.map(_.name)}")
+  }
+
+  // Adding a permitted subclass makes a dependent's exhaustive `switch` over the sealed type fail
+  // to compile, so the permits list must be part of the sealed type's API.
+  private def sealedPermits: Result = IO.withTemporaryDirectory { temp =>
+    def api(idx: Int, permits: String, bImplements: String) =
+      val dir = new File(temp, s"d$idx")
+      dir.mkdir()
+      val src = new File(dir, "S.java")
+      IO.write(
+        src,
+        s"public sealed interface S permits $permits {} " +
+          s"final class A implements S {} final class B $bImplements {}"
+      )
+      JavaCompilerForUnitTesting.compileJava(Seq(src), dir, Seq.empty)
+      val cf = Parser(new File(dir, "S.class").toPath, Logger.Null)
+      ClassfileToAPI.process(Seq("S" -> cf))._1
+        .find(_.definitionType == DefinitionType.Trait)
+        .get
+    val one = api(0, "A", "")
+    val two = api(1, "A, B", "implements S")
+    Result.all(
+      List(
+        Result.assert(one.modifiers.isSealed).log("S should be sealed"),
+        (two.childrenOfSealedClass.toList.map(_.toString).size ==== 2).log("children of S"),
+        Result.diff(HashAPI(one), HashAPI(two))(_ != _).log("hash must change with permits"),
+      )
+    )
+  }
+
+  // Inheritance edges bypass name hashing, so the classfile path must record the same ones as
+  // reflection: every ancestor (ClassToAPI's allSuperTypes), and the local inheritance of anonymous
+  // and local classes against their enclosing class.
+  private def inheritanceDepsAgree: Result = IO.withTemporaryDirectory { temp =>
+    val classesDir = new File(temp, "classes")
+    classesDir.mkdir()
+    val sources = Seq(
+      "Marker.java" -> "public interface Marker {}",
+      "B.java" -> "public class B implements Marker {}",
+      "C.java" -> "public class C extends B {}",
+      "G.java" -> "public class G<T> {}",
+      "H.java" ->
+        "public class H extends G<String> implements Comparable<H> { public int compareTo(H h) { return 0; } }",
+      "D.java" ->
+        """|public class D {
+           |  Object anon = new C() {};
+           |  void m() { class Local extends B {} }
+           |}
+           |""".stripMargin
+    ).map {
+      case (name, src) =>
+        val f = new File(temp, name)
+        IO.write(f, src)
+        f
+    }
+    JavaCompilerForUnitTesting.compileJava(sources, classesDir, Seq.empty)
+    val reflectAPI: Seq[Class[?]] => Set[(String, String)] = classes =>
+      ClassToAPI.process(classes)._3.map { case (from, to) => from.getName -> to.getName }
+    def inheritanceDeps(classfileApiOnly: Boolean) =
+      JavaCompilerForUnitTesting
+        .analyze(
+          classesDir,
+          sources,
+          (cb, src, named, resolve) => ClassfileToAPI.process(named, resolve),
+          classfileApiOnly = classfileApiOnly,
+          readAPI = reflectAPI
+        )
+        .classDependencies
+        .filter(d =>
+          d._3 == xsbti.api.DependencyContext.DependencyByInheritance ||
+            d._3 == xsbti.api.DependencyContext.LocalDependencyByInheritance
+        )
+        .toSet
+    val reflect = inheritanceDeps(classfileApiOnly = false)
+    val classfile = inheritanceDeps(classfileApiOnly = true)
+    (classfile ==== reflect)
+      .log(s"onlyReflect=${reflect -- classfile}\nonlyClassfile=${classfile -- reflect}")
   }
 
   // Step D (de-reflection): with classfileApiOnly set, JavaAnalyze must route *loadable* classes

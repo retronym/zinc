@@ -40,7 +40,11 @@ private[sbt] object JavaAnalyze:
       analysis: xsbti.AnalysisCallback,
       loader: ClassLoader,
       readAPI: (VirtualFileRef, Seq[Class[?]]) => Set[(String, String)],
-      readClassfileAPI: (VirtualFileRef, Seq[(String, ClassFile)]) => Unit = (_, _) => (),
+      readClassfileAPI: (
+          VirtualFileRef,
+          Seq[(String, ClassFile)],
+          String => Option[ClassFile]
+      ) => Unit = (_, _, _) => (),
       // sbt/zinc#145: extra member-ref edges for inlined `static final` constants that javac erases
       // from the bytecode, recovered from the attributed AST. Keyed `fromBinaryName -> onBinaryNames`.
       constantDeps: Map[String, Set[String]] = Map.empty,
@@ -337,11 +341,24 @@ private[sbt] object JavaAnalyze:
       // sbt/zinc#837: classes that couldn't be reflectively loaded have no extractable API, but
       // their direct superclass and interfaces are still in the classfile, so record those
       // inheritance edges (e.g. the `Inner extends pkg.Base` relationship that caused the issue).
+      // Like ClassToAPI's allSuperTypes, the edges cover every ancestor, not just the direct ones.
+      def inheritanceParents(classFile: ClassFile): Set[String] =
+        (classFile.superClassName +: classFile.interfaceNames.toIndexedSeq)
+          .filter(_.nonEmpty)
+          .toSet ++ transitiveAncestors(classFile.className)
       for classFile <- classFiles if binaryClassNameToSourceName.contains(classFile.className) do
-        val parents = (classFile.superClassName +: classFile.interfaceNames.toIndexedSeq).filter(
-          _.nonEmpty
+        processDependencies(
+          inheritanceParents(classFile),
+          DependencyByInheritance,
+          classFile.className
         )
-        processDependencies(parents, DependencyByInheritance, classFile.className)
+      if classfileApiOnly then
+        for classFile <- classFiles if localClassesToSources.contains(classFile.className) do
+          processDependencies(
+            inheritanceParents(classFile),
+            LocalDependencyByInheritance,
+            classFile.className
+          )
 
       // sbt/zinc#837 (Phase 2): record API for un-loadable classes from the classfile, so
       // name-hashing detects changes to their own public shape (reflection can't load them).
@@ -355,8 +372,9 @@ private[sbt] object JavaAnalyze:
       // so a failure there is a real regression, not a tolerable gap. -Dzinc.classfileJavaApi.strict
       // makes it propagate (the scripted CI matrix sets it) so such breakage fails the build.
       if unloadableNamed.nonEmpty then
-        if classfileApiOnly && strictClassfileApi then readClassfileAPI(source, unloadableNamed)
-        else trapAndLog(log)(readClassfileAPI(source, unloadableNamed))
+        if classfileApiOnly && strictClassfileApi then
+          readClassfileAPI(source, unloadableNamed, resolveClassFile)
+        else trapAndLog(log)(readClassfileAPI(source, unloadableNamed, resolveClassFile))
     end for
   end apply
 
