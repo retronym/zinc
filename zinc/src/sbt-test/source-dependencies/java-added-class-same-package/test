@@ -1,0 +1,7 @@
+# Client, a Java class in package a.b, resolves `Foo` to `a.q.Foo` through `import a.q.*`.
+> compile
+
+# `a.b.Foo` shadows the on-demand import and has no `m`: a clean build fails. Client's classfile
+# names only `a.q.Foo`, but Client uses the added name, so Zinc recompiles it.
+$ copy-file changes/Foo.java src/main/java/a/b/Foo.java
+-> compile
